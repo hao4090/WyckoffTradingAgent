@@ -12,6 +12,7 @@ import os
 from typing import Any
 
 from supabase import Client, create_client
+from core.constants import TABLE_USER_SETTINGS
 
 TABLE_PORTFOLIOS = "portfolios"
 TABLE_PORTFOLIO_POSITIONS = "portfolio_positions"
@@ -96,6 +97,61 @@ def load_portfolio_state(portfolio_id: str = "USER_LIVE") -> dict[str, Any] | No
     except Exception as e:
         print(f"[supabase_portfolio] load_portfolio_state failed: {e}")
         return None
+
+
+def build_user_live_portfolio_id(user_id: str) -> str:
+    user_id = str(user_id or "").strip()
+    return f"USER_LIVE:{user_id}"
+
+
+def list_step4_targets(target_user_id: str | None = None) -> list[dict[str, Any]]:
+    """
+    自动发现可执行 Step4 的用户目标：
+    - 来自 user_settings（必须有 user_id / tg_bot_token / tg_chat_id）
+    - 自动映射 portfolio_id=USER_LIVE:<user_id>
+    - 仅返回 Supabase 中已存在且结构可用的 portfolio
+    """
+    if not is_supabase_configured():
+        return []
+    try:
+        client = _get_supabase_admin_client()
+        query = (
+            client.table(TABLE_USER_SETTINGS)
+            .select("user_id,tg_bot_token,tg_chat_id,gemini_api_key,gemini_model")
+        )
+        target_user_id = str(target_user_id or "").strip()
+        if target_user_id:
+            query = query.eq("user_id", target_user_id).limit(1)
+        resp = query.execute()
+        targets: list[dict[str, Any]] = []
+        for row in resp.data or []:
+            user_id = str(row.get("user_id", "") or "").strip()
+            if target_user_id and user_id != target_user_id:
+                continue
+            tg_bot_token = str(row.get("tg_bot_token", "") or "").strip()
+            tg_chat_id = str(row.get("tg_chat_id", "") or "").strip()
+            if not user_id or not tg_bot_token or not tg_chat_id:
+                continue
+            portfolio_id = build_user_live_portfolio_id(user_id)
+            p = load_portfolio_state(portfolio_id)
+            if not isinstance(p, dict):
+                continue
+            if p.get("free_cash") is None or not isinstance(p.get("positions"), list):
+                continue
+            targets.append(
+                {
+                    "user_id": user_id,
+                    "portfolio_id": portfolio_id,
+                    "tg_bot_token": tg_bot_token,
+                    "tg_chat_id": tg_chat_id,
+                    "gemini_api_key": str(row.get("gemini_api_key", "") or "").strip(),
+                    "gemini_model": str(row.get("gemini_model", "") or "").strip(),
+                }
+            )
+        return targets
+    except Exception as e:
+        print(f"[supabase_portfolio] list_step4_targets failed: {e}")
+        return []
 
 
 def check_daily_run_exists(portfolio_id: str, trade_date: str) -> bool:
@@ -230,4 +286,3 @@ def upsert_daily_nav(
     except Exception as e:
         print(f"[supabase_portfolio] upsert_daily_nav failed: {e}")
         return False
-

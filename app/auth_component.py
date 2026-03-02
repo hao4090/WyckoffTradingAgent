@@ -3,7 +3,11 @@ import re
 import streamlit as st
 from supabase import AuthApiError
 
-from integrations.supabase_client import get_supabase_client, load_user_settings
+from integrations.supabase_client import (
+    get_supabase_client,
+    load_user_settings,
+    reset_user_settings_state,
+)
 from app.ui_helpers import show_page_loading
 
 try:
@@ -275,6 +279,7 @@ def logout():
     except Exception:
         pass
     clear_tokens_from_storage()
+    reset_user_settings_state()
     st.session_state.user = None
     st.session_state.access_token = None
     st.session_state.refresh_token = None

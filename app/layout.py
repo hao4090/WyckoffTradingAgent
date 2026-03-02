@@ -1,5 +1,3 @@
-import os
-
 import streamlit as st
 
 from app.auth_component import check_auth, login_form
@@ -26,33 +24,30 @@ def init_session_state() -> None:
     _set_default("custom_export_source_id", "")
     _set_default("wyckoff_payload", None)
 
-    _set_default("feishu_webhook", os.getenv("FEISHU_WEBHOOK_URL", ""))
+    # 用户敏感配置不从环境变量兜底，避免跨账号污染
+    _set_default("feishu_webhook", "")
     if st.session_state.feishu_webhook is None:
         st.session_state.feishu_webhook = ""
 
-    _set_default("gemini_api_key", os.getenv("GEMINI_API_KEY", ""))
+    _set_default("gemini_api_key", "")
     if st.session_state.gemini_api_key is None:
         st.session_state.gemini_api_key = ""
 
-    _set_default("tushare_token", os.getenv("TUSHARE_TOKEN", ""))
+    _set_default("tushare_token", "")
     if st.session_state.tushare_token is None:
         st.session_state.tushare_token = ""
 
-    _set_default("gemini_model", os.getenv("GEMINI_MODEL", "gemini-2.0-flash"))
+    _set_default("gemini_model", "gemini-2.0-flash")
     if st.session_state.gemini_model is None:
         st.session_state.gemini_model = "gemini-2.0-flash"
 
-    _set_default("tg_bot_token", os.getenv("TG_BOT_TOKEN", ""))
+    _set_default("tg_bot_token", "")
     if st.session_state.tg_bot_token is None:
         st.session_state.tg_bot_token = ""
 
-    _set_default("tg_chat_id", os.getenv("TG_CHAT_ID", ""))
+    _set_default("tg_chat_id", "")
     if st.session_state.tg_chat_id is None:
         st.session_state.tg_chat_id = ""
-
-    _set_default("my_portfolio_state", os.getenv("MY_PORTFOLIO_STATE", ""))
-    if st.session_state.my_portfolio_state is None:
-        st.session_state.my_portfolio_state = ""
 
     # 从 localStorage 恢复 token（刷新页面后登录态保持）
     access = st.session_state.get("access_token") or ""

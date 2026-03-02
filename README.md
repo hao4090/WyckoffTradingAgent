@@ -94,13 +94,17 @@ python -u -m integrations.fetch_a_share_csv --symbols 000973 600798 601390
 | `GEMINI_API_KEY` | 是 | AI 研报 |
 | `TUSHARE_TOKEN` | 是 | 行情与市值数据 |
 | `GEMINI_MODEL` | 否 | 未配则用默认模型 |
-| `MY_PORTFOLIO_STATE` | Step4 用 | 可选，格式见 `.env.example` |
-| `TG_BOT_TOKEN` | Step4 用 | 可选 |
-| `TG_CHAT_ID` | Step4 用 | 可选 |
-| `SUPABASE_URL` | Step4 用 | 可选，云端持仓同步 |
-| `SUPABASE_KEY` | Step4 用 | 可选，云端持仓同步 |
-| `TAVILY_API_KEY` | 否 | RAG 防雷，未配则跳过 |
-| `SERPAPI_API_KEY` | 否 | RAG 防雷备用搜索源，未配则跳过 |
+| `SUPABASE_URL` | Step4 用 | 是（Step4 依赖 USER_LIVE） |
+| `SUPABASE_KEY` | ❌ | Supabase 匿名 Key。 |
+| `SUPABASE_SERVICE_ROLE_KEY` | ❌ | Supabase 管理员 Key (用于脚本读写)。 |
+| `SUPABASE_USER_ID` | ❌ | **用户锁定**：指定 Step4 运行的目标用户 ID。 |
+| `MY_PORTFOLIO_STATE` | ❌ | **本地账本**：如果不使用 Supabase，可用 JSON 字符串配置持仓 (格式见 `.env.example`)。 |
+| `TG_BOT_TOKEN` | ❌ | **私密推送**：Telegram Bot Token，用于接收私密交易建议。 |
+| `TG_CHAT_ID` | ❌ | Telegram Chat ID。 |
+| `TAVILY_API_KEY` | ❌ | **防雷**：用于 RAG 新闻检索 (Tavily)，推荐配置。 |
+| `SERPAPI_API_KEY` | ❌ | **防雷备用**：Tavily 挂了时自动切换到 Google News (SerpApi)。 |
+
+> **提示**：以上配置只在你需要对应功能时才需填写。最基础运行仅需前 3 项。
 
 ### 验证
 
@@ -129,12 +133,12 @@ python -u -m integrations.fetch_a_share_csv --symbols 000973 600798 601390
 - `[step3] 飞书推送失败` / `feishu_failed`
   - 原因：Webhook 无效、限流、网络问题
   - 处理：重新生成飞书机器人 Webhook 并替换 Secret
-- `阶段 3 私人再平衡: 跳过（MY_PORTFOLIO_STATE 未配置）`
-  - 原因：未配置账户状态
-  - 处理：配置 `MY_PORTFOLIO_STATE` 后重跑
+- `阶段 3 私人再平衡: 跳过（SUPABASE_USER_ID 未配置/用户持仓缺失）`
+  - 原因：未配置 `SUPABASE_USER_ID`，或 `USER_LIVE:<user_id>`/`MY_PORTFOLIO_STATE` 都不可用
+  - 处理：在 Secrets 配置 `SUPABASE_USER_ID`；优先保证 Supabase 有 `USER_LIVE:<user_id>`，必要时提供 `MY_PORTFOLIO_STATE` 兜底
 - `阶段 3 私人再平衡: 跳过（TG_BOT_TOKEN/TG_CHAT_ID 未配置）`
-  - 原因：未配置 Telegram
-  - 处理：配置 Telegram Secrets 后重跑
+  - 原因：Telegram Secret 未配置
+  - 处理：配置 `TG_BOT_TOKEN` 和 `TG_CHAT_ID` 后重跑
 - `User location is not supported for the API use`
   - 原因：模型地域限制
   - 处理：更换可用网络出口或供应商
@@ -144,9 +148,7 @@ python -u -m integrations.fetch_a_share_csv --symbols 000973 600798 601390
 
 ### 私人决断（可选）
 
-若配置了持仓和 Telegram，选股和研报跑完后会单独发一份「针对你账户的买卖建议」到你的 Telegram，只有你能看到。不配则跳过，不影响选股和研报。
-
-账户格式见 `.env.example`。其中 `total_equity` 是可选字段，不填会自动按“`free_cash + 持仓最新市值`”推导。TG_CHAT_ID 需先给 bot 发 `/start`，再从 getUpdates 返回里取 chat.id。
+Step4 完全由 GitHub Actions Secrets 驱动：读取 `SUPABASE_USER_ID` 定位 `USER_LIVE:<user_id>`，读取 `TG_BOT_TOKEN/TG_CHAT_ID` 推送 Telegram，模型使用 `GEMINI_API_KEY/GEMINI_MODEL`。若 Supabase 持仓缺失可用 `MY_PORTFOLIO_STATE` 做兜底。
 
 ---
 

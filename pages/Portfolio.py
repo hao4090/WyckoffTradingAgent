@@ -16,7 +16,7 @@ from app.navigation import show_right_nav
 from app.ui_helpers import show_page_loading
 from integrations.supabase_client import get_supabase_client
 
-PORTFOLIO_ID = "USER_LIVE"
+PORTFOLIO_SCOPE = "USER_LIVE"
 TABLE_PORTFOLIOS = "portfolios"
 TABLE_POSITIONS = "portfolio_positions"
 
@@ -89,20 +89,33 @@ def _estimate_positions_value(rows: list[dict[str, Any]]) -> float:
     return float(total)
 
 
-def _load_user_live() -> tuple[dict[str, Any], list[dict[str, Any]]]:
+def _current_portfolio_id() -> str | None:
+    """
+    按登录用户隔离持仓：
+    USER_LIVE:<user_id>
+    """
+    user = st.session_state.get("user")
+    if isinstance(user, dict):
+        user_id = str(user.get("id") or "").strip()
+        if user_id:
+            return f"{PORTFOLIO_SCOPE}:{user_id}"
+    return None
+
+
+def _load_user_live(portfolio_id: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     supabase = get_supabase_client()
 
     p_resp = (
         supabase.table(TABLE_PORTFOLIOS)
         .select("portfolio_id,name,free_cash,total_equity")
-        .eq("portfolio_id", PORTFOLIO_ID)
+        .eq("portfolio_id", portfolio_id)
         .limit(1)
         .execute()
     )
     if not p_resp.data:
         supabase.table(TABLE_PORTFOLIOS).upsert(
             {
-                "portfolio_id": PORTFOLIO_ID,
+                "portfolio_id": portfolio_id,
                 "name": "Real Portfolio",
                 "free_cash": 0.0,
                 "total_equity": None,
@@ -111,7 +124,7 @@ def _load_user_live() -> tuple[dict[str, Any], list[dict[str, Any]]]:
             on_conflict="portfolio_id",
         ).execute()
         portfolio = {
-            "portfolio_id": PORTFOLIO_ID,
+            "portfolio_id": portfolio_id,
             "name": "Real Portfolio",
             "free_cash": 0.0,
             "total_equity": None,
@@ -122,7 +135,7 @@ def _load_user_live() -> tuple[dict[str, Any], list[dict[str, Any]]]:
     pos_resp = (
         supabase.table(TABLE_POSITIONS)
         .select("code,name,shares,cost_price,buy_dt,strategy")
-        .eq("portfolio_id", PORTFOLIO_ID)
+        .eq("portfolio_id", portfolio_id)
         .order("code")
         .execute()
     )
@@ -161,6 +174,7 @@ def _to_editor_df(rows: list[dict[str, Any]]) -> pd.DataFrame:
 
 def _save_user_live(
     *,
+    portfolio_id: str,
     free_cash: float,
     total_equity: float | None,
     editor_df: pd.DataFrame,
@@ -200,7 +214,7 @@ def _save_user_live(
             continue
 
         payload_by_code[code] = {
-            "portfolio_id": PORTFOLIO_ID,
+            "portfolio_id": portfolio_id,
             "code": code,
             "name": name,
             "shares": shares,
@@ -219,7 +233,7 @@ def _save_user_live(
     try:
         supabase.table(TABLE_PORTFOLIOS).upsert(
             {
-                "portfolio_id": PORTFOLIO_ID,
+                "portfolio_id": portfolio_id,
                 "name": "Real Portfolio",
                 "free_cash": float(free_cash),
                 "total_equity": (None if total_equity is None else float(total_equity)),
@@ -232,7 +246,7 @@ def _save_user_live(
             (
                 supabase.table(TABLE_POSITIONS)
                 .delete()
-                .eq("portfolio_id", PORTFOLIO_ID)
+                .eq("portfolio_id", portfolio_id)
                 .eq("code", code)
                 .execute()
             )
@@ -292,10 +306,14 @@ with content_col:
     )
 
     st.title("💼 持仓管理")
+    portfolio_id = _current_portfolio_id()
+    if not portfolio_id:
+        st.error("无法识别当前用户，已拒绝加载持仓信息。请重新登录。")
+        st.stop()
 
-    loading = show_page_loading(title="加载持仓中...", subtitle="正在读取 USER_LIVE")
+    loading = show_page_loading(title="加载持仓中...", subtitle="正在读取当前账号持仓")
     try:
-        portfolio, positions = _load_user_live()
+        portfolio, positions = _load_user_live(portfolio_id)
     finally:
         loading.empty()
 
@@ -338,7 +356,7 @@ with content_col:
         manual_total_equity if manual_total_equity is not None else display_total_equity
     )
 
-    st.caption("编辑过程中不会自动刷新；点击“保存 USER_LIVE”后才会提交并重载。")
+    st.caption("当前页仅显示当前登录账号持仓。编辑过程中不会自动刷新，点击保存后才会提交并重载。")
 
     with st.form("portfolio_edit_form", clear_on_submit=False):
         c1, c2, c3 = st.columns([1, 1, 1])
@@ -402,7 +420,7 @@ with content_col:
             key="portfolio_editor",
         )
 
-        submitted = st.form_submit_button("💾 保存 USER_LIVE", use_container_width=True)
+        submitted = st.form_submit_button("💾 保存当前账号持仓", use_container_width=True)
         if submitted:
             try:
                 free_cash_value = _parse_money_input(free_cash_input, "现金")
@@ -418,6 +436,7 @@ with content_col:
             loader = show_page_loading(title="保存中...", subtitle="正在写入 Supabase")
             try:
                 ok, msg = _save_user_live(
+                    portfolio_id=portfolio_id,
                     free_cash=free_cash_value,
                     total_equity=total_equity_value,
                     editor_df=editor_df,

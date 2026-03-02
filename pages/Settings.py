@@ -22,6 +22,14 @@ with content_col:
     # 获取当前用户 ID
     user = st.session_state.get("user") or {}
     user_id = user.get("id") if isinstance(user, dict) else None
+    if not user_id:
+        st.error("无法识别当前用户，设置页已拒绝展示。请重新登录。")
+        st.stop()
+
+    # 顶部展示 user_id，方便复制
+    with st.expander("🔑 账户信息", expanded=True):
+        st.info(f"当前用户 ID (SUPABASE_USER_ID): `{user_id}`")
+        st.caption("请复制此 ID 并配置到 GitHub Secrets 的 SUPABASE_USER_ID 中，以便定时任务能识别您的账户。")
 
 
     def on_save_settings():
@@ -37,7 +45,6 @@ with content_col:
             "gemini_model": st.session_state.gemini_model,
             "tg_bot_token": st.session_state.tg_bot_token,
             "tg_chat_id": st.session_state.tg_chat_id,
-            "my_portfolio_state": st.session_state.my_portfolio_state,
         }
 
         loading = show_page_loading(title="加载中...", subtitle="正在保存到云端")
@@ -125,17 +132,9 @@ with content_col:
             st.markdown("可选，用于 Telegram 私密推送买卖建议。")
             new_tg_bot = st.text_input("Telegram Bot Token", value=st.session_state.tg_bot_token, type="password", key="tg_bot")
             new_tg_chat = st.text_input("Telegram Chat ID", value=st.session_state.tg_chat_id, type="password", key="tg_chat")
-            new_portfolio = st.text_area(
-                "持仓 JSON（MY_PORTFOLIO_STATE）",
-                value=st.session_state.my_portfolio_state,
-                height=120,
-                placeholder='{"free_cash":100000,"positions":[...]}',
-                key="portfolio_input",
-            )
             if st.button("💾 保存 Step4 配置", key="save_step4"):
                 st.session_state.tg_bot_token = new_tg_bot
                 st.session_state.tg_chat_id = new_tg_chat
-                st.session_state.my_portfolio_state = new_portfolio
                 on_save_settings()
 
         st.info("☁️ 您的配置已启用云端同步，将在所有登录设备间自动漫游。")
