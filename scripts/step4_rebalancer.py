@@ -62,7 +62,6 @@ STEP4_ENABLE_SPOT_PATCH = os.getenv("STEP4_ENABLE_SPOT_PATCH", "1").strip().lowe
 STEP4_SPOT_PATCH_RETRIES = int(os.getenv("STEP4_SPOT_PATCH_RETRIES", "2"))
 STEP4_SPOT_PATCH_SLEEP = float(os.getenv("STEP4_SPOT_PATCH_SLEEP", "0.3"))
 STEP4_ATR_SLIPPAGE_FACTOR = float(os.getenv("STEP4_ATR_SLIPPAGE_FACTOR", "0.25"))
-LIVE_PORTFOLIO_ID = "USER_LIVE"
 
 
 @dataclass
@@ -478,49 +477,6 @@ class WyckoffOrderEngine:
         )
 
 
-def load_portfolio_from_env(env_key: str = "MY_PORTFOLIO_STATE") -> PortfolioState:
-    raw = os.getenv(env_key, "").strip()
-    if not raw:
-        raise ValueError(f"{env_key} 未配置")
-    try:
-        data = json.loads(raw)
-    except Exception as e:
-        raise ValueError(f"{env_key} 非法 JSON: {e}") from e
-    if not isinstance(data, dict):
-        raise ValueError(f"{env_key} 必须是 JSON 对象")
-
-    free_cash = float(data.get("free_cash", 0.0) or 0.0)
-    total_equity_raw = data.get("total_equity")
-    total_equity = float(total_equity_raw) if total_equity_raw is not None else None
-
-    positions_raw = data.get("positions", []) or []
-    if not isinstance(positions_raw, list):
-        raise ValueError("positions 必须是数组")
-
-    positions: list[PositionItem] = []
-    for idx, item in enumerate(positions_raw, start=1):
-        if not isinstance(item, dict):
-            print(f"[step4] 跳过非法持仓#{idx}: 非对象")
-            continue
-        code = str(item.get("code", "")).strip()
-        if not re.fullmatch(r"\d{6}", code):
-            print(f"[step4] 跳过非法持仓#{idx}: code 非6位")
-            continue
-        positions.append(
-            PositionItem(
-                code=code,
-                name=str(item.get("name", code)).strip() or code,
-                cost=float(item.get("cost", 0.0) or 0.0),
-                buy_dt=str(item.get("buy_dt", "")).strip(),
-                shares=int(item.get("shares", 0) or 0),
-                strategy=str(item.get("strategy", "")).strip(),
-                stop_loss=float(item.get("stop_loss")) if item.get("stop_loss") is not None else None,
-            )
-        )
-
-    return PortfolioState(free_cash=free_cash, total_equity=total_equity, positions=positions)
-
-
 def _build_portfolio_from_dict(data: dict) -> PortfolioState:
     if not isinstance(data, dict):
         raise ValueError("portfolio data 必须是对象")
@@ -554,19 +510,36 @@ def _build_portfolio_from_dict(data: dict) -> PortfolioState:
     return PortfolioState(free_cash=free_cash, total_equity=total_equity, positions=positions)
 
 
-def load_portfolio_with_fallback() -> tuple[PortfolioState, str]:
+def _load_portfolio_from_env(env_key: str = "MY_PORTFOLIO_STATE") -> PortfolioState:
+    raw = os.getenv(env_key, "").strip()
+    if not raw:
+        raise ValueError(f"{env_key} 未配置")
+    try:
+        data = json.loads(raw)
+    except Exception as e:
+        raise ValueError(f"{env_key} 非法 JSON: {e}") from e
+    if not isinstance(data, dict):
+        raise ValueError(f"{env_key} 必须是 JSON 对象")
+    return _build_portfolio_from_dict(data)
+
+
+def load_portfolio_from_supabase(portfolio_id: str) -> tuple[PortfolioState, str]:
     """
-    优先读取 Supabase LIVE_PORTFOLIO_ID；失败或未配置时回退 MY_PORTFOLIO_STATE。
+    优先从 Supabase 读取指定 portfolio_id；
+    若缺失则回退到 MY_PORTFOLIO_STATE（Action Secret）。
     返回：(PortfolioState, source)
     """
-    sb_data = load_portfolio_state_from_supabase(LIVE_PORTFOLIO_ID)
+    sb_data = load_portfolio_state_from_supabase(portfolio_id)
     if sb_data:
         try:
-            return (_build_portfolio_from_dict(sb_data), f"supabase:{LIVE_PORTFOLIO_ID.lower()}")
+            return (_build_portfolio_from_dict(sb_data), f"supabase:{portfolio_id.lower()}")
         except Exception as e:
-            print(f"[step4] Supabase {LIVE_PORTFOLIO_ID} 解析失败，回退 env: {e}")
-    p = load_portfolio_from_env()
-    return (p, "env:MY_PORTFOLIO_STATE")
+            raise ValueError(f"Supabase {portfolio_id} 解析失败: {e}") from e
+    try:
+        p = _load_portfolio_from_env("MY_PORTFOLIO_STATE")
+        return (p, "env:MY_PORTFOLIO_STATE")
+    except Exception as e:
+        raise ValueError(f"Supabase {portfolio_id} 未就绪，且 env 持仓不可用: {e}") from e
 
 
 def _job_end_calendar_day() -> date:
@@ -990,13 +963,18 @@ def _split_telegram_message(content: str, max_len: int = TELEGRAM_MAX_LEN) -> li
     return chunks
 
 
-def send_to_telegram(message_text: str) -> bool:
+def send_to_telegram(
+    message_text: str,
+    *,
+    tg_bot_token: str,
+    tg_chat_id: str,
+) -> bool:
     import requests
 
-    token = os.getenv("TG_BOT_TOKEN", "").strip()
-    chat_id = os.getenv("TG_CHAT_ID", "").strip()
+    token = str(tg_bot_token or "").strip()
+    chat_id = str(tg_chat_id or "").strip()
     if not token or not chat_id:
-        print("[step4] TG_BOT_TOKEN/TG_CHAT_ID 未配置，跳过 Telegram 推送")
+        print("[step4] tg_bot_token/tg_chat_id 未配置，跳过 Telegram 推送")
         return False
 
     proxy_url = os.getenv("PROXY_URL", "").strip()
@@ -1126,24 +1104,30 @@ def run(
     benchmark_context: dict | None,
     api_key: str,
     model: str,
+    *,
+    portfolio_id: str,
+    tg_bot_token: str,
+    tg_chat_id: str,
 ) -> tuple[bool, str]:
     if not api_key or not api_key.strip():
         return (False, "missing_api_key")
+    if not portfolio_id:
+        return (True, "skipped_invalid_portfolio")
 
     try:
-        portfolio, portfolio_source = load_portfolio_with_fallback()
+        portfolio, portfolio_source = load_portfolio_from_supabase(portfolio_id)
     except Exception as e:
         print(f"[step4] 持仓读取失败: {e}")
         return (True, "skipped_invalid_portfolio")
-    print(f"[step4] 持仓来源: {portfolio_source}")
+    print(f"[step4] 持仓来源: {portfolio_source} | portfolio_id={portfolio_id}")
 
-    if not os.getenv("TG_BOT_TOKEN", "").strip() or not os.getenv("TG_CHAT_ID", "").strip():
-        print("[step4] TG_BOT_TOKEN/TG_CHAT_ID 未配置，跳过 Step4 推送")
+    if not str(tg_bot_token or "").strip() or not str(tg_chat_id or "").strip():
+        print("[step4] tg_bot_token/tg_chat_id 未配置，跳过 Step4 推送")
         return (True, "skipped_telegram_unconfigured")
 
     trade_date = _job_end_calendar_day().strftime("%Y-%m-%d")
-    if check_daily_run_exists(LIVE_PORTFOLIO_ID, trade_date):
-        print(f"[step4] 幂等性检查: {LIVE_PORTFOLIO_ID} {trade_date} 已运行过，跳过。")
+    if check_daily_run_exists(portfolio_id, trade_date):
+        print(f"[step4] 幂等性检查: {portfolio_id} {trade_date} 已运行过，跳过。")
         return (True, "skipped_idempotency")
 
     end_day = _job_end_calendar_day()
@@ -1296,10 +1280,10 @@ def run(
         if t.is_holding and t.effective_stop_loss is not None:
             updates.append({"code": t.code, "stop_loss": t.effective_stop_loss})
     if updates:
-        if update_position_stops(LIVE_PORTFOLIO_ID, updates):
-            print(f"[step4] 已更新 {len(updates)} 个持仓的止损价")
+        if update_position_stops(portfolio_id, updates):
+            print(f"[step4] 已更新 {len(updates)} 个持仓的止损价 | portfolio_id={portfolio_id}")
         else:
-            print("[step4] 持仓止损价更新失败")
+            print(f"[step4] 持仓止损价更新失败 | portfolio_id={portfolio_id}")
 
     run_id = datetime.now(CN_TZ).strftime("%Y%m%d_%H%M%S") + "_" + str(uuid4())[:8]
     ticket_rows = [
@@ -1335,34 +1319,41 @@ def run(
         free_cash_after=free_cash_after,
         tickets=tickets,
     )
-    sent = send_to_telegram(report)
+    sent = send_to_telegram(
+        report,
+        tg_bot_token=tg_bot_token,
+        tg_chat_id=tg_chat_id,
+    )
     if not sent:
         return (False, "telegram_failed")
 
     # Telegram 发送成功后才写入幂等标记，保证失败可重试
     if save_ai_trade_orders(
         run_id=run_id,
-        portfolio_id=LIVE_PORTFOLIO_ID,
+        portfolio_id=portfolio_id,
         model=model,
         trade_date=trade_date,
         market_view=market_view,
         orders=ticket_rows,
     ):
-        print(f"[step4] 已写入 AI 订单记录: run_id={run_id}, count={len(ticket_rows)}")
+        print(f"[step4] 已写入 AI 订单记录: run_id={run_id}, count={len(ticket_rows)}, portfolio_id={portfolio_id}")
     else:
-        print("[step4] AI 订单记录写入失败（已忽略，不阻断流程）")
+        print(f"[step4] AI 订单记录写入失败（已忽略，不阻断流程） | portfolio_id={portfolio_id}")
 
     positions_value = max(float(total_equity) - float(portfolio.free_cash), 0.0)
     if upsert_daily_nav(
-        portfolio_id=LIVE_PORTFOLIO_ID,
+        portfolio_id=portfolio_id,
         trade_date=trade_date,
         free_cash=portfolio.free_cash,
         total_equity=float(total_equity),
         positions_value=positions_value,
     ):
-        print(f"[step4] 已写入 USER_LIVE 日净值快照: {trade_date}")
+        print(f"[step4] 已写入 {portfolio_id} 日净值快照: {trade_date}")
     else:
-        print("[step4] USER_LIVE 日净值快照写入失败（已忽略）")
+        print(f"[step4] {portfolio_id} 日净值快照写入失败（已忽略）")
 
-    print(f"[step4] 交易工单发送成功: decisions={len(decisions)}, tickets={len(tickets)}, model={model}")
+    print(
+        f"[step4] 交易工单发送成功: decisions={len(decisions)}, tickets={len(tickets)}, "
+        f"model={model}, portfolio_id={portfolio_id}"
+    )
     return (True, "ok")

@@ -5,6 +5,18 @@ from postgrest.exceptions import APIError
 from core.constants import TABLE_USER_SETTINGS
 
 
+def reset_user_settings_state() -> None:
+    """
+    重置当前会话中的用户敏感配置，防止跨账号残留。
+    """
+    st.session_state.feishu_webhook = ""
+    st.session_state.gemini_api_key = ""
+    st.session_state.tushare_token = ""
+    st.session_state.gemini_model = "gemini-2.0-flash"
+    st.session_state.tg_bot_token = ""
+    st.session_state.tg_chat_id = ""
+
+
 def _get_supabase_client_base() -> Client:
     # 优先尝试从 os.getenv 读取（本地 .env 文件）
     # 其次尝试从 st.secrets 读取（Streamlit Cloud 部署环境）
@@ -60,6 +72,9 @@ def get_supabase_client() -> Client:
 
 def load_user_settings(user_id: str):
     """从 Supabase 加载用户配置到 st.session_state"""
+    reset_user_settings_state()
+    if not user_id:
+        return False
     try:
         supabase = get_supabase_client()
         response = (
@@ -78,7 +93,6 @@ def load_user_settings(user_id: str):
             st.session_state.gemini_model = settings.get("gemini_model") or "gemini-2.5-flash"
             st.session_state.tg_bot_token = settings.get("tg_bot_token") or ""
             st.session_state.tg_chat_id = settings.get("tg_chat_id") or ""
-            st.session_state.my_portfolio_state = settings.get("my_portfolio_state") or ""
             return True
     except APIError as e:
         print(f"Supabase API Error in load_user_settings: {e.code} - {e.message}")
