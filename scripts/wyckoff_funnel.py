@@ -62,7 +62,7 @@ BATCH_TIMEOUT = int(os.getenv("FUNNEL_BATCH_TIMEOUT", "420"))
 BATCH_SIZE = int(os.getenv("FUNNEL_BATCH_SIZE", "200"))
 BATCH_SLEEP = float(os.getenv("FUNNEL_BATCH_SLEEP", "2"))
 MAX_WORKERS = int(os.getenv("FUNNEL_MAX_WORKERS", "8"))
-EXECUTOR_MODE = os.getenv("FUNNEL_EXECUTOR_MODE", "thread").strip().lower()
+EXECUTOR_MODE = os.getenv("FUNNEL_EXECUTOR_MODE", "process").strip().lower()
 if EXECUTOR_MODE not in {"thread", "process"}:
     EXECUTOR_MODE = "thread"
 CN_TZ = ZoneInfo("Asia/Shanghai")

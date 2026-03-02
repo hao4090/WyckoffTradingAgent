@@ -28,7 +28,7 @@ from core.wyckoff_engine import normalize_hist_from_fetch
 TRADING_DAYS = 500
 GEMINI_MODEL_FALLBACK = "gemini-2.0-flash-lite"
 OPERATION_TARGET = 6
-STEP3_MAX_AI_INPUT = int(os.getenv("STEP3_MAX_AI_INPUT", "0"))
+STEP3_MAX_AI_INPUT = int(os.getenv("STEP3_MAX_AI_INPUT", "25"))
 STEP3_MAX_PER_INDUSTRY = int(os.getenv("STEP3_MAX_PER_INDUSTRY", "5"))
 STEP3_MAX_OUTPUT_TOKENS = 32768
 DYNAMIC_MAINLINE_BONUS_RATE = 0.15
@@ -721,6 +721,7 @@ def run(
         )
 
     # P2: RAG 防雷（负面新闻关键词 veto）
+    # 注意：RAG 永远在压缩/硬上限之后执行，确保筛查集合最多为 STEP3_MAX_AI_INPUT。
     rag_veto_lines: list[str] = []
     if STEP3_ENABLE_RAG_VETO and is_rag_veto_enabled() and not selected_df.empty:
         rag_inputs = [
