@@ -102,6 +102,12 @@ def main() -> int:
         _log("--dry-run: 配置校验通过，退出", logs_path)
         return 0
 
+    # 定时任务日线口径：禁用 akshare/efinance，优先 baostock，失败再 tushare。
+    # 为保证 baostock 可用，这里强制切到 thread 并发（process 模式会自动禁用 baostock）。
+    os.environ["DATA_SOURCE_DISABLE_AKSHARE"] = "1"
+    os.environ["DATA_SOURCE_DISABLE_EFINANCE"] = "1"
+    os.environ["FUNNEL_EXECUTOR_MODE"] = "thread"
+
     from scripts.wyckoff_funnel import run as run_step2
     from scripts.step3_batch_report import run as run_step3
     from scripts.step4_rebalancer import run as run_step4

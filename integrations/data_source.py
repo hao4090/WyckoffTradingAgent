@@ -4,7 +4,7 @@
 # 商业授权请联系作者支付授权费用。
 
 """
-统一数据源：个股 akshare→baostock→efinance→tushare；大盘 tushare 直连
+统一数据源：个股默认 akshare→baostock→efinance→tushare；大盘 tushare 直连
 
 输出格式与 akshare 兼容：日期, 开盘, 最高, 最低, 收盘, 成交量, 成交额, 涨跌幅, 换手率, 振幅
 """
@@ -454,6 +454,10 @@ def fetch_stock_hist(
 ) -> pd.DataFrame:
     """
     个股日线：akshare → baostock → efinance（各试一次），全失败再用 tushare。
+    可用环境变量按需禁用数据源：
+    - DATA_SOURCE_DISABLE_AKSHARE=1
+    - DATA_SOURCE_DISABLE_BAOSTOCK=1
+    - DATA_SOURCE_DISABLE_EFINANCE=1
     返回列：日期, 开盘, 最高, 最低, 收盘, 成交量, 成交额, 涨跌幅, 换手率, 振幅
     """
     start_s = (
@@ -467,7 +471,19 @@ def fetch_stock_hist(
 
     failed_sources: list[str] = []
     failed_details: list[str] = []
+    disable_akshare = os.getenv("DATA_SOURCE_DISABLE_AKSHARE", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
     disable_baostock = os.getenv("DATA_SOURCE_DISABLE_BAOSTOCK", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    disable_efinance = os.getenv("DATA_SOURCE_DISABLE_EFINANCE", "").strip().lower() in {
         "1",
         "true",
         "yes",
@@ -475,18 +491,22 @@ def fetch_stock_hist(
     }
 
     # 1. akshare
-    try:
-        return _tag_source(
-            _fetch_stock_akshare(symbol, start_s, end_s, adjust), "akshare"
-        )
-    except ModuleNotFoundError as e:
-        _debug_source_fail("akshare", e)
-        failed_sources.append(f"akshare(缺少依赖 {e.name})")
-        failed_details.append(f"akshare={_compact_error(e)}")
-    except Exception as e:
-        _debug_source_fail("akshare", e)
-        failed_sources.append("akshare")
-        failed_details.append(f"akshare={_compact_error(e)}")
+    if disable_akshare:
+        failed_sources.append("akshare(disabled)")
+        failed_details.append("akshare=disabled_by_env")
+    else:
+        try:
+            return _tag_source(
+                _fetch_stock_akshare(symbol, start_s, end_s, adjust), "akshare"
+            )
+        except ModuleNotFoundError as e:
+            _debug_source_fail("akshare", e)
+            failed_sources.append(f"akshare(缺少依赖 {e.name})")
+            failed_details.append(f"akshare={_compact_error(e)}")
+        except Exception as e:
+            _debug_source_fail("akshare", e)
+            failed_sources.append("akshare")
+            failed_details.append(f"akshare={_compact_error(e)}")
 
     # 2. baostock (仅前复权)
     if disable_baostock:
@@ -505,16 +525,20 @@ def fetch_stock_hist(
             failed_details.append(f"baostock={_compact_error(e)}")
 
     # 3. efinance (仅前复权)
-    try:
-        return _tag_source(_fetch_stock_efinance(symbol, start_s, end_s), "efinance")
-    except ModuleNotFoundError as e:
-        _debug_source_fail("efinance", e)
-        failed_sources.append(f"efinance(未安装: {e.name})")
-        failed_details.append(f"efinance={_compact_error(e)}")
-    except Exception as e:
-        _debug_source_fail("efinance", e)
-        failed_sources.append("efinance")
-        failed_details.append(f"efinance={_compact_error(e)}")
+    if disable_efinance:
+        failed_sources.append("efinance(disabled)")
+        failed_details.append("efinance=disabled_by_env")
+    else:
+        try:
+            return _tag_source(_fetch_stock_efinance(symbol, start_s, end_s), "efinance")
+        except ModuleNotFoundError as e:
+            _debug_source_fail("efinance", e)
+            failed_sources.append(f"efinance(未安装: {e.name})")
+            failed_details.append(f"efinance={_compact_error(e)}")
+        except Exception as e:
+            _debug_source_fail("efinance", e)
+            failed_sources.append("efinance")
+            failed_details.append(f"efinance={_compact_error(e)}")
 
     # 4. tushare（可选，未配置则直接报错）
     from utils.tushare_client import get_pro

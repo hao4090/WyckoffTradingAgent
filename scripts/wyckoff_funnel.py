@@ -82,6 +82,11 @@ BREADTH_RISK_OFF_THRESHOLD = float(os.getenv("FUNNEL_BREADTH_RISK_OFF_PCT", "20.
 BREADTH_RISK_ON_THRESHOLD = float(os.getenv("FUNNEL_BREADTH_RISK_ON_PCT", "60.0"))
 BREADTH_RISK_ON_MIN_DELTA = float(os.getenv("FUNNEL_BREADTH_RISK_ON_DELTA", "0.0"))
 BREADTH_CLIFF_DROP_PCT = float(os.getenv("FUNNEL_BREADTH_CLIFF_DROP_PCT", "-10.0"))
+SMALLCAP_BENCH_CODE = os.getenv("FUNNEL_SMALLCAP_BENCH_CODE", "399006").strip() or "399006"
+CRASH_MAIN_DAY_DROP_PCT = float(os.getenv("FUNNEL_CRASH_MAIN_DAY_DROP_PCT", "-1.5"))
+CRASH_SMALL_DAY_DROP_PCT = float(os.getenv("FUNNEL_CRASH_SMALL_DAY_DROP_PCT", "-3.0"))
+CRASH_BREADTH_RATIO_PCT = float(os.getenv("FUNNEL_CRASH_BREADTH_RATIO_PCT", "15.0"))
+CRASH_BREADTH_DELTA_PCT = float(os.getenv("FUNNEL_CRASH_BREADTH_DELTA_PCT", "-20.0"))
 FUNNEL_EXPORT_FULL_FETCH = os.getenv("FUNNEL_EXPORT_FULL_FETCH", "0").strip().lower() in {
     "1",
     "true",
@@ -304,6 +309,7 @@ def _terminate_executor_processes(ex: ProcessPoolExecutor, batch_no: int) -> Non
 
 def _analyze_benchmark_and_tune_cfg(
     bench_df: pd.DataFrame | None,
+    smallcap_df: pd.DataFrame | None,
     cfg: FunnelConfig,
     breadth: dict | None = None,
 ) -> dict:
@@ -314,12 +320,20 @@ def _analyze_benchmark_and_tune_cfg(
     """
     context = {
         "regime": "UNKNOWN",
+        "main_code": "000001",
         "close": None,
         "ma50": None,
         "ma200": None,
         "ma50_slope_5d": None,
         "recent3_pct": [],
         "recent3_cum_pct": None,
+        "smallcap_code": SMALLCAP_BENCH_CODE,
+        "smallcap_close": None,
+        "smallcap_recent3_pct": [],
+        "smallcap_recent3_cum_pct": None,
+        "smallcap_today_pct": None,
+        "panic_triggered": False,
+        "panic_reasons": [],
         "tuned": {
             "min_avg_amount_wan": cfg.min_avg_amount_wan,
             "rs_min_long": cfg.rs_min_long,
@@ -341,6 +355,11 @@ def _analyze_benchmark_and_tune_cfg(
     ma50_slope_5d = None
     recent3_list: list[float] = []
     recent3_cum = None
+    main_today_pct = None
+    small_close = None
+    small_recent3_list: list[float] = []
+    small_recent3_cum = None
+    small_today_pct = None
 
     if bench_df is not None and not bench_df.empty:
         b = bench_df.sort_values("date").copy()
@@ -356,6 +375,23 @@ def _analyze_benchmark_and_tune_cfg(
             recent3_list = [float(x) for x in recent3.tolist()]
             if not recent3.empty:
                 recent3_cum = float(((recent3 / 100.0 + 1.0).prod() - 1.0) * 100.0)
+            if recent3_list:
+                main_today_pct = float(recent3_list[-1])
+
+    if smallcap_df is not None and not smallcap_df.empty:
+        s = smallcap_df.sort_values("date").copy()
+        s["close"] = pd.to_numeric(s["close"], errors="coerce")
+        s["pct_chg"] = pd.to_numeric(s["pct_chg"], errors="coerce")
+        if len(s) >= 10:
+            small_close = float(s["close"].iloc[-1])
+            s_recent3 = s["pct_chg"].dropna().tail(3)
+            small_recent3_list = [float(x) for x in s_recent3.tolist()]
+            if not s_recent3.empty:
+                small_recent3_cum = float(
+                    ((s_recent3 / 100.0 + 1.0).prod() - 1.0) * 100.0
+                )
+            if small_recent3_list:
+                small_today_pct = float(small_recent3_list[-1])
 
     regime = "NEUTRAL"
     if (
@@ -399,8 +435,35 @@ def _analyze_benchmark_and_tune_cfg(
         if breadth_delta is not None and float(breadth_delta) <= BREADTH_CLIFF_DROP_PCT:
             regime = "RISK_OFF"
 
+    panic_reasons: list[str] = []
+    if main_today_pct is not None and float(main_today_pct) <= float(CRASH_MAIN_DAY_DROP_PCT):
+        panic_reasons.append(
+            f"main_day_drop={main_today_pct:.2f}%<=阈值{CRASH_MAIN_DAY_DROP_PCT:.2f}%"
+        )
+    if small_today_pct is not None and float(small_today_pct) <= float(CRASH_SMALL_DAY_DROP_PCT):
+        panic_reasons.append(
+            f"smallcap_day_drop={small_today_pct:.2f}%<=阈值{CRASH_SMALL_DAY_DROP_PCT:.2f}%"
+        )
+    if breadth_ratio is not None and float(breadth_ratio) <= float(CRASH_BREADTH_RATIO_PCT):
+        panic_reasons.append(
+            f"breadth_ratio={float(breadth_ratio):.2f}%<=阈值{CRASH_BREADTH_RATIO_PCT:.2f}%"
+        )
+    if breadth_delta is not None and float(breadth_delta) <= float(CRASH_BREADTH_DELTA_PCT):
+        panic_reasons.append(
+            f"breadth_delta={float(breadth_delta):.2f}%<=阈值{CRASH_BREADTH_DELTA_PCT:.2f}%"
+        )
+
+    if panic_reasons:
+        regime = "CRASH"
+
     # 动态调参：风险越冷，过滤越严
-    if regime == "RISK_OFF":
+    if regime == "CRASH":
+        cfg.min_avg_amount_wan = max(cfg.min_avg_amount_wan, 18000.0)
+        cfg.rs_min_long = max(cfg.rs_min_long, 4.0)
+        cfg.rs_min_short = max(cfg.rs_min_short, 1.0)
+        cfg.rps_fast_min = max(cfg.rps_fast_min, 90.0)
+        cfg.rps_slow_min = max(cfg.rps_slow_min, 85.0)
+    elif regime == "RISK_OFF":
         cfg.min_avg_amount_wan = max(cfg.min_avg_amount_wan, 10000.0)
         cfg.rs_min_long = max(cfg.rs_min_long, 2.0)
         cfg.rs_min_short = max(cfg.rs_min_short, 0.5)
@@ -425,6 +488,13 @@ def _analyze_benchmark_and_tune_cfg(
             "ma50_slope_5d": ma50_slope_5d,
             "recent3_pct": recent3_list,
             "recent3_cum_pct": recent3_cum,
+            "main_today_pct": main_today_pct,
+            "smallcap_close": small_close,
+            "smallcap_recent3_pct": small_recent3_list,
+            "smallcap_recent3_cum_pct": small_recent3_cum,
+            "smallcap_today_pct": small_today_pct,
+            "panic_triggered": bool(panic_reasons),
+            "panic_reasons": panic_reasons,
             "tuned": {
                 "min_avg_amount_wan": cfg.min_avg_amount_wan,
                 "rs_min_long": cfg.rs_min_long,
@@ -772,11 +842,17 @@ def run_funnel_job() -> tuple[dict[str, list[tuple[str, float]]], dict]:
 
     # 大盘基准
     bench_df = None
+    smallcap_df = None
     try:
         bench_df = fetch_index_hist("000001", start_s, end_s)
         print(f"[funnel] 大盘基准加载成功")
     except Exception as e:
         print(f"[funnel] 大盘基准加载失败: {e}")
+    try:
+        smallcap_df = fetch_index_hist(SMALLCAP_BENCH_CODE, start_s, end_s)
+        print(f"[funnel] 小盘基准加载成功: {SMALLCAP_BENCH_CODE}")
+    except Exception as e:
+        print(f"[funnel] 小盘基准加载失败 {SMALLCAP_BENCH_CODE}: {e}")
 
     # 并发拉取日线（只负责取数，不负责计算）
     all_df_map: dict[str, pd.DataFrame] = {}
@@ -915,6 +991,7 @@ def run_funnel_job() -> tuple[dict[str, list[tuple[str, float]]], dict]:
     breadth_context = _calc_market_breadth(all_df_map, BREADTH_MA_WINDOW)
     benchmark_context = _analyze_benchmark_and_tune_cfg(
         bench_df,
+        smallcap_df,
         cfg,
         breadth=breadth_context,
     )
@@ -922,9 +999,11 @@ def run_funnel_job() -> tuple[dict[str, list[tuple[str, float]]], dict]:
         "[funnel] 大盘总闸: "
         f"regime={benchmark_context['regime']}, "
         f"close={benchmark_context['close']}, ma50={benchmark_context['ma50']}, ma200={benchmark_context['ma200']}, "
-        f"ma50_slope_5d={benchmark_context['ma50_slope_5d']}, recent3={benchmark_context['recent3_pct']}, "
+        f"ma50_slope_5d={benchmark_context['ma50_slope_5d']}, main_today={benchmark_context.get('main_today_pct')}, recent3={benchmark_context['recent3_pct']}, "
         f"recent3_cum={benchmark_context['recent3_cum_pct']}, "
+        f"smallcap_code={benchmark_context.get('smallcap_code')}, smallcap_today={benchmark_context.get('smallcap_today_pct')}, "
         f"breadth={benchmark_context.get('breadth')}, "
+        f"panic_triggered={benchmark_context.get('panic_triggered')}, panic_reasons={benchmark_context.get('panic_reasons')}, "
         f"tuned={benchmark_context['tuned']}"
     )
 
