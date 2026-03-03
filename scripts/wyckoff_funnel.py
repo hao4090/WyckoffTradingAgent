@@ -20,8 +20,7 @@ from concurrent.futures import (
     TimeoutError as FuturesTimeoutError,
     as_completed,
 )
-from datetime import date, datetime, timedelta
-from zoneinfo import ZoneInfo
+from datetime import date, datetime
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -47,6 +46,7 @@ from integrations.data_source import (
     fetch_stock_spot_snapshot,
 )
 from utils.feishu import send_feishu_notification
+from utils.trading_clock import CN_TZ, resolve_end_calendar_day
 
 TRIGGER_LABELS = {
     "spring": "Spring（终极震仓）",
@@ -65,14 +65,6 @@ MAX_WORKERS = int(os.getenv("FUNNEL_MAX_WORKERS", "8"))
 EXECUTOR_MODE = os.getenv("FUNNEL_EXECUTOR_MODE", "process").strip().lower()
 if EXECUTOR_MODE not in {"thread", "process"}:
     EXECUTOR_MODE = "thread"
-CN_TZ = ZoneInfo("Asia/Shanghai")
-MARKET_CLOSE_HOUR = int(os.getenv("MARKET_CLOSE_HOUR", "15"))
-MARKET_DATA_READY_HOUR = int(
-    os.getenv(
-        "MARKET_DATA_READY_HOUR",
-        str(max(MARKET_CLOSE_HOUR, 20)),
-    )
-)
 ENFORCE_TARGET_TRADE_DATE = os.getenv(
     "ENFORCE_TARGET_TRADE_DATE", "1"
 ).strip().lower() in {"1", "true", "yes", "on"}
@@ -179,13 +171,10 @@ def _run_with_timeout(sym: str, window, timeout_s: int) -> pd.DataFrame:
 def _job_end_calendar_day() -> date:
     """
     定时任务统一口径：
-    - 北京时间达到 MARKET_DATA_READY_HOUR（默认 >=20:00）走 T+0（当天）
-    - 否则走 T-1（上一自然日），避免 15:00~18:00 数据源时差导致截面错位
+    - 北京时间 17:00-23:59 走 T（当天）
+    - 北京时间 00:00-16:59 走 T-1（上一自然日）
     """
-    now = datetime.now(CN_TZ)
-    if now.hour >= MARKET_DATA_READY_HOUR:
-        return now.date()
-    return (now - timedelta(days=1)).date()
+    return resolve_end_calendar_day()
 
 
 def _latest_trade_date_from_hist(df: pd.DataFrame) -> date | None:

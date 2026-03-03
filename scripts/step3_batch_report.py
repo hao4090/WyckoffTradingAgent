@@ -10,8 +10,7 @@ import os
 import re
 import sys
 import time
-from datetime import date, datetime, timedelta
-from zoneinfo import ZoneInfo
+from datetime import date, datetime
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -23,6 +22,7 @@ from integrations.llm_client import call_llm
 from integrations.rag_veto import is_rag_veto_enabled, run_negative_news_veto
 from integrations.data_source import fetch_index_hist, fetch_sector_map, fetch_stock_spot_snapshot
 from utils.feishu import send_feishu_notification
+from utils.trading_clock import CN_TZ, resolve_end_calendar_day
 from core.wyckoff_engine import normalize_hist_from_fetch
 
 TRADING_DAYS = 500
@@ -48,14 +48,6 @@ HIGHLIGHT_PCT_THRESHOLD = 5.0
 HIGHLIGHT_VOL_RATIO = 2.0
 DEBUG_MODEL_IO = os.getenv("DEBUG_MODEL_IO", "").strip().lower() in {"1", "true", "yes", "on"}
 DEBUG_MODEL_IO_FULL = os.getenv("DEBUG_MODEL_IO_FULL", "").strip().lower() in {"1", "true", "yes", "on"}
-CN_TZ = ZoneInfo("Asia/Shanghai")
-MARKET_CLOSE_HOUR = int(os.getenv("MARKET_CLOSE_HOUR", "15"))
-MARKET_DATA_READY_HOUR = int(
-    os.getenv(
-        "MARKET_DATA_READY_HOUR",
-        str(max(MARKET_CLOSE_HOUR, 20)),
-    )
-)
 ENFORCE_TARGET_TRADE_DATE = os.getenv(
     "ENFORCE_TARGET_TRADE_DATE", "1"
 ).strip().lower() in {"1", "true", "yes", "on"}
@@ -312,13 +304,10 @@ def _extract_codes_from_text(
 def _job_end_calendar_day() -> date:
     """
     定时任务统一口径：
-    - 北京时间达到 MARKET_DATA_READY_HOUR（默认 >=20:00）走 T+0（当天）
-    - 否则走 T-1（上一自然日），避免 15:00~18:00 数据源时差导致截面错位
+    - 北京时间 17:00-23:59 走 T（当天）
+    - 北京时间 00:00-16:59 走 T-1（上一自然日）
     """
-    now = datetime.now(CN_TZ)
-    if now.hour >= MARKET_DATA_READY_HOUR:
-        return now.date()
-    return (now - timedelta(days=1)).date()
+    return resolve_end_calendar_day()
 
 
 def _latest_trade_date_from_hist(df: pd.DataFrame) -> date | None:
