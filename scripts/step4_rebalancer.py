@@ -54,7 +54,7 @@ STEP4_SPOT_PATCH_SLEEP = float(os.getenv("STEP4_SPOT_PATCH_SLEEP", "0.3"))
 STEP4_ATR_SLIPPAGE_FACTOR = float(os.getenv("STEP4_ATR_SLIPPAGE_FACTOR", "0.25"))
 STEP4_BUY_BLOCK_REGIMES = {
     x.strip().upper()
-    for x in os.getenv("STEP4_BUY_BLOCK_REGIMES", "CRASH").split(",")
+    for x in os.getenv("STEP4_BUY_BLOCK_REGIMES", "CRASH,BLACK_SWAN").split(",")
     if x.strip() and x.strip().upper() != "COOLDOWN"
 }
 

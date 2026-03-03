@@ -292,6 +292,7 @@ def _fetch_stock_baostock(symbol: str, start: str, end: str) -> pd.DataFrame:
             socket.setdefaulttimeout(_BAOSTOCK_SOCKET_TIMEOUT)
         bs = _ensure_baostock_login()
         try:
+            started = time.monotonic()
             rs = bs.query_history_k_data_plus(
                 bs_code,
                 "date,open,high,low,close,volume,amount,pctChg",
@@ -304,6 +305,13 @@ def _fetch_stock_baostock(symbol: str, start: str, end: str) -> pd.DataFrame:
                 raise RuntimeError(f"baostock: {rs.error_msg}")
             rows: list[list[str]] = []
             while rs.next():
+                if (
+                    _BAOSTOCK_MAX_SECONDS > 0
+                    and (time.monotonic() - started) > _BAOSTOCK_MAX_SECONDS
+                ):
+                    raise TimeoutError(
+                        f"baostock hard timeout > {_BAOSTOCK_MAX_SECONDS:.2f}s"
+                    )
                 rows.append(rs.get_row_data())
         finally:
             socket.setdefaulttimeout(old_sock_timeout)

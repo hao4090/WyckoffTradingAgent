@@ -490,17 +490,20 @@ def _analyze_benchmark_and_tune_cfg(
     snap_ok = bool(snap.get("ok"))
     snap_down_extreme = int(snap.get("down_extreme_count") or 0)
     snap_down_9 = int(snap.get("down_9_count") or 0)
-    if (
+    extreme_snapshot_panic = (
         snap_ok
         and CRASH_EXTREME_DROP_COUNT > 0
         and snap_down_extreme >= CRASH_EXTREME_DROP_COUNT
-    ):
+    )
+    if extreme_snapshot_panic:
         panic_reasons.append(
             f"down_{CRASH_EXTREME_DROP_PCT:g}_count={snap_down_extreme}>=阈值{CRASH_EXTREME_DROP_COUNT}"
         )
 
     repair_reasons: list[str] = []
-    if panic_reasons:
+    if extreme_snapshot_panic:
+        regime = "BLACK_SWAN"
+    elif panic_reasons:
         regime = "CRASH"
     elif PANIC_REPAIR_ENABLE:
         prev_panic = (
@@ -533,7 +536,13 @@ def _analyze_benchmark_and_tune_cfg(
             ]
 
     # 动态调参：风险越冷，过滤越严
-    if regime == "CRASH":
+    if regime == "BLACK_SWAN":
+        cfg.min_avg_amount_wan = max(cfg.min_avg_amount_wan, 30000.0)
+        cfg.rs_min_long = max(cfg.rs_min_long, 8.0)
+        cfg.rs_min_short = max(cfg.rs_min_short, 2.0)
+        cfg.rps_fast_min = max(cfg.rps_fast_min, 95.0)
+        cfg.rps_slow_min = max(cfg.rps_slow_min, 90.0)
+    elif regime == "CRASH":
         cfg.min_avg_amount_wan = max(cfg.min_avg_amount_wan, 18000.0)
         cfg.rs_min_long = max(cfg.rs_min_long, 4.0)
         cfg.rs_min_short = max(cfg.rs_min_short, 1.0)
