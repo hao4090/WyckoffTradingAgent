@@ -1360,6 +1360,19 @@ def run_funnel_job() -> tuple[dict[str, list[tuple[str, float]]], dict]:
     l2_ambush   = sum(1 for v in l2_channel_map.values() if "潜伏通道" in v)
     l2_accum    = sum(1 for v in l2_channel_map.values() if "吸筹通道" in v)
 
+    # 新增：统计 Markup 和 Accumulation ABC
+    markup_symbols = metrics.get("markup_symbols", [])
+    accum_stage_map = metrics.get("accum_stage_map", {})
+    exit_signals = metrics.get("exit_signals", {})
+
+    markup_count = len(markup_symbols)
+    accum_a_count = sum(1 for v in accum_stage_map.values() if v == "Accum_A")
+    accum_b_count = sum(1 for v in accum_stage_map.values() if v == "Accum_B")
+    accum_c_count = sum(1 for v in accum_stage_map.values() if v == "Accum_C")
+    profit_target_count = sum(1 for sig in exit_signals.values() if sig.get("signal") == "profit_target")
+    stop_loss_count = sum(1 for sig in exit_signals.values() if sig.get("signal") == "stop_loss")
+    dist_warning_count = sum(1 for sig in exit_signals.values() if sig.get("signal") == "distribution_warning")
+
     # Layer 3 (Sector Resonance)
     l3_passed, top_sectors = layer3_sector_resonance(
         l2_passed,
@@ -1530,6 +1543,8 @@ def run(webhook_url: str) -> tuple[bool, list[dict], dict]:
         ),
         f"**漏斗概览**: {metrics['total_symbols']}只 → L1:{metrics['layer1']} → L2:{metrics['layer2']} → L3:{metrics['layer3']} → 命中:{metrics['total_hits']}",
         f"**L2通道分布**: 主升{l2_momentum} | 潜伏{l2_ambush} | 吸筹{l2_accum}",
+        f"**威科夫阶段**: Markup{markup_count} | Accum_A{accum_a_count} | Accum_B{accum_b_count} | Accum_C{accum_c_count}",
+        f"**Exit信号**: 止盈{profit_target_count} | 止损{stop_loss_count} | Distribution警告{dist_warning_count}",
         (
         f"**数据质量**: 成功拉取 {metrics['fetch_ok']} 只"
         + (f"，失败 {metrics['fetch_fail']} 只" if metrics['fetch_fail'] else "，无失败")
@@ -1543,17 +1558,32 @@ def run(webhook_url: str) -> tuple[bool, list[dict], dict]:
         ),
         f"**Top 行业**: {', '.join(metrics['top_sectors']) if metrics['top_sectors'] else '无'}",
         "",
-        "**AI分析输入列表（L4命中 + L3全量）代码 名称 | 来源标签 | 分值**",
+        "**AI分析输入列表（L4命中 + L3全量）代码 名称 | 阶段 | 来源标签 | Exit信号**",
         "",
     ]
     for code in selected_for_ai:
         name = name_map.get(code, code)
         trigger_reason = "、".join(code_to_reasons.get(code, []))
         channel = str(l2_channel_map.get(code, "")).strip()
+        stage = accum_stage_map.get(code, "")
+        if not stage and code in markup_symbols:
+            stage = "Markup"
+        stage_str = f"[{stage}]" if stage else ""
         base_reason = trigger_reason or "L3共振通过"
         reasons = f"{channel} | {base_reason}" if channel else base_reason
+
+        # Exit 信号
+        exit_sig = exit_signals.get(code, {})
+        exit_str = ""
+        if exit_sig.get("signal") == "profit_target":
+            exit_str = f"| ✓止盈{exit_sig.get('price', 0):.2f}"
+        elif exit_sig.get("signal") == "stop_loss":
+            exit_str = f"| ✗止损{exit_sig.get('price', 0):.2f}"
+        elif exit_sig.get("signal") == "distribution_warning":
+            exit_str = "| ⚠Distribution警告"
+
         score = float(l3_score_map.get(code, 0.0))
-        lines.append(f"• {code} {name} | {reasons} | score={score:.2f}")
+        lines.append(f"• {code} {name} {stage_str} | {reasons} {exit_str} | score={score:.2f}")
 
     if not selected_for_ai:
         lines.append("无")

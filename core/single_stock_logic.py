@@ -268,22 +268,61 @@ def _run_analysis(symbol, image_file, provider, model, api_key):
             name = _stock_name_from_code(symbol)
         except Exception:
             name = symbol
-        
+
+        # 新增：计算该股票的威科夫阶段信息
+        from core.wyckoff_engine import (
+            FunnelConfig,
+            detect_markup_stage,
+            detect_accum_stage,
+            layer5_exit_signals,
+            normalize_hist_from_fetch,
+            _sorted_if_needed,
+        )
+
+        df_normalized = normalize_hist_from_fetch(df_hist)
+        cfg = FunnelConfig()
+
+        # 检测阶段
+        stage_info = ""
+        markup_list = detect_markup_stage([symbol], {symbol: df_normalized}, cfg)
+        accum_map = detect_accum_stage([symbol], {symbol: df_normalized}, cfg)
+        exit_signals = layer5_exit_signals([symbol], {symbol: df_normalized}, accum_map, cfg)
+
+        if symbol in markup_list:
+            stage_info = "✓ **当前阶段**: Markup（上升期）- 已从积累期成功进入上升趋势\n"
+        elif symbol in accum_map:
+            stage = accum_map.get(symbol, "")
+            stage_cn = {"Accum_A": "积累A（下跌停止）", "Accum_B": "积累B（底部振荡）", "Accum_C": "积累C（最后洗盘）"}.get(stage, stage)
+            stage_info = f"✓ **当前阶段**: {stage_cn} - {stage}阶段\n"
+
+        # Exit 信号
+        exit_info = ""
+        if symbol in exit_signals:
+            sig = exit_signals[symbol]
+            if sig.get("signal") == "profit_target":
+                exit_info = f"⚠ **Exit提醒**: 已达止盈价位 {sig.get('price', 0):.2f} - {sig.get('reason', '')}\n"
+            elif sig.get("signal") == "stop_loss":
+                exit_info = f"🔴 **Exit提醒**: 触发止损价位 {sig.get('price', 0):.2f} - {sig.get('reason', '')}\n"
+            elif sig.get("signal") == "distribution_warning":
+                exit_info = f"⚠ **Exit提醒**: {sig.get('reason', '检测到Distribution阶段迹象')}\n"
+
         # 转换为 CSV 文本
         csv_text = df_hist.to_csv(index=False, encoding="utf-8-sig")
-        
+
         # 准备 Prompt
         current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         font_path = get_chinese_font_path()
         font_hint = f"\n【系统检测】当前环境建议中文字体路径：'{font_path}'" if font_path else "\n【系统检测】未检测到常见中文字体，请尝试自动查找。"
-        
+
         final_system_prompt = WYCKOFF_SINGLE_SYSTEM_PROMPT + font_hint
-        
+
         user_msg = (
             f"当前北京时间：{current_time}\n"
             f"分析标的：{symbol} {name} ({sector})\n"
             f"数据长度：{len(df_hist)} 交易日\n\n"
-            f"以下是 CSV 数据：\n```csv\n{csv_text}\n```\n\n"
+            f"{stage_info}"
+            f"{exit_info}"
+            f"\n以下是 CSV 数据：\n```csv\n{csv_text}\n```\n\n"
             "请开始分析，并生成绘图代码。"
         )
 
@@ -309,10 +348,10 @@ def _run_analysis(symbol, image_file, provider, model, api_key):
 
         # 3. 展示分析结果
         loading.empty()
-        
+
         # 分离代码和文本
         code_block = extract_python_code(response_text)
-        
+
         # 展示文本部分（去除代码块后，或者直接展示全部）
         # 为了美观，我们可以尝试把代码块折叠，或者只展示非代码部分
         # 这里简单起见，直接展示 Markdown
@@ -345,4 +384,5 @@ def _run_analysis(symbol, image_file, provider, model, api_key):
             st.error(msg)
         else:
             st.error(f"分析过程中发生错误：{e}")
+        st.expander("错误详情").text(traceback.format_exc())
         st.expander("错误详情").text(traceback.format_exc())
