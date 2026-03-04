@@ -120,6 +120,7 @@ class FunnelConfig:
     lps_vol_ref_window: int = 60
 
     # Layer 4 - Effort vs Result
+    enable_evr_trigger: bool = False
     evr_lookback: int = 3
     evr_vol_ratio: float = 1.6
     evr_vol_window: int = 20
@@ -642,9 +643,10 @@ def layer4_triggers(
         score = _detect_lps(df, cfg)
         if score is not None:
             results["lps"].append((sym, score))
-        score = _detect_evr(df, cfg)
-        if score is not None:
-            results["evr"].append((sym, score))
+        if getattr(cfg, "enable_evr_trigger", False):
+            score = _detect_evr(df, cfg)
+            if score is not None:
+                results["evr"].append((sym, score))
     return results
 
 

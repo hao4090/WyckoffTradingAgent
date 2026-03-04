@@ -351,7 +351,7 @@ def main() -> int:
     parser.add_argument("--start", required=True, help="起始日期: YYYY-MM-DD 或 YYYYMMDD")
     parser.add_argument("--end", required=True, help="结束日期: YYYY-MM-DD 或 YYYYMMDD")
     parser.add_argument("--hold-days", type=int, default=5, help="持有交易日数 (default: 5)")
-    parser.add_argument("--top-n", type=int, default=6, help="每日最多纳入交易样本的股票数 (default: 6)")
+    parser.add_argument("--top-n", type=int, default=3, help="每日最多纳入交易样本的股票数 (default: 3)")
     parser.add_argument("--board", choices=["all", "main", "chinext"], default="all")
     parser.add_argument("--sample-size", type=int, default=300, help="股票池采样数量，0 表示不采样")
     parser.add_argument("--trading-days", type=int, default=500, help="单次筛选回看交易日数")
