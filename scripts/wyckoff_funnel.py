@@ -644,31 +644,14 @@ def _calc_market_breadth(
             except Exception:
                 s = s.sort_values("date")
 
-        close_col = s.get("close")
-        if close_col is None:
+        close = pd.to_numeric(s.get("close"), errors="coerce").dropna().tail(w + 1)
+        if len(close) < (w + 1):
             continue
 
-        if pd.api.types.is_numeric_dtype(close_col):
-            tail_close = close_col.tail(w + 1)
-            if tail_close.isna().any():
-                tail_close = close_col.tail(w + 8).dropna().tail(w + 1)
-                if len(tail_close) < (w + 1):
-                    tail_close = close_col.dropna().tail(w + 1)
-        else:
-            tail_close = pd.to_numeric(
-                close_col.tail(w + 8), errors="coerce"
-            ).dropna().tail(w + 1)
-            if len(tail_close) < (w + 1):
-                close_num = pd.to_numeric(close_col, errors="coerce")
-                tail_close = close_num.dropna().tail(w + 1)
-
-        if len(tail_close) < (w + 1):
-            continue
-
-        c_now = float(tail_close.iloc[-1])
-        c_prev = float(tail_close.iloc[-2])
-        ma_now = float(tail_close.iloc[-w:].mean())
-        ma_prev = float(tail_close.iloc[-w - 1 : -1].mean())
+        c_now = float(close.iloc[-1])
+        ma_now = float(close.iloc[1:].mean())
+        c_prev = float(close.iloc[-2])
+        ma_prev = float(close.iloc[:-1].mean())
 
         valid_now += 1
         if c_now >= ma_now:
