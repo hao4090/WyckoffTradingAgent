@@ -4,7 +4,7 @@
 # 商业授权请联系作者支付授权费用。
 
 """
-统一数据源：个股默认 akshare→baostock→efinance→tushare；大盘 tushare 直连
+统一数据源：个股日线 tushare 优先（qfq）→ akshare→baostock→efinance；大盘 tushare 直连
 
 输出格式与 akshare 兼容：日期, 开盘, 最高, 最低, 收盘, 成交量, 成交额, 涨跌幅, 换手率, 振幅
 """
@@ -517,8 +517,8 @@ def _fetch_stock_tushare(
     if pro is None:
         raise RuntimeError("TUSHARE_TOKEN 未配置")
     ts_code = _to_ts_code(symbol)
-    adj_map = {"": None, "qfq": "qfq", "hfq": "hfq"}
-    adj_val = adj_map.get(adjust, "qfq")
+    # 口径固定：优先使用前复权（qfq）。
+    adj_val = "qfq"
     # pro_bar 支持复权，pro.daily 仅未复权
     df = ts.pro_bar(ts_code=ts_code, adj=adj_val, start_date=start, end_date=end)
     if df is None or df.empty:
@@ -569,7 +569,7 @@ def fetch_stock_hist(
     adjust: Literal["", "qfq", "hfq"] = "qfq",
 ) -> pd.DataFrame:
     """
-    个股日线：akshare → baostock → efinance（各试一次），全失败再用 tushare。
+    个股日线：tushare 优先（固定 qfq），失败时回退 akshare/baostock/efinance。
     可用环境变量按需禁用数据源：
     - DATA_SOURCE_DISABLE_AKSHARE=1
     - DATA_SOURCE_DISABLE_BAOSTOCK=1
@@ -587,6 +587,24 @@ def fetch_stock_hist(
 
     failed_sources: list[str] = []
     failed_details: list[str] = []
+    from utils.tushare_client import get_pro
+
+    pro = get_pro()
+
+    # 1) tushare 优先（固定 qfq）
+    if pro is not None:
+        try:
+            return _tag_source(
+                _fetch_stock_tushare(symbol, start_s, end_s, "qfq"), "tushare"
+            )
+        except Exception as e:
+            _debug_source_fail("tushare", e)
+            failed_sources.append("tushare")
+            failed_details.append(f"tushare={_compact_error(e)}")
+    else:
+        failed_sources.append("tushare(unconfigured)")
+        failed_details.append("tushare=token_missing")
+
     disable_akshare = os.getenv("DATA_SOURCE_DISABLE_AKSHARE", "").strip().lower() in {
         "1",
         "true",
@@ -606,7 +624,7 @@ def fetch_stock_hist(
         "on",
     }
 
-    # 1. akshare
+    # 2. akshare
     if disable_akshare:
         failed_sources.append("akshare(disabled)")
         failed_details.append("akshare=disabled_by_env")
@@ -624,7 +642,7 @@ def fetch_stock_hist(
             failed_sources.append("akshare")
             failed_details.append(f"akshare={_compact_error(e)}")
 
-    # 2. baostock (仅前复权)
+    # 3. baostock (仅前复权)
     baostock_circuit_open, baostock_circuit_note = _baostock_circuit_state()
     if disable_baostock:
         failed_sources.append("baostock(disabled)")
@@ -655,7 +673,7 @@ def fetch_stock_hist(
             failed_sources.append("baostock")
             failed_details.append(f"baostock={_compact_error(e)}")
 
-    # 3. efinance (仅前复权)
+    # 4. efinance (仅前复权)
     if disable_efinance:
         failed_sources.append("efinance(disabled)")
         failed_details.append("efinance=disabled_by_env")
@@ -671,29 +689,6 @@ def fetch_stock_hist(
             failed_sources.append("efinance")
             failed_details.append(f"efinance={_compact_error(e)}")
 
-    # 4. tushare（可选，未配置则直接报错）
-    from utils.tushare_client import get_pro
-
-    if get_pro() is not None:
-        try:
-            return _tag_source(
-                _fetch_stock_tushare(symbol, start_s, end_s, adjust), "tushare"
-            )
-        except Exception as e:
-            _debug_source_fail("tushare", e)
-            failed_details.append(f"tushare={_compact_error(e)}")
-            detail_suffix = (
-                f" 失败详情：{'；'.join(failed_details[:4])}。"
-                if failed_details
-                else ""
-            )
-            hint = _network_hint_from_details(failed_details)
-            hint_suffix = f" 诊断提示：{hint}" if hint else ""
-            raise RuntimeError(
-                f"拉取失败（非程序错误）：免费数据源 {', '.join(failed_sources)} 均失败；"
-                f"tushare 也失败：{_compact_error(e)}。{detail_suffix}{hint_suffix}"
-            ) from e
-
     detail_suffix = (
         f" 失败详情：{'；'.join(failed_details[:4])}。"
         if failed_details
@@ -702,8 +697,8 @@ def fetch_stock_hist(
     hint = _network_hint_from_details(failed_details)
     hint_suffix = f" 诊断提示：{hint}" if hint else ""
     raise RuntimeError(
-        f"拉取失败（非程序错误）：免费数据源 {', '.join(failed_sources)} 均无可用数据。"
-        f"{detail_suffix}{hint_suffix} 可配置 Tushare Token 作为备用。"
+        f"拉取失败（非程序错误）：已按顺序尝试 tushare→akshare→baostock→efinance，"
+        f"均无可用数据。{detail_suffix}{hint_suffix}"
     )
 
 

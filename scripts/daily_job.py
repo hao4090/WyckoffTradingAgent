@@ -102,9 +102,8 @@ def main() -> int:
         _log("--dry-run: 配置校验通过，退出", logs_path)
         return 0
 
-    # 定时任务日线口径：禁用 akshare/efinance，优先 baostock，失败再 tushare。
-    os.environ["DATA_SOURCE_DISABLE_AKSHARE"] = "1"
-    os.environ["DATA_SOURCE_DISABLE_EFINANCE"] = "1"
+    # 数据源口径在 integrations/data_source.py 中固定为：
+    # tushare 优先（前复权 qfq），失败再回退到其它可用源。
 
     from scripts.wyckoff_funnel import run as run_step2
     from scripts.step3_batch_report import run as run_step3

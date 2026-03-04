@@ -37,7 +37,7 @@ from integrations.fetch_a_share_csv import (
 from core.wyckoff_engine import (
     FunnelConfig,
     layer1_filter,
-    layer2_strength,
+    layer2_strength_detailed,
     layer3_sector_resonance,
     layer4_triggers,
     normalize_hist_from_fetch,
@@ -943,6 +943,7 @@ def _rank_l3_watchlist(
     triggers: dict[str, list[tuple[str, float]]],
     top_sectors: list[str],
     top_k: int = 15,
+    l2_channel_map: dict[str, str] | None = None,
 ) -> tuple[list[str], list[dict], dict[str, float], list[dict]]:
     """
     对 L3 股票做统一优先级排序，并给出 TopK 自选建议。
@@ -966,9 +967,11 @@ def _rank_l3_watchlist(
                 trigger_reason_map[code].append(label)
 
     rows: list[dict] = []
+    channel_map = l2_channel_map or {}
     for code in l3_symbols:
         df = df_map.get(code)
         industry = str(sector_map.get(code, "") or "未知行业")
+        l2_channel = str(channel_map.get(code, "") or "未标注通道")
         ret20 = None
         ret5 = None
         min_vol_ratio_5d = None
@@ -991,6 +994,7 @@ def _rank_l3_watchlist(
                 "min_vol_ratio_5d": min_vol_ratio_5d,
                 "trigger_score": float(trigger_score_map.get(code, 0.0)),
                 "reasons": "、".join(trigger_reason_map.get(code, [])),
+                "l2_channel": l2_channel,
             }
         )
 
@@ -1046,11 +1050,13 @@ def _rank_l3_watchlist(
     for _, r in rank_df.iterrows():
         trigger_reason = str(r.get("reasons", "")).strip()
         industry = str(r.get("industry", "")).strip() or "未知行业"
+        l2_channel = str(r.get("l2_channel", "")).strip() or "未标注通道"
         hot_bonus = float(r.get("hot_bonus", 0.0))
         ret20 = r.get("ret20")
         ret5 = r.get("ret5")
         dry_ratio = r.get("min_vol_ratio_5d")
         parts: list[str] = []
+        parts.append(f"L2:{l2_channel}")
         if hot_bonus > 0:
             parts.append("Top行业共振")
         else:
@@ -1082,6 +1088,7 @@ def _rank_l3_watchlist(
                     else None
                 ),
                 "trigger_labels": trigger_reason,
+                "l2_channel": l2_channel,
             }
         )
 
@@ -1099,6 +1106,7 @@ def _rank_l3_watchlist(
                 "industry": str(r.get("industry", "")),
                 "reason": reason,
                 "score": float(r["watch_score"]),
+                "l2_channel": str(r.get("l2_channel", "")).strip() or "未标注通道",
             }
         )
     return (ranked_symbols, top_rows, score_map, ranked_rows)
@@ -1343,7 +1351,11 @@ def run_funnel_job() -> tuple[dict[str, list[tuple[str, float]]], dict]:
     l1_passed = layer1_filter(l1_input, name_map, market_cap_map, all_df_map, cfg)
 
     # Layer 2
-    l2_passed = layer2_strength(l1_passed, all_df_map, bench_df, cfg)
+    l2_passed, l2_channel_map = layer2_strength_detailed(l1_passed, all_df_map, bench_df, cfg)
+    # 通道标签现在是多标签用 + 拼接，因此用 in 判断包含关系
+    l2_momentum = sum(1 for v in l2_channel_map.values() if "主升通道" in v)
+    l2_ambush   = sum(1 for v in l2_channel_map.values() if "潜伏通道" in v)
+    l2_accum    = sum(1 for v in l2_channel_map.values() if "吸筹通道" in v)
 
     # Layer 3 (Sector Resonance)
     l3_passed, top_sectors = layer3_sector_resonance(
@@ -1366,6 +1378,7 @@ def run_funnel_job() -> tuple[dict[str, list[tuple[str, float]]], dict]:
         triggers=triggers,
         top_sectors=top_sectors,
         top_k=15,
+        l2_channel_map=l2_channel_map,
     )
     metrics = {
         "total_symbols": len(all_symbols),
@@ -1381,6 +1394,10 @@ def run_funnel_job() -> tuple[dict[str, list[tuple[str, float]]], dict]:
         "snapshot_dir": snapshot_dir,
         "layer1": len(l1_passed),
         "layer2": len(l2_passed),
+        "layer2_momentum": l2_momentum,
+        "layer2_ambush": l2_ambush,
+        "layer2_accum": l2_accum,
+        "layer2_channel_map": l2_channel_map,
         "layer3": len(l3_passed),
         "top_sectors": top_sectors,
         "layer3_symbols": ranked_l3_symbols or l3_passed,
@@ -1393,6 +1410,7 @@ def run_funnel_job() -> tuple[dict[str, list[tuple[str, float]]], dict]:
     }
     print(
         f"[funnel] L1={metrics['layer1']}, L2={metrics['layer2']}, "
+        f"(主升={l2_momentum}, 潜伏={l2_ambush}, 吸筹={l2_accum}), "
         f"L3={metrics['layer3']}, 命中={total_hits}, "
         f"Top行业={top_sectors}, 各触发={metrics['by_trigger']}"
     )
@@ -1425,15 +1443,33 @@ def run(webhook_url: str) -> tuple[bool, list[dict], dict]:
         key=lambda c: -code_to_best_score.get(c, 0),
     )
     unique_hit_count = len(sorted_codes)
-    selected_for_ai = sorted_codes
+    l3_ranked_symbols = [
+        str(c).strip()
+        for c in (metrics.get("layer3_symbols", []) or [])
+        if str(c).strip()
+    ]
+    selected_for_ai: list[str] = []
+    seen_ai: set[str] = set()
+    # AI 输入改为：L4命中 + L3全量（去重，保留先后优先级）
+    for code in sorted_codes + l3_ranked_symbols:
+        c = str(code).strip()
+        if not c or c in seen_ai:
+            continue
+        seen_ai.add(c)
+        selected_for_ai.append(c)
+    l3_only_count = len(selected_for_ai) - unique_hit_count
     l3_score_map = metrics.get("layer3_score_map", {}) or {}
     l3_ranked_rows = metrics.get("layer3_ranked_rows", []) or []
     watchlist_top15 = metrics.get("watchlist_top15", []) or []
     by_trigger = metrics.get("by_trigger", {}) or {}
+    l2_channel_map = metrics.get("layer2_channel_map", {}) or {}
+    l2_momentum = int(metrics.get("layer2_momentum", 0) or 0)
+    l2_ambush   = int(metrics.get("layer2_ambush", 0) or 0)
+    l2_accum    = int(metrics.get("layer2_accum", 0) or 0)
 
     print(
         f"[funnel] 候选分层: 命中事件={metrics['total_hits']}, 命中股票={unique_hit_count}, "
-        f"AI输入=hits全量{len(selected_for_ai)}, "
+        f"AI输入=命中{unique_hit_count}+L3补充{l3_only_count}=>{len(selected_for_ai)}, "
         f"AI分析={len(selected_for_ai)}, Top15自选={len(watchlist_top15)}"
     )
 
@@ -1481,6 +1517,7 @@ def run(webhook_url: str) -> tuple[bool, list[dict], dict]:
         f"= {metrics['total_symbols']} (共{metrics['pool_batches']}批)"
         ),
         f"**漏斗概览**: {metrics['total_symbols']}只 → L1:{metrics['layer1']} → L2:{metrics['layer2']} → L3:{metrics['layer3']} → 命中:{metrics['total_hits']}",
+        f"**L2通道分布**: 主升{l2_momentum} | 潜伏{l2_ambush} | 吸筹{l2_accum}",
         (
         f"**数据质量**: 成功拉取 {metrics['fetch_ok']} 只"
         + (f"，失败 {metrics['fetch_fail']} 只" if metrics['fetch_fail'] else "，无失败")
@@ -1488,15 +1525,21 @@ def run(webhook_url: str) -> tuple[bool, list[dict], dict]:
         + (f"，实时快照补偿 {metrics.get('fetch_spot_patched', 0)} 只" if metrics.get('fetch_spot_patched') else "")
         ),
         f"**大盘水温**: {bench_line}",
-        f"**候选分层**: L3股票{metrics['layer3']} -> Top15自选更新{len(watchlist_top15)} -> AI输入命中全量{len(selected_for_ai)}",
+        (
+            f"**候选分层**: L3股票{metrics['layer3']} -> Top15自选更新{len(watchlist_top15)} "
+            f"-> AI输入(L4命中{unique_hit_count}+L3补充{max(l3_only_count, 0)})={len(selected_for_ai)}"
+        ),
         f"**Top 行业**: {', '.join(metrics['top_sectors']) if metrics['top_sectors'] else '无'}",
         "",
-        "**命中列表（AI分析输入，全量hits）代码 名称 | 来源标签 | 分值**",
+        "**AI分析输入列表（L4命中 + L3全量）代码 名称 | 来源标签 | 分值**",
         "",
     ]
     for code in selected_for_ai:
         name = name_map.get(code, code)
-        reasons = "、".join(code_to_reasons.get(code, [])) or "L3共振通过"
+        trigger_reason = "、".join(code_to_reasons.get(code, []))
+        channel = str(l2_channel_map.get(code, "")).strip()
+        base_reason = trigger_reason or "L3共振通过"
+        reasons = f"{channel} | {base_reason}" if channel else base_reason
         score = float(l3_score_map.get(code, 0.0))
         lines.append(f"• {code} {name} | {reasons} | score={score:.2f}")
 
@@ -1510,7 +1553,7 @@ def run(webhook_url: str) -> tuple[bool, list[dict], dict]:
                 f"LPS={int(by_trigger.get('lps', 0))}, "
                 f"EVR={int(by_trigger.get('evr', 0))}",
                 "• 当前候选仅停留在 L3 共振阶段，尚未出现日线级别的 Spring/LPS/EVR 扳机信号。",
-                "• AI 输入集合按 L4 命中构建，因此本轮为 0。",
+                "• AI 输入集合按“L4命中 + L3全量”构建；本轮 L3 为空，因此 AI 输入为 0。",
             ]
         )
 
@@ -1529,7 +1572,10 @@ def run(webhook_url: str) -> tuple[bool, list[dict], dict]:
             name = name_map.get(code, code)
             industry = str(row.get("industry", "")).strip() or "未知行业"
             reason = str(row.get("reason", "")).strip() or "L3共振通过"
+            channel = str(row.get("l2_channel", "")).strip()
             score = float(row.get("score", 0.0))
+            if channel and "L2:" not in reason:
+                reason = f"L2:{channel}；{reason}"
             lines.append(
                 f"• {code} {name} | {industry} | {reason} | score={score:.2f}"
             )
@@ -1551,7 +1597,10 @@ def run(webhook_url: str) -> tuple[bool, list[dict], dict]:
             name = name_map.get(code, code)
             industry = str(row.get("industry", "")).strip() or "未知行业"
             reason = str(row.get("reason", "")).strip() or "L3共振通过"
+            channel = str(row.get("l2_channel", "")).strip()
             score = float(row.get("score", 0.0))
+            if channel and "L2:" not in reason:
+                reason = f"L2:{channel}；{reason}"
             lines.append(
                 f"• {code} {name} | {industry} | {reason} | score={score:.2f}"
             )
@@ -1564,7 +1613,10 @@ def run(webhook_url: str) -> tuple[bool, list[dict], dict]:
         {
             "code": c,
             "name": name_map.get(c, c),
-            "tag": "、".join(code_to_reasons.get(c, [])) or "L3共振通过",
+            "tag": (
+                f"{str(l2_channel_map.get(c, '')).strip()} | "
+                f"{'、'.join(code_to_reasons.get(c, [])) or 'L3共振通过'}"
+            ).strip(" |"),
         }
         for c in selected_for_ai
     ]

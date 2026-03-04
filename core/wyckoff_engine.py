@@ -99,6 +99,28 @@ class FunnelConfig:
     rps_fast_min: float = 75.0
     rps_slow_min: float = 70.0
     require_bench_latest_alignment: bool = False
+    # Layer 2 潜伏通道（长强短弱）
+    enable_ambush_channel: bool = True
+    ambush_rps_fast_max: float = 45.0
+    ambush_rps_slow_min: float = 70.0
+    ambush_rs_long_min: float = -2.0
+    ambush_rs_short_min: float = -8.0
+    ambush_bias_200_abs_max: float = 0.08
+    ambush_ret20_max: float = -3.0
+
+    # Layer 2 低位吸筹通道（Wyckoff Accumulation Channel）
+    # 不依赖 RPS 强势排名，专门捕捉"已止跌横盘蓄势"的 Phase A/B/C 股票。
+    # 触发条件：低位区间 + 横盘振幅小 + 量能萎缩 + 均线胶着（尚未多头排列）。
+    # 这类股票应与 L4 Spring/LPS 配合使用，单独出现时仅进观察池。
+    enable_accumulation_channel: bool = True
+    accum_lookback_days: int = 250          # 年内低点计算窗口（交易日）
+    accum_price_from_low_max: float = 0.35  # 现价不超过年内低点 +35%
+    accum_range_window: int = 60            # 横盘振幅计算窗口（交易日）
+    accum_range_max_pct: float = 30.0       # 窗口内 (high_max-low_min)/low_min 不超过 30%
+    accum_vol_dry_window: int = 20          # 量能萎缩统计近 N 日
+    accum_vol_dry_ref_window: int = 120     # 量能萎缩对比参考窗口
+    accum_vol_dry_ratio: float = 0.65       # 近 N 日均量 / 参考均量 < 此值（量能萎缩）
+    accum_ma_gap_max: float = 0.06          # |MA50 - MA200| / MA200 < 此值（均线胶着）
 
     # Layer 3
     # 行业共振过滤：按“行业样本数分位阈值 + 最小样本数”动态过滤，避免固定 TopN 误杀。
@@ -190,16 +212,20 @@ def layer1_filter(
 # Layer 2: 强弱甄别
 
 
-def layer2_strength(
+def layer2_strength_detailed(
     symbols: list[str],
     df_map: dict[str, pd.DataFrame],
     bench_df: pd.DataFrame | None,
     cfg: FunnelConfig,
-) -> list[str]:
+) -> tuple[list[str], dict[str, str]]:
     """
-    MA50 > MA200 多头排列，OR 大盘连跌时仍守住 MA20。
-    同时引入相对强度 RS 硬过滤：
-    RS_N = 个股近N日累计涨跌幅 - 大盘近N日累计涨跌幅
+    Layer2 双通道：
+    1) 主升通道：MA50>MA200（或大盘连跌时守住MA20）+ RS/RPS 强势过滤
+    2) 潜伏通道：长强短弱（RPS120高、RPS50低）且回到年线附近
+
+    返回：
+    - passed: 通过 Layer2 的股票
+    - channel_map: code -> 主升通道/潜伏通道/双通道
     """
 
     def _cum_return_pct_from_series(pct_series: pd.Series) -> float | None:
@@ -286,6 +312,7 @@ def layer2_strength(
             rps_filter_active = True
 
     passed: list[str] = []
+    channel_map: dict[str, str] = {}
     for sym in symbols:
         df = df_map.get(sym)
         if df is None or len(df) < cfg.ma_long:
@@ -302,6 +329,7 @@ def layer2_strength(
         ma_long = close.rolling(cfg.ma_long).mean()
         last_ma_short = ma_short.iloc[-1]
         last_ma_long = ma_long.iloc[-1]
+        last_close = close.iloc[-1]
 
         bullish_alignment = (
             pd.notna(last_ma_short)
@@ -313,31 +341,147 @@ def layer2_strength(
         if bench_dropping:
             ma_hold = close.rolling(cfg.ma_hold).mean()
             last_ma_hold = ma_hold.iloc[-1]
-            last_close = close.iloc[-1]
             if pd.notna(last_ma_hold) and last_close >= last_ma_hold:
                 holding_ma20 = True
 
-        rs_ok = True
+        momentum_rs_ok = True
+        ambush_rs_ok = True
+        rs_long = None
+        rs_short = None
         if cfg.enable_rs_filter and bench_sorted is not None and not bench_sorted.empty:
             rs_long, rs_short = _calc_rs(df_sorted, bench_sorted)
             if rs_long is None or rs_short is None:
-                rs_ok = False
+                momentum_rs_ok = False
+                ambush_rs_ok = False
             else:
-                rs_ok = (rs_long >= cfg.rs_min_long) and (rs_short >= cfg.rs_min_short)
+                momentum_rs_ok = (
+                    rs_long >= cfg.rs_min_long and rs_short >= cfg.rs_min_short
+                )
+                ambush_rs_ok = (
+                    rs_long >= cfg.ambush_rs_long_min
+                    and rs_short >= cfg.ambush_rs_short_min
+                )
 
-        rps_ok = True
+        rps_fast = rps_fast_map.get(sym)
+        rps_slow = rps_slow_map.get(sym)
+        momentum_rps_ok = True
+        ambush_rps_ok = True
         if cfg.enable_rps_filter and rps_filter_active:
-            rps_fast = rps_fast_map.get(sym)
-            rps_slow = rps_slow_map.get(sym)
-            rps_ok = (
+            momentum_rps_ok = (
                 rps_fast is not None
                 and rps_slow is not None
                 and rps_fast >= cfg.rps_fast_min
                 and rps_slow >= cfg.rps_slow_min
             )
+            ambush_rps_ok = (
+                rps_fast is not None
+                and rps_slow is not None
+                and rps_fast <= cfg.ambush_rps_fast_max
+                and rps_slow >= cfg.ambush_rps_slow_min
+            )
 
-        if (bullish_alignment or holding_ma20) and rs_ok and rps_ok:
+        momentum_ok = (bullish_alignment or holding_ma20) and momentum_rs_ok and momentum_rps_ok
+
+        ambush_shape_ok = False
+        if (
+            cfg.enable_ambush_channel
+            and pd.notna(last_ma_long)
+            and float(last_ma_long) > 0
+            and pd.notna(last_close)
+        ):
+            bias_200 = (float(last_close) - float(last_ma_long)) / float(last_ma_long)
+            ret20 = _close_return_pct(close, 20)
+            ambush_shape_ok = (
+                abs(bias_200) <= cfg.ambush_bias_200_abs_max
+                and ret20 is not None
+                and ret20 <= cfg.ambush_ret20_max
+            )
+        ambush_ok = (
+            cfg.enable_ambush_channel
+            and ambush_shape_ok
+            and ambush_rs_ok
+            and ambush_rps_ok
+        )
+
+        # 低位吸筹通道（Wyckoff Accumulation Channel）
+        # 四个条件逐一检测，全通才标记。不依赖 RPS 排名。
+        accum_ok = False
+        if cfg.enable_accumulation_channel and len(df_sorted) >= max(
+            cfg.accum_lookback_days, cfg.accum_vol_dry_ref_window
+        ):
+            _c = close  # alias，避免遮蔽外层
+
+            # 条件 1：低位区——现价在年内低点 +X% 以内
+            lookback_w = max(int(cfg.accum_lookback_days), 2)
+            period_low = float(_c.tail(lookback_w).min())
+            accum_low_ok = (
+                period_low > 0
+                and float(last_close) <= period_low * (1.0 + cfg.accum_price_from_low_max)
+            )
+
+            # 条件 2：横盘振幅——近 N 日 high/low 振幅不超过阈值
+            accum_range_ok = False
+            if accum_low_ok:
+                rw = max(int(cfg.accum_range_window), 5)
+                zone = df_sorted.tail(rw)
+                _high = pd.to_numeric(zone.get("high"), errors="coerce")
+                _low = pd.to_numeric(zone.get("low"), errors="coerce")
+                if not _high.dropna().empty and not _low.dropna().empty:
+                    h_max = float(_high.max())
+                    l_min = float(_low.min())
+                    if l_min > 0:
+                        range_pct = (h_max - l_min) / l_min * 100.0
+                        accum_range_ok = range_pct <= cfg.accum_range_max_pct
+
+            # 条件 3：量能萎缩——近 N 日均量 / 参考均量 < 阈值
+            accum_vol_ok = False
+            if accum_range_ok:
+                vol = pd.to_numeric(df_sorted.get("volume"), errors="coerce")
+                dw = max(int(cfg.accum_vol_dry_window), 2)
+                rfw = max(int(cfg.accum_vol_dry_ref_window), dw + 1)
+                recent_vol_mean = float(vol.tail(dw).mean()) if len(vol) >= dw else None
+                ref_vol_mean = float(vol.tail(rfw).iloc[:-dw].mean()) if len(vol) >= rfw else None
+                if (
+                    recent_vol_mean is not None
+                    and ref_vol_mean is not None
+                    and ref_vol_mean > 0
+                ):
+                    accum_vol_ok = (recent_vol_mean / ref_vol_mean) < cfg.accum_vol_dry_ratio
+
+            # 条件 4：均线胶着——MA50 和 MA200 差距不超过阈值（尚未多头排列）
+            accum_ma_ok = False
+            if accum_vol_ok:
+                if (
+                    pd.notna(last_ma_short)
+                    and pd.notna(last_ma_long)
+                    and float(last_ma_long) > 0
+                ):
+                    ma_gap = abs(float(last_ma_short) - float(last_ma_long)) / float(last_ma_long)
+                    accum_ma_ok = ma_gap <= cfg.accum_ma_gap_max
+
+            accum_ok = accum_low_ok and accum_range_ok and accum_vol_ok and accum_ma_ok
+
+        if momentum_ok or ambush_ok or accum_ok:
             passed.append(sym)
+            labels: list[str] = []
+            if momentum_ok:
+                labels.append("主升通道")
+            if ambush_ok:
+                labels.append("潜伏通道")
+            if accum_ok:
+                labels.append("吸筹通道")
+            channel_map[sym] = "+".join(labels)
+    return passed, channel_map
+
+
+
+def layer2_strength(
+    symbols: list[str],
+    df_map: dict[str, pd.DataFrame],
+    bench_df: pd.DataFrame | None,
+    cfg: FunnelConfig,
+) -> list[str]:
+    passed, _ = layer2_strength_detailed(symbols, df_map, bench_df, cfg)
     return passed
 
 
