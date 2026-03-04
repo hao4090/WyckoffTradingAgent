@@ -87,7 +87,13 @@ def _load_snapshot_hist_map(
     full_path = snapshot_dir / "hist_full.csv.gz"
     if not full_path.exists():
         raise FileNotFoundError(f"snapshot missing file: {full_path}")
-    df = pd.read_csv(full_path, compression="gzip", low_memory=False)
+    # Keep stock codes as strings; otherwise pandas may drop leading zeros (000001 -> 1).
+    df = pd.read_csv(
+        full_path,
+        compression="gzip",
+        low_memory=False,
+        dtype={"symbol": str},
+    )
     if df.empty:
         return {}, 0
     if "symbol" not in df.columns:
@@ -100,7 +106,7 @@ def _load_snapshot_hist_map(
 
     keep_cols = [c for c in ["symbol", "date", "open", "high", "low", "close", "volume", "amount", "pct_chg"] if c in df.columns]
     df = df[keep_cols].copy()
-    df["symbol"] = df["symbol"].astype(str)
+    df["symbol"] = df["symbol"].astype(str).str.strip().str.zfill(6)
     df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.date
     df = df.dropna(subset=["symbol", "date"]).reset_index(drop=True)
     for c in ["open", "high", "low", "close", "volume", "amount", "pct_chg"]:
@@ -222,6 +228,59 @@ def _close_on_or_after(df: pd.DataFrame, d: date) -> tuple[float | None, date | 
     return float(v.iloc[0]), hit_date
 
 
+def _close_on_or_before(
+    df: pd.DataFrame,
+    d: date,
+    lower_exclusive: date | None = None,
+) -> tuple[float | None, date | None]:
+    row = df[df["date"] <= d]
+    if lower_exclusive is not None:
+        row = row[row["date"] > lower_exclusive]
+    if row.empty:
+        return None, None
+    row = row.tail(1)
+    v = pd.to_numeric(row["close"], errors="coerce").dropna()
+    if v.empty:
+        return None, None
+    hit_date = row.iloc[0]["date"]
+    return float(v.iloc[0]), hit_date
+
+
+def _build_daily_ohlc_lookup(
+    df: pd.DataFrame,
+) -> dict[date, tuple[float, float, float]]:
+    out: dict[date, tuple[float, float, float]] = {}
+    if df is None or df.empty:
+        return out
+
+    cols = [c for c in ["date", "high", "low", "close"] if c in df.columns]
+    if "date" not in cols or "close" not in cols:
+        return out
+
+    work = df[cols].copy()
+    work["date"] = pd.to_datetime(work["date"], errors="coerce").dt.date
+    for c in ["high", "low", "close"]:
+        if c in work.columns:
+            work[c] = pd.to_numeric(work[c], errors="coerce")
+    work = work.dropna(subset=["date", "close"])
+
+    for row in work.itertuples(index=False):
+        d = row.date
+        close_v = float(row.close)
+        high_v = (
+            float(row.high)
+            if hasattr(row, "high") and pd.notna(row.high)
+            else close_v
+        )
+        low_v = (
+            float(row.low)
+            if hasattr(row, "low") and pd.notna(row.low)
+            else close_v
+        )
+        out[d] = (high_v, low_v, close_v)
+    return out
+
+
 def run_backtest(
     start_dt: date,
     end_dt: date,
@@ -232,11 +291,23 @@ def run_backtest(
     trading_days: int,
     max_workers: int,
     snapshot_dir: Path | None = None,
+    exit_mode: str = "close_only",
+    stop_loss_pct: float = -5.0,
+    take_profit_pct: float = 10.0,
+    sltp_priority: str = "stop_first",
 ) -> tuple[pd.DataFrame, dict]:
     if end_dt <= start_dt:
         raise ValueError("end 必须晚于 start")
     if hold_days < 1:
         raise ValueError("hold_days 必须 >= 1")
+    if exit_mode not in {"close_only", "sltp"}:
+        raise ValueError("exit_mode 必须是 close_only 或 sltp")
+    if sltp_priority not in {"stop_first", "take_first"}:
+        raise ValueError("sltp_priority 必须是 stop_first 或 take_first")
+    if stop_loss_pct > 0:
+        raise ValueError("stop_loss_pct 必须 <= 0，0 表示不设止损")
+    if take_profit_pct < 0:
+        raise ValueError("take_profit_pct 必须 >= 0，0 表示不设止盈")
 
     symbols, name_map = _build_universe(board=board, sample_size=sample_size)
     if not symbols:
@@ -307,6 +378,7 @@ def run_backtest(
     records: list[TradeRecord] = []
     signal_days = 0
     eval_days = 0
+    ohlc_lookup_cache: dict[str, dict[date, tuple[float, float, float]]] = {}
 
     max_idx = len(trade_dates) - hold_days
     for idx in range(max_idx):
@@ -344,7 +416,26 @@ def run_backtest(
         if not score_map:
             continue
 
-        ranked_codes = sorted(score_map.keys(), key=lambda c: -score_map[c][0])[:top_n]
+        tie_breaker_map = {}
+        for c in score_map.keys():
+            cdf = day_df_map.get(c)
+            if cdf is not None and len(cdf) >= 21:
+                try:
+                    tb = float(cdf["close"].iloc[-1]) / float(cdf["close"].iloc[-21])
+                except Exception:
+                    tb = 0.0
+            else:
+                tb = 0.0
+            tie_breaker_map[c] = tb
+
+        ranked_codes = sorted(
+            score_map.keys(),
+            key=lambda c: (
+                -score_map[c][0],
+                -tie_breaker_map.get(c, 0.0),
+                c,
+            ),
+        )[:top_n]
         signal_days += 1
         for code in ranked_codes:
             full_df = all_df_map.get(code)
@@ -353,7 +444,67 @@ def run_backtest(
             entry_close = _close_on_date(full_df, signal_date)
             if entry_close is None or entry_close <= 0:
                 continue
-            exit_close, exit_date = _close_on_or_after(full_df, exit_anchor_date)
+
+            if exit_mode == "close_only":
+                # 兼容旧口径：持有 N 个市场交易日后按 anchor 日（或其后首个可得日）收盘离场。
+                exit_close, exit_date = _close_on_or_after(full_df, exit_anchor_date)
+            else:
+                # sltp 口径：仅在 (signal_date, exit_anchor_date] 的市场交易日窗口内检查触发。
+                exit_close = None
+                exit_date = None
+                market_window = trade_dates[idx + 1 : idx + hold_days + 1]
+                day_ohlc = ohlc_lookup_cache.get(code)
+                if day_ohlc is None:
+                    day_ohlc = _build_daily_ohlc_lookup(full_df)
+                    ohlc_lookup_cache[code] = day_ohlc
+
+                sl_price = (
+                    entry_close * (1.0 + stop_loss_pct / 100.0)
+                    if stop_loss_pct < 0
+                    else None
+                )
+                tp_price = (
+                    entry_close * (1.0 + take_profit_pct / 100.0)
+                    if take_profit_pct > 0
+                    else None
+                )
+
+                for mkt_day in market_window:
+                    candle = day_ohlc.get(mkt_day)
+                    if candle is None:
+                        continue
+                    high, low, _ = candle
+
+                    if sltp_priority == "stop_first":
+                        checks = [("sl", sl_price), ("tp", tp_price)]
+                    else:
+                        checks = [("tp", tp_price), ("sl", sl_price)]
+
+                    hit = False
+                    for kind, px in checks:
+                        if px is None:
+                            continue
+                        if kind == "sl" and low <= px:
+                            exit_close = px
+                            exit_date = mkt_day
+                            hit = True
+                            break
+                        if kind == "tp" and high >= px:
+                            exit_close = px
+                            exit_date = mkt_day
+                            hit = True
+                            break
+                    if hit:
+                        break
+
+                if exit_close is None:
+                    # 未触发则按窗口最后一天(含)及之前最近可得收盘离场，不延长持仓天数。
+                    exit_close, exit_date = _close_on_or_before(
+                        full_df,
+                        exit_anchor_date,
+                        lower_exclusive=signal_date,
+                    )
+
             if exit_close is None or exit_date is None:
                 continue
             ret_pct = (exit_close - entry_close) / entry_close * 100.0
@@ -391,6 +542,10 @@ def run_backtest(
         "eval_days": eval_days,
         "signal_days": signal_days,
         "trades": len(trades_df),
+        "exit_mode": exit_mode,
+        "stop_loss_pct": stop_loss_pct,
+        "take_profit_pct": take_profit_pct,
+        "sltp_priority": sltp_priority,
     }
     if not trades_df.empty:
         ret = pd.to_numeric(trades_df["ret_pct"], errors="coerce").dropna()
@@ -435,6 +590,10 @@ def _build_summary_md(summary: dict) -> str:
             f"- 股票池: {summary.get('board')} (sample={summary.get('sample_size')})",
             f"- 评估交易日: {summary.get('eval_days')}",
             f"- 触发交易日: {summary.get('signal_days')}",
+            f"- 离场模式: {summary.get('exit_mode')}",
+            f"- 止损线: {_fmt_metric(summary.get('stop_loss_pct'), 1)}%",
+            f"- 止盈线: {_fmt_metric(summary.get('take_profit_pct'), 1)}%",
+            f"- 日内触发优先级: {summary.get('sltp_priority')}",
             f"- 成交样本: {summary.get('trades')}",
             "",
             "## 收益统计",
@@ -446,7 +605,7 @@ def _build_summary_md(summary: dict) -> str:
             "",
             "## 说明",
             "- 该回测仅使用日线数据（qfq），不含盘口、滑点、涨跌停成交约束。",
-            "- 市值/行业映射采用当前快照，历史回放属于近似估计（用于参数方向验证）。",
+            "- ⚠️ **注意 / Look-ahead Bias**: 市值和行业映射采用的是当前快照（未使用历史真实流通市值及退市剔除数据）。因此存在幸存者偏差与市值穿越，此回测数据仅作为参数方向与形态有效性的技术验证，不能完全代表真实历史表现。",
         ]
     )
 
@@ -461,6 +620,20 @@ def main() -> int:
     parser.add_argument("--sample-size", type=int, default=300, help="股票池采样数量，0 表示不采样")
     parser.add_argument("--trading-days", type=int, default=500, help="单次筛选回看交易日数")
     parser.add_argument("--workers", type=int, default=8, help="历史拉取并发数")
+    parser.add_argument(
+        "--exit-mode",
+        choices=["close_only", "sltp"],
+        default="close_only",
+        help="离场模式：close_only=仅按持有天数收盘离场（默认，兼容旧口径）；sltp=启用日内止盈止损",
+    )
+    parser.add_argument("--stop-loss", type=float, default=-5.0, help="止损线(%%), 如 -5.0 表示跌破 5%% 止损. 0 表示不设止损")
+    parser.add_argument("--take-profit", type=float, default=10.0, help="止盈线(%%), 如 10.0 表示涨超 10%% 止盈. 0 表示不设止盈")
+    parser.add_argument(
+        "--sltp-priority",
+        choices=["stop_first", "take_first"],
+        default="stop_first",
+        help="同一交易日同时触及止损/止盈时的判定顺序",
+    )
     parser.add_argument(
         "--snapshot-dir",
         default="",
@@ -485,6 +658,10 @@ def main() -> int:
         trading_days=args.trading_days,
         max_workers=args.workers,
         snapshot_dir=Path(args.snapshot_dir).resolve() if str(args.snapshot_dir).strip() else None,
+        exit_mode=args.exit_mode,
+        stop_loss_pct=args.stop_loss,
+        take_profit_pct=args.take_profit,
+        sltp_priority=args.sltp_priority,
     )
 
     out_dir = Path(args.output_dir).resolve()
