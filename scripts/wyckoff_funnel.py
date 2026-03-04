@@ -63,7 +63,7 @@ SOCKET_TIMEOUT = int(os.getenv("FUNNEL_SOCKET_TIMEOUT", "20"))
 FETCH_TIMEOUT = int(os.getenv("FUNNEL_FETCH_TIMEOUT", "45"))
 BATCH_TIMEOUT = int(os.getenv("FUNNEL_BATCH_TIMEOUT", "420"))
 PANIC_SNAPSHOT_TIMEOUT = max(
-    float(os.getenv("FUNNEL_PANIC_SNAPSHOT_TIMEOUT", "20.0")),
+    float(os.getenv("FUNNEL_PANIC_SNAPSHOT_TIMEOUT", "25.0")),
     1.0,
 )
 BATCH_SIZE = int(os.getenv("FUNNEL_BATCH_SIZE", "250"))
@@ -636,25 +636,47 @@ def _calc_market_breadth(
     for df in df_map.values():
         if df is None or df.empty:
             continue
-        s = df.sort_values("date")
-        close = pd.to_numeric(s.get("close"), errors="coerce")
-        if close.dropna().shape[0] < (w + 1):
+        s = df
+        if "date" in s.columns:
+            try:
+                if not s["date"].is_monotonic_increasing:
+                    s = s.sort_values("date")
+            except Exception:
+                s = s.sort_values("date")
+
+        close_col = s.get("close")
+        if close_col is None:
             continue
-        ma = close.rolling(w).mean()
 
-        c_now = close.iloc[-1]
-        ma_now = ma.iloc[-1]
-        if pd.notna(c_now) and pd.notna(ma_now):
-            valid_now += 1
-            if float(c_now) >= float(ma_now):
-                above_now += 1
+        if pd.api.types.is_numeric_dtype(close_col):
+            tail_close = close_col.tail(w + 1)
+            if tail_close.isna().any():
+                tail_close = close_col.tail(w + 8).dropna().tail(w + 1)
+                if len(tail_close) < (w + 1):
+                    tail_close = close_col.dropna().tail(w + 1)
+        else:
+            tail_close = pd.to_numeric(
+                close_col.tail(w + 8), errors="coerce"
+            ).dropna().tail(w + 1)
+            if len(tail_close) < (w + 1):
+                close_num = pd.to_numeric(close_col, errors="coerce")
+                tail_close = close_num.dropna().tail(w + 1)
 
-        c_prev = close.iloc[-2]
-        ma_prev = ma.iloc[-2]
-        if pd.notna(c_prev) and pd.notna(ma_prev):
-            valid_prev += 1
-            if float(c_prev) >= float(ma_prev):
-                above_prev += 1
+        if len(tail_close) < (w + 1):
+            continue
+
+        c_now = float(tail_close.iloc[-1])
+        c_prev = float(tail_close.iloc[-2])
+        ma_now = float(tail_close.iloc[-w:].mean())
+        ma_prev = float(tail_close.iloc[-w - 1 : -1].mean())
+
+        valid_now += 1
+        if c_now >= ma_now:
+            above_now += 1
+
+        valid_prev += 1
+        if c_prev >= ma_prev:
+            above_prev += 1
 
     ratio_now = (above_now / valid_now * 100.0) if valid_now > 0 else None
     ratio_prev = (above_prev / valid_prev * 100.0) if valid_prev > 0 else None
@@ -669,13 +691,46 @@ def _calc_market_breadth(
     }
 
 
-def _fetch_market_extreme_snapshot() -> dict:
+def _extract_spot_snapshot_trade_date(df: pd.DataFrame) -> date | None:
+    """
+    尝试从实时快照表中提取“行情日期”。
+    不同数据源/版本列名可能不同，这里做 best-effort 兼容。
+    """
+    if df is None or df.empty:
+        return None
+    candidates = (
+        "数据日期",
+        "日期",
+        "更新时间",
+        "最新时间",
+        "行情时间",
+        "时间",
+    )
+    for col in candidates:
+        if col not in df.columns:
+            continue
+        ts = pd.to_datetime(df[col], errors="coerce")
+        ts = ts.dropna()
+        if ts.empty:
+            continue
+        ts = ts[ts.dt.year >= 2000]
+        if ts.empty:
+            continue
+        return ts.max().date()
+    return None
+
+
+def _fetch_market_extreme_snapshot(target_trade_date: date | None = None) -> dict:
     """
     快照级市场恐慌探针（不依赖全量日线拉取完成）：
     - down_extreme_count: 涨跌幅 <= CRASH_EXTREME_DROP_PCT 数量
     - down_9_count: 涨跌幅 <= -9.0% 数量
     - down_10_count: 涨跌幅 <= -10.0% 数量
     - up_9_count: 涨跌幅 >= 9.0% 数量
+
+    防错位约束：
+    - 当 target_trade_date 不是“今天”时，跳过快照（避免把历史目标日与当下快照混用）。
+    - 若快照含日期列，要求其日期与 target_trade_date 一致。
     """
     out = {
         "ok": False,
@@ -684,8 +739,23 @@ def _fetch_market_extreme_snapshot() -> dict:
         "down_9_count": 0,
         "down_10_count": 0,
         "up_9_count": 0,
+        "snapshot_trade_date": None,
     }
     timeout_s = PANIC_SNAPSHOT_TIMEOUT
+    now_cn = datetime.now(CN_TZ)
+    if target_trade_date is not None:
+        if target_trade_date != now_cn.date():
+            print(
+                "[funnel] 市场极端快照跳过: "
+                f"target_trade_date={target_trade_date}, today={now_cn.date()}"
+            )
+            return out
+        if (now_cn.hour, now_cn.minute) < (9, 15):
+            print(
+                "[funnel] 市场极端快照跳过: 当前早于 09:15，"
+                "避免读取隔夜残留快照"
+            )
+            return out
     try:
         import akshare as ak
 
@@ -693,6 +763,19 @@ def _fetch_market_extreme_snapshot() -> dict:
             fut = ex.submit(ak.stock_zh_a_spot_em)
             df = fut.result(timeout=max(timeout_s, 1.0))
         if df is None or df.empty:
+            return out
+        snap_trade_date = _extract_spot_snapshot_trade_date(df)
+        if snap_trade_date is not None:
+            out["snapshot_trade_date"] = snap_trade_date.isoformat()
+        if (
+            target_trade_date is not None
+            and snap_trade_date is not None
+            and snap_trade_date != target_trade_date
+        ):
+            print(
+                "[funnel] 市场极端快照日期不匹配: "
+                f"snapshot_date={snap_trade_date}, target_trade_date={target_trade_date}"
+            )
             return out
         pct = pd.to_numeric(df.get("涨跌幅"), errors="coerce")
         if pct is None or pct.dropna().empty:
@@ -853,7 +936,7 @@ def _rank_l3_watchlist(
     triggers: dict[str, list[tuple[str, float]]],
     top_sectors: list[str],
     top_k: int = 15,
-) -> tuple[list[str], list[dict], dict[str, float]]:
+) -> tuple[list[str], list[dict], dict[str, float], list[dict]]:
     """
     对 L3 股票做统一优先级排序，并给出 TopK 自选建议。
     评分构成（分位）：
@@ -864,7 +947,7 @@ def _rank_l3_watchlist(
     - Top行业额外加分 0.05
     """
     if not l3_symbols:
-        return ([], [], {})
+        return ([], [], {}, [])
 
     trigger_score_map: dict[str, float] = {}
     trigger_reason_map: dict[str, list[str]] = {}
@@ -943,18 +1026,75 @@ def _rank_l3_watchlist(
         for _, r in rank_df.iterrows()
     }
 
-    top_rows: list[dict] = []
-    for _, r in rank_df.head(max(int(top_k), 0)).iterrows():
-        reason = str(r.get("reasons", "")).strip() or "L3共振通过"
-        top_rows.append(
+    def _fnum(v: object, nd: int = 2, fallback: str = "-") -> str:
+        try:
+            x = float(v)  # type: ignore[arg-type]
+        except Exception:
+            return fallback
+        if pd.isna(x):
+            return fallback
+        return f"{x:.{nd}f}"
+
+    ranked_rows: list[dict] = []
+    for _, r in rank_df.iterrows():
+        trigger_reason = str(r.get("reasons", "")).strip()
+        industry = str(r.get("industry", "")).strip() or "未知行业"
+        hot_bonus = float(r.get("hot_bonus", 0.0))
+        ret20 = r.get("ret20")
+        ret5 = r.get("ret5")
+        dry_ratio = r.get("min_vol_ratio_5d")
+        parts: list[str] = []
+        if hot_bonus > 0:
+            parts.append("Top行业共振")
+        else:
+            parts.append("行业共振通过")
+        if trigger_reason:
+            parts.append(f"L4痕迹:{trigger_reason}")
+        else:
+            parts.append("未触发L4扳机")
+        try:
+            dry_v = float(dry_ratio)  # type: ignore[arg-type]
+            if not pd.isna(dry_v) and dry_v <= 1.0:
+                parts.append(f"近5日有缩量(最小量比{dry_v:.2f})")
+        except Exception:
+            pass
+        parts.append(
+            f"20日动量{_fnum(ret20, 1, '0.0')}%/5日{_fnum(ret5, 1, '0.0')}%"
+        )
+        ranked_rows.append(
             {
                 "code": str(r["code"]),
+                "industry": industry,
+                "reason": "；".join(parts),
+                "score": float(r["watch_score"]),
+                "ret20": (float(ret20) if pd.notna(pd.to_numeric(ret20, errors='coerce')) else None),
+                "ret5": (float(ret5) if pd.notna(pd.to_numeric(ret5, errors='coerce')) else None),
+                "min_vol_ratio_5d": (
+                    float(dry_ratio)
+                    if pd.notna(pd.to_numeric(dry_ratio, errors="coerce"))
+                    else None
+                ),
+                "trigger_labels": trigger_reason,
+            }
+        )
+
+    top_rows: list[dict] = []
+    for _, r in rank_df.head(max(int(top_k), 0)).iterrows():
+        code = str(r["code"])
+        reason = "L3共振通过"
+        for row in ranked_rows:
+            if row.get("code") == code:
+                reason = str(row.get("reason", "")).strip() or reason
+                break
+        top_rows.append(
+            {
+                "code": code,
                 "industry": str(r.get("industry", "")),
                 "reason": reason,
                 "score": float(r["watch_score"]),
             }
         )
-    return (ranked_symbols, top_rows, score_map)
+    return (ranked_symbols, top_rows, score_map, ranked_rows)
 
 
 def run_funnel_job() -> tuple[dict[str, list[tuple[str, float]]], dict]:
@@ -1021,10 +1161,14 @@ def run_funnel_job() -> tuple[dict[str, list[tuple[str, float]]], dict]:
         print(f"[funnel] 小盘基准加载成功: {SMALLCAP_BENCH_CODE}")
     except Exception as e:
         print(f"[funnel] 小盘基准加载失败 {SMALLCAP_BENCH_CODE}: {e}")
-    panic_snapshot = _fetch_market_extreme_snapshot()
+    panic_snapshot = _fetch_market_extreme_snapshot(
+        target_trade_date=window.end_trade_date
+    )
     if panic_snapshot.get("ok"):
+        snap_date = panic_snapshot.get("snapshot_trade_date")
+        snap_date_prefix = f"date={snap_date}, " if snap_date else ""
         print(
-            "[funnel] 市场极端快照: "
+            f"[funnel] 市场极端快照: {snap_date_prefix}"
             f"total={panic_snapshot.get('total')}, "
             f"down_extreme({CRASH_EXTREME_DROP_PCT:g})={panic_snapshot.get('down_extreme_count')}, "
             f"down_9={panic_snapshot.get('down_9_count')}, "
@@ -1044,7 +1188,7 @@ def run_funnel_job() -> tuple[dict[str, list[tuple[str, float]]], dict]:
     print(
         f"[funnel] 开始拉取 {len(all_symbols)} 只股票日线 "
         f"(executor={EXECUTOR_MODE}, batch_size={BATCH_SIZE}, max_workers={MAX_WORKERS}, batch_timeout={BATCH_TIMEOUT}s, "
-        f"fetch_timeout={FETCH_TIMEOUT}s, retries={MAX_RETRIES})"
+        f"fetch_timeout={FETCH_TIMEOUT}s, panic_snapshot_timeout={PANIC_SNAPSHOT_TIMEOUT:.1f}s, retries={MAX_RETRIES})"
     )
     total_fetch_started = time.monotonic()
     for i in range(0, len(all_symbols), BATCH_SIZE):
@@ -1208,7 +1352,7 @@ def run_funnel_job() -> tuple[dict[str, list[tuple[str, float]]], dict]:
     triggers = layer4_triggers(l3_passed, all_df_map, cfg)
 
     total_hits = sum(len(v) for v in triggers.values())
-    ranked_l3_symbols, watchlist_top15, l3_score_map = _rank_l3_watchlist(
+    ranked_l3_symbols, watchlist_top15, l3_score_map, l3_ranked_rows = _rank_l3_watchlist(
         l3_symbols=l3_passed,
         df_map=all_df_map,
         sector_map=sector_map,
@@ -1234,6 +1378,7 @@ def run_funnel_job() -> tuple[dict[str, list[tuple[str, float]]], dict]:
         "top_sectors": top_sectors,
         "layer3_symbols": ranked_l3_symbols or l3_passed,
         "layer3_score_map": l3_score_map,
+        "layer3_ranked_rows": l3_ranked_rows,
         "watchlist_top15": watchlist_top15,
         "total_hits": total_hits,
         "by_trigger": {k: len(v) for k, v in triggers.items()},
@@ -1275,7 +1420,9 @@ def run(webhook_url: str) -> tuple[bool, list[dict], dict]:
     unique_hit_count = len(sorted_codes)
     selected_for_ai = sorted_codes
     l3_score_map = metrics.get("layer3_score_map", {}) or {}
+    l3_ranked_rows = metrics.get("layer3_ranked_rows", []) or []
     watchlist_top15 = metrics.get("watchlist_top15", []) or []
+    by_trigger = metrics.get("by_trigger", {}) or {}
 
     print(
         f"[funnel] 候选分层: 命中事件={metrics['total_hits']}, 命中股票={unique_hit_count}, "
@@ -1348,7 +1495,19 @@ def run(webhook_url: str) -> tuple[bool, list[dict], dict]:
 
     if not selected_for_ai:
         lines.append("无")
-    elif watchlist_top15:
+        lines.extend(
+            [
+                "",
+                "**为什么没命中（L4触发=0）**",
+                f"• Spring={int(by_trigger.get('spring', 0))}, "
+                f"LPS={int(by_trigger.get('lps', 0))}, "
+                f"EVR={int(by_trigger.get('evr', 0))}",
+                "• 当前候选仅停留在 L3 共振阶段，尚未出现日线级别的 Spring/LPS/EVR 扳机信号。",
+                "• AI 输入集合按 L4 命中构建，因此本轮为 0。",
+            ]
+        )
+
+    if watchlist_top15:
         lines.extend(
             [
                 "",
@@ -1357,6 +1516,28 @@ def run(webhook_url: str) -> tuple[bool, list[dict], dict]:
             ]
         )
         for row in watchlist_top15:
+            code = str(row.get("code", ""))
+            if not code:
+                continue
+            name = name_map.get(code, code)
+            industry = str(row.get("industry", "")).strip() or "未知行业"
+            reason = str(row.get("reason", "")).strip() or "L3共振通过"
+            score = float(row.get("score", 0.0))
+            lines.append(
+                f"• {code} {name} | {industry} | {reason} | score={score:.2f}"
+            )
+
+    lines.extend(
+        [
+            "",
+            f"**L3 全量清单（共{len(l3_ranked_rows)}）代码 名称 | 行业 | 选择原因 | 分值**",
+            "",
+        ]
+    )
+    if not l3_ranked_rows:
+        lines.append("无")
+    else:
+        for row in l3_ranked_rows:
             code = str(row.get("code", ""))
             if not code:
                 continue
