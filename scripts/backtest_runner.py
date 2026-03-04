@@ -6,6 +6,10 @@
 1) 复用当前 Wyckoff Funnel 规则，不依赖分钟级或付费 Level-2 数据。
 2) 在给定历史区间内，统计信号后 N 交易日收益分布与胜率。
 3) 输出 summary markdown + trades csv，便于后续参数复盘。
+
+重要说明：
+- 默认关闭“当前截面市值/行业映射”过滤，以降低 look-ahead bias。
+- 仍存在幸存者偏差（股票池基于当前在市样本），结果用于参数对比而非绝对收益承诺。
 """
 
 from __future__ import annotations
@@ -31,6 +35,7 @@ DEFAULT_HOLD_DAYS = 5
 DEFAULT_EXIT_MODE = "sltp"
 DEFAULT_STOP_LOSS_PCT = -9.0
 DEFAULT_TAKE_PROFIT_PCT = 0.0
+DEFAULT_USE_CURRENT_META = False
 
 
 @dataclass
@@ -300,6 +305,7 @@ def run_backtest(
     stop_loss_pct: float = DEFAULT_STOP_LOSS_PCT,
     take_profit_pct: float = DEFAULT_TAKE_PROFIT_PCT,
     sltp_priority: str = "stop_first",
+    use_current_meta: bool = DEFAULT_USE_CURRENT_META,
 ) -> tuple[pd.DataFrame, dict]:
     if end_dt <= start_dt:
         raise ValueError("end 必须晚于 start")
@@ -375,8 +381,21 @@ def run_backtest(
     if len(trade_dates) <= hold_days:
         raise RuntimeError("回测区间交易日过少，无法计算 forward return")
 
-    market_cap_map = fetch_market_cap_map()
-    sector_map = fetch_sector_map()
+    if use_current_meta:
+        market_cap_map = fetch_market_cap_map()
+        sector_map = fetch_sector_map()
+        print(
+            "[backtest] ⚠️ 使用当前截面市值/行业映射（会引入 look-ahead bias）"
+        )
+        if not market_cap_map:
+            print("[backtest] ⚠️ 当前市值映射为空，Layer1 市值过滤将被跳过")
+    else:
+        market_cap_map = {}
+        sector_map = {}
+        print(
+            "[backtest] 偏差抑制口径：关闭当前截面市值/行业映射过滤 "
+            "(L1 市值过滤 + L3 行业共振过滤)"
+        )
     cfg = FunnelConfig(trading_days=trading_days)
     _apply_funnel_cfg_overrides(cfg)
 
@@ -551,6 +570,7 @@ def run_backtest(
         "stop_loss_pct": stop_loss_pct,
         "take_profit_pct": take_profit_pct,
         "sltp_priority": sltp_priority,
+        "use_current_meta": bool(use_current_meta),
     }
     if not trades_df.empty:
         ret = pd.to_numeric(trades_df["ret_pct"], errors="coerce").dropna()
@@ -632,6 +652,26 @@ def _calc_max_consecutive_losses(ret: pd.Series) -> int:
 
 
 def _build_summary_md(summary: dict) -> str:
+    use_current_meta = bool(summary.get("use_current_meta"))
+    meta_mode = (
+        "current_snapshot (⚠️ look-ahead bias)"
+        if use_current_meta
+        else "disabled_current_snapshot_filters (bias-reduced)"
+    )
+    notes = [
+        "- 该回测仅使用日线数据（qfq），不含盘口、滑点、涨跌停成交约束。",
+        "- ⚠️ 仍存在幸存者偏差：股票池来自当前在市样本，未包含历史退市股票。",
+    ]
+    if use_current_meta:
+        notes.append(
+            "- ⚠️ 市值/行业映射采用当前截面，会引入 look-ahead bias "
+            "（市值穿越与行业漂移）；该结果仅用于参数方向验证。"
+        )
+    else:
+        notes.append(
+            "- 本次已关闭当前截面市值/行业映射过滤（Layer1 市值 + Layer3 行业共振），"
+            "用于降低前视偏差。"
+        )
     return "\n".join(
         [
             "# Wyckoff Funnel Daily Backtest",
@@ -646,6 +686,7 @@ def _build_summary_md(summary: dict) -> str:
             f"- 止损线: {_fmt_metric(summary.get('stop_loss_pct'), 1)}%",
             f"- 止盈线: {_fmt_metric(summary.get('take_profit_pct'), 1)}%",
             f"- 日内触发优先级: {summary.get('sltp_priority')}",
+            f"- 元数据口径: {meta_mode}",
             f"- 成交样本: {summary.get('trades')}",
             "",
             "## 收益统计",
@@ -662,8 +703,7 @@ def _build_summary_md(summary: dict) -> str:
             f"- 最长连续亏损笔数: {_fmt_metric(summary.get('max_consecutive_losses'), 0)}",
             "",
             "## 说明",
-            "- 该回测仅使用日线数据（qfq），不含盘口、滑点、涨跌停成交约束。",
-            "- ⚠️ **注意 / Look-ahead Bias**: 市值和行业映射采用的是当前快照（未使用历史真实流通市值及退市剔除数据）。因此存在幸存者偏差与市值穿越，此回测数据仅作为参数方向与形态有效性的技术验证，不能完全代表真实历史表现。",
+            *notes,
         ]
     )
 
@@ -717,6 +757,11 @@ def main() -> int:
         default="analysis/backtest",
         help="输出目录（会写 summary.md 与 trades.csv）",
     )
+    parser.add_argument(
+        "--use-current-meta",
+        action="store_true",
+        help="使用当前截面市值/行业映射过滤（会引入 look-ahead bias，默认关闭）",
+    )
     args = parser.parse_args()
 
     start_dt = _parse_date(args.start)
@@ -735,6 +780,7 @@ def main() -> int:
         stop_loss_pct=args.stop_loss,
         take_profit_pct=args.take_profit,
         sltp_priority=args.sltp_priority,
+        use_current_meta=args.use_current_meta,
     )
 
     out_dir = Path(args.output_dir).resolve()
