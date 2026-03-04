@@ -43,6 +43,16 @@ STEP4_MAX_OUTPUT_TOKENS = 8192
 STEP4_ATR_PERIOD = int(os.getenv("STEP4_ATR_PERIOD", "14"))
 STEP4_ATR_MULTIPLIER = float(os.getenv("STEP4_ATR_MULTIPLIER", "2.0"))
 STEP4_MAX_WORKERS = int(os.getenv("STEP4_MAX_WORKERS", "8"))
+STEP4_BUY_HARD_STOP_ENABLED = os.getenv("STEP4_BUY_HARD_STOP_ENABLED", "1").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+STEP4_BUY_HARD_STOP_PCT = max(
+    float(os.getenv("STEP4_BUY_HARD_STOP_PCT", "7.0")),
+    0.0,
+)
 STEP4_ENABLE_SPOT_PATCH = os.getenv("STEP4_ENABLE_SPOT_PATCH", "1").strip().lower() in {
     "1",
     "true",
@@ -230,6 +240,24 @@ class WyckoffOrderEngine:
                             f"atr_entry_tighten({effective_stop_loss:.2f}->{merged:.2f})"
                         )
                     effective_stop_loss = merged
+
+        # 实盘硬止损：买入动作不得放宽到 -STEP4_BUY_HARD_STOP_PCT 之外
+        # 仅约束 PROBE/ATTACK，不影响 HOLD/TRIM/EXIT 的存量跟踪止损逻辑。
+        if (
+            action in {"PROBE", "ATTACK"}
+            and STEP4_BUY_HARD_STOP_ENABLED
+            and STEP4_BUY_HARD_STOP_PCT > 0
+        ):
+            hard_stop = current_price * (1.0 - STEP4_BUY_HARD_STOP_PCT / 100.0)
+            if hard_stop > 0:
+                if effective_stop_loss is None:
+                    effective_stop_loss = hard_stop
+                    audit_parts.append(f"hard_stop_init({effective_stop_loss:.2f})")
+                elif effective_stop_loss < hard_stop:
+                    audit_parts.append(
+                        f"hard_stop_raise({effective_stop_loss:.2f}->{hard_stop:.2f})"
+                    )
+                    effective_stop_loss = hard_stop
 
         if action == "EXIT":
             sell_shares = int(math.floor(max(held_shares, 0) / 100.0) * 100)
