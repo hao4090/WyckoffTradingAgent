@@ -1255,29 +1255,36 @@ def run(webhook_url: str) -> tuple[bool, list[dict], dict]:
     if benchmark_context:
         breadth = benchmark_context.get("breadth", {}) or {}
         panic_snapshot = benchmark_context.get("panic_snapshot", {}) or {}
-        panic_text = (
-            f", down_extreme({CRASH_EXTREME_DROP_PCT:g})={panic_snapshot.get('down_extreme_count')}, "
-            f"down9={panic_snapshot.get('down_9_count')}, "
-            f"down10={panic_snapshot.get('down_10_count')}, "
-            f"up9={panic_snapshot.get('up_9_count')}"
-            if panic_snapshot.get("ok")
-            else ""
-        )
         breadth_text = (
-            f", breadth={breadth.get('ratio_pct')}% "
-            f"(prev={breadth.get('prev_ratio_pct')}%, Δ={breadth.get('delta_pct')}%, n={breadth.get('sample_size')})"
+            f"，上涨家数占比 {breadth.get('ratio_pct'):.1f}%"
+            f"（前日 {breadth.get('prev_ratio_pct'):.1f}%，变化 {breadth.get('delta_pct'):+.1f}%，样本 {breadth.get('sample_size')} 只）"
             if breadth
             else ""
         )
+        panic_text = (
+            f"，恐慌信号：极端下跌({CRASH_EXTREME_DROP_PCT:g}%) {panic_snapshot.get('down_extreme_count')} 只"
+            f" / 跌9% {panic_snapshot.get('down_9_count')} 只"
+            f" / 涨停 {panic_snapshot.get('up_9_count')} 只"
+            if panic_snapshot.get("ok")
+            else ""
+        )
         repair_text = (
-            f", repair={benchmark_context.get('repair_reasons')}"
+            f"，修复原因：{benchmark_context.get('repair_reasons')}"
             if benchmark_context.get("repair_triggered")
             else ""
         )
+        smallcap_close = benchmark_context.get("smallcap_close")
+        smallcap_cum3 = benchmark_context.get("smallcap_recent3_cum_pct")
+        smallcap_text = (
+            f" | 创业板指 {smallcap_close:.2f}，近3日 {smallcap_cum3:+.2f}%"
+            if smallcap_close is not None and smallcap_cum3 is not None
+            else ""
+        )
         bench_line = (
-            f"{benchmark_context.get('regime')} | close={benchmark_context.get('close')} "
-            f"ma50={benchmark_context.get('ma50')} ma200={benchmark_context.get('ma200')} "
-            f"3d={benchmark_context.get('recent3_pct')} cum3={benchmark_context.get('recent3_cum_pct')}"
+            f"{benchmark_context.get('regime')} | 沪深300 {benchmark_context.get('close'):.2f}"
+            f"（MA50={benchmark_context.get('ma50'):.1f} MA200={benchmark_context.get('ma200'):.1f}）"
+            f"，近3日 {benchmark_context.get('recent3_cum_pct'):+.2f}%"
+            f"{smallcap_text}"
             f"{breadth_text}{panic_text}{repair_text}"
         )
 
@@ -1288,8 +1295,12 @@ def run(webhook_url: str) -> tuple[bool, list[dict], dict]:
         f"= {metrics['total_symbols']} (共{metrics['pool_batches']}批)"
         ),
         f"**漏斗概览**: {metrics['total_symbols']}只 → L1:{metrics['layer1']} → L2:{metrics['layer2']} → L3:{metrics['layer3']} → 命中:{metrics['total_hits']}",
-        f"**数据对齐**: fetch_ok={metrics['fetch_ok']} / fetch_fail={metrics['fetch_fail']} / "
-        f"date_mismatch={metrics.get('fetch_date_mismatch', 0)} / spot_patched={metrics.get('fetch_spot_patched', 0)}",
+        (
+        f"**数据质量**: 成功拉取 {metrics['fetch_ok']} 只"
+        + (f"，失败 {metrics['fetch_fail']} 只" if metrics['fetch_fail'] else "，无失败")
+        + (f"，日期不对齐跳过 {metrics.get('fetch_date_mismatch', 0)} 只" if metrics.get('fetch_date_mismatch') else "")
+        + (f"，实时快照补偿 {metrics.get('fetch_spot_patched', 0)} 只" if metrics.get('fetch_spot_patched') else "")
+        ),
         f"**大盘水温**: {bench_line}",
         f"**候选分层**: L3股票{metrics['layer3']} -> Top15自选更新{len(watchlist_top15)} -> AI输入命中全量{len(selected_for_ai)}",
         f"**Top 行业**: {', '.join(metrics['top_sectors']) if metrics['top_sectors'] else '无'}",
