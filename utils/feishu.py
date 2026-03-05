@@ -72,9 +72,12 @@ def _normalize_for_lark_md(content: str) -> str:
     飞书 lark_md 不是完整 Markdown：
     - 标题 '#' 在卡片里常不按标题渲染
     - 分割线 '---' 会出现为普通文本
+    - 特殊符号 '<', '>' 如果不转义，会导致飞书客户端解析失败、卡片完全吞掉不显示。
     这里做轻量归一化，保证展示稳定。
     """
-    lines = content.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    # 转义尖括号，防止客户端渲染引擎崩溃（API 会返回 0，但在群里没卡片）
+    safe_content = content.replace("<", "&lt;").replace(">", "&gt;")
+    lines = safe_content.replace("\r\n", "\n").replace("\r", "\n").split("\n")
     out: list[str] = []
     for raw in lines:
         line = raw.rstrip()
