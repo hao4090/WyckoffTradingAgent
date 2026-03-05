@@ -1217,9 +1217,33 @@ def run(webhook_url: str) -> tuple[bool, list[dict], dict]:
         if str(c).strip()
     ]
     l2_channel_map = metrics.get("layer2_channel_map", {}) or {}
-    trend_quota = max(int(os.getenv("FUNNEL_AI_TREND_QUOTA", "10")), 0)
-    accum_quota = max(int(os.getenv("FUNNEL_AI_ACCUM_QUOTA", "10")), 0)
-    total_cap = max(int(os.getenv("FUNNEL_AI_TOTAL_CAP", "30")), 0)
+    
+    # 策略A：大盘水温驱动（Top-Down 择时顺势策略）
+    total_cap = max(int(os.getenv("FUNNEL_AI_TOTAL_CAP", "20")), 0)
+    track_max = max(int(os.getenv("FUNNEL_AI_TRACK_MAX", "15")), 0)
+    neutral_max = max(int(os.getenv("FUNNEL_AI_NEUTRAL_MAX", "10")), 0)
+    
+    regime = benchmark_context.get("regime", "NEUTRAL")
+    
+    if regime == "RISK_ON":
+        first_track = "Trend"
+        first_limit = track_max
+        second_track = "Accum"
+        second_limit = track_max
+    elif regime == "RISK_OFF":
+        first_track = "Accum"
+        first_limit = track_max
+        second_track = "Trend"
+        second_limit = track_max
+    else:  # NEUTRAL
+        first_track = "Trend"
+        first_limit = neutral_max
+        second_track = "Accum"
+        second_limit = neutral_max
+
+    trend_quota = first_limit if first_track == "Trend" else second_limit
+    accum_quota = second_limit if second_track == "Accum" else first_limit
+
     trend_channel_tags = {"主升通道", "点火破局"}
     accum_channel_tags = {"潜伏通道", "吸筹通道", "地量蓄势", "暗中护盘"}
 
@@ -1279,25 +1303,34 @@ def run(webhook_url: str) -> tuple[bool, list[dict], dict]:
     trend_selected: list[str] = []
     accum_selected: list[str] = []
 
-    for code in trend_candidates:
+    def _add_to_selected(code: str, track_name: str) -> bool:
         if total_cap > 0 and len(selected_seen) >= total_cap:
-            break
-        if len(trend_selected) >= trend_quota:
-            break
+            return False
         if code in selected_seen:
-            continue
-        trend_selected.append(code)
+            return False
+        if track_name == "Trend":
+            if len(trend_selected) >= trend_quota:
+                return False
+            trend_selected.append(code)
+        else:
+            if len(accum_selected) >= accum_quota:
+                return False
+            accum_selected.append(code)
         selected_seen.add(code)
+        return True
 
-    for code in accum_candidates:
-        if total_cap > 0 and len(selected_seen) >= total_cap:
-            break
-        if len(accum_selected) >= accum_quota:
-            break
-        if code in selected_seen:
-            continue
-        accum_selected.append(code)
-        selected_seen.add(code)
+    track_candidates = {
+        "Trend": trend_candidates,
+        "Accum": accum_candidates,
+    }
+    
+    # 第一遍：优先轨尽可能拿满额度
+    for code in track_candidates[first_track]:
+        _add_to_selected(code, first_track)
+        
+    # 第二遍：次要轨补充剩余额度（如果总额度还未满）
+    for code in track_candidates[second_track]:
+        _add_to_selected(code, second_track)
 
     selected_for_ai = trend_selected + accum_selected
 
@@ -1352,7 +1385,7 @@ def run(webhook_url: str) -> tuple[bool, list[dict], dict]:
         f"Trend轨=命中{trend_hit_selected}+L3补充{trend_l3_only}=>{len(trend_selected)}, "
         f"Accum轨=命中{accum_hit_selected}+L3补充{accum_l3_only}=>{len(accum_selected)}, "
         f"AI输入总计=命中{hit_selected_count}+L3补充{l3_only_count}=>{len(selected_for_ai)} "
-        f"(Trend配额{trend_quota}, Accum配额{accum_quota}, 总上限{total_cap}), "
+        f"[{regime} {first_track}优先] (Trend配额{trend_quota}, Accum配额{accum_quota}, 总上限{total_cap}), "
         f"AI分析={len(selected_for_ai)}"
     )
 
@@ -1405,7 +1438,7 @@ def run(webhook_url: str) -> tuple[bool, list[dict], dict]:
         (
             f"**候选分层**: L3股票{metrics['layer3']} "
             f"-> AI双轨输入={len(selected_for_ai)} "
-            f"(Trend={len(trend_selected)}/{trend_quota}, Accum={len(accum_selected)}/{accum_quota}, 总上限{total_cap}) "
+            f"[{regime} {first_track}优先] (Trend={len(trend_selected)}/{trend_quota}, Accum={len(accum_selected)}/{accum_quota}, 总上限{total_cap}) "
             f"[L4命中{hit_selected_count}+L3补充{max(l3_only_count, 0)}]"
         ),
         f"**Top 行业**: {', '.join(metrics['top_sectors']) if metrics['top_sectors'] else '无'}",
