@@ -230,6 +230,16 @@ class WyckoffOrderEngine:
         effective_stop_loss = dec.stop_loss
         audit_parts: list[str] = []
 
+        if pos and pos.stop_loss is not None and pos.stop_loss > 0:
+            if effective_stop_loss is None:
+                effective_stop_loss = pos.stop_loss
+                audit_parts.append(f"inherit_pos_stop({pos.stop_loss:.2f})")
+            else:
+                merged = max(effective_stop_loss, pos.stop_loss)
+                if merged > effective_stop_loss:
+                    audit_parts.append(f"tighter_by_pos_stop({effective_stop_loss:.2f}->{merged:.2f})")
+                effective_stop_loss = merged
+
         if current_price is None or current_price <= 0:
             return self._no_trade(dec, name, "缺少最新价格")
 
