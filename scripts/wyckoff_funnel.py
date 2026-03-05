@@ -1281,21 +1281,46 @@ def run(webhook_url: str) -> tuple[bool, list[dict], dict]:
         for c in (metrics.get("layer3_symbols", []) or [])
         if str(c).strip()
     ]
+    l2_channel_map = metrics.get("layer2_channel_map", {}) or {}
     selected_for_ai: list[str] = []
     seen_ai: set[str] = set()
-    # AI 输入改为：L4命中 + L3全量（去重，保留先后优先级）
+    channel_counts = {"主升通道": 0, "潜伏通道": 0, "吸筹通道": 0}
+    per_channel_cap = 10
+    total_cap = 30
+
+    def _channel_key(code: str) -> str:
+        raw = str(l2_channel_map.get(code, "")).strip()
+        if "主升通道" in raw:
+            return "主升通道"
+        if "潜伏通道" in raw:
+            return "潜伏通道"
+        if "吸筹通道" in raw:
+            return "吸筹通道"
+        return ""
+
+    # AI 输入：L4 命中优先，其次 L3，按通道配额筛选
     for code in sorted_codes + l3_ranked_symbols:
         c = str(code).strip()
         if not c or c in seen_ai:
             continue
-        seen_ai.add(c)
+        ch = _channel_key(c)
+        if not ch:
+            continue
+        if channel_counts[ch] >= per_channel_cap:
+            continue
         selected_for_ai.append(c)
-    l3_only_count = len(selected_for_ai) - unique_hit_count
+        seen_ai.add(c)
+        channel_counts[ch] += 1
+        if len(selected_for_ai) >= total_cap:
+            break
+
+    hit_set = set(sorted_codes)
+    hit_selected_count = sum(1 for c in selected_for_ai if c in hit_set)
+    l3_only_count = len(selected_for_ai) - hit_selected_count
     l3_score_map = metrics.get("layer3_score_map", {}) or {}
     l3_ranked_rows = metrics.get("layer3_ranked_rows", []) or []
     watchlist_top15 = metrics.get("watchlist_top15", []) or []
     by_trigger = metrics.get("by_trigger", {}) or {}
-    l2_channel_map = metrics.get("layer2_channel_map", {}) or {}
     l2_momentum = int(metrics.get("layer2_momentum", 0) or 0)
     l2_ambush   = int(metrics.get("layer2_ambush", 0) or 0)
     l2_accum    = int(metrics.get("layer2_accum", 0) or 0)
@@ -1318,7 +1343,8 @@ def run(webhook_url: str) -> tuple[bool, list[dict], dict]:
 
     print(
         f"[funnel] 候选分层: 命中事件={metrics['total_hits']}, 命中股票={unique_hit_count}, "
-        f"AI输入=命中{unique_hit_count}+L3补充{l3_only_count}=>{len(selected_for_ai)}, "
+        f"AI输入=命中{hit_selected_count}+L3补充{l3_only_count}=>{len(selected_for_ai)} "
+        f"(主升{channel_counts['主升通道']}, 潜伏{channel_counts['潜伏通道']}, 吸筹{channel_counts['吸筹通道']}), "
         f"AI分析={len(selected_for_ai)}, Top15自选={len(watchlist_top15)}"
     )
 
@@ -1370,11 +1396,12 @@ def run(webhook_url: str) -> tuple[bool, list[dict], dict]:
         f"**大盘水温**: {bench_line}",
         (
             f"**候选分层**: L3股票{metrics['layer3']} -> Top15自选更新{len(watchlist_top15)} "
-            f"-> AI输入(L4命中{unique_hit_count}+L3补充{max(l3_only_count, 0)})={len(selected_for_ai)}"
+            f"-> AI配额输入(L4命中{hit_selected_count}+L3补充{max(l3_only_count, 0)})={len(selected_for_ai)} "
+            f"(主升{channel_counts['主升通道']} | 潜伏{channel_counts['潜伏通道']} | 吸筹{channel_counts['吸筹通道']})"
         ),
         f"**Top 行业**: {', '.join(metrics['top_sectors']) if metrics['top_sectors'] else '无'}",
         "",
-        "**AI分析输入列表（L4命中 + L3全量）代码 名称 | 阶段 | 来源标签 | Exit信号**",
+        "**AI分析输入列表（单通道≤10，总计≤30）代码 名称 | 阶段 | 来源标签 | Exit信号**",
         "",
     ]
     for code in selected_for_ai:
@@ -1411,7 +1438,7 @@ def run(webhook_url: str) -> tuple[bool, list[dict], dict]:
                 f"LPS={int(by_trigger.get('lps', 0))}, "
                 f"EVR={int(by_trigger.get('evr', 0))}",
                 "• 当前候选仅停留在 L3 共振阶段，尚未出现日线级别的 Spring/LPS/EVR 扳机信号。",
-                "• AI 输入集合按“L4命中 + L3全量”构建；本轮 L3 为空，因此 AI 输入为 0。",
+                "• AI 输入集合按“通道配额制”构建；本轮未产生可入选标的，因此 AI 输入为 0。",
             ]
         )
 
