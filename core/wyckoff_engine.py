@@ -114,13 +114,13 @@ class FunnelConfig:
     # 这类股票应与 L4 Spring/LPS 配合使用，单独出现时仅进观察池。
     enable_accumulation_channel: bool = True
     accum_lookback_days: int = 250          # 年内低点计算窗口（交易日）
-    accum_price_from_low_max: float = 0.35  # 现价不超过年内低点 +35%
+    accum_price_from_low_max: float = 0.85  # 放宽至：现价不超过年内低点 +85%（支持再吸筹结构）
     accum_range_window: int = 60            # 横盘振幅计算窗口（交易日）
-    accum_range_max_pct: float = 30.0       # 窗口内 (high_max-low_min)/low_min 不超过 30%
+    accum_range_max_pct: float = 45.0       # 放宽至：窗口内最大振幅不超过 45%（A股波动大）
     accum_vol_dry_window: int = 20          # 量能萎缩统计近 N 日
     accum_vol_dry_ref_window: int = 120     # 量能萎缩对比参考窗口
-    accum_vol_dry_ratio: float = 0.65       # 近 N 日均量 / 参考均量 < 此值（量能萎缩）
-    accum_ma_gap_max: float = 0.06          # |MA50 - MA200| / MA200 < 此值（均线胶着）
+    accum_vol_dry_ratio: float = 0.85       # 放宽至：近 N 日均量 / 参考均量 < 0.85 即可视作缩量
+    accum_ma_gap_max: float = 0.15          # 放宽至：|MA50 - MA200| / MA200 <= 15%（均线接近）
 
     # Layer 3
     # 行业共振过滤：按”行业样本数分位阈值 + 最小样本数”动态过滤，避免固定 TopN 误杀。
@@ -494,7 +494,15 @@ def layer2_strength_detailed(
 
             accum_ok = accum_low_ok and accum_range_ok and accum_vol_ok and accum_ma_ok
 
-        if momentum_ok or ambush_ok or accum_ok:
+        # 点火破局通道（SOS Bypass）
+        # 如果当天爆发了放量大阳线，哪怕它此前 RPS 很低或者量能没萎缩，也直接送入 L4 让扳机去二次确认
+        sos_ok = False
+        if hasattr(cfg, "sos_vol_ratio"):
+            sos_score = _detect_sos(df_sorted, cfg)
+            if sos_score is not None:
+                sos_ok = True
+
+        if momentum_ok or ambush_ok or accum_ok or sos_ok:
             passed.append(sym)
             labels: list[str] = []
             if momentum_ok:
@@ -503,6 +511,11 @@ def layer2_strength_detailed(
                 labels.append("潜伏通道")
             if accum_ok:
                 labels.append("吸筹通道")
+            if sos_ok:
+                labels.append("点火破局")
+                
+            if not labels:
+                labels.append("点火破局")
             channel_map[sym] = "+".join(labels)
     return passed, channel_map
 
