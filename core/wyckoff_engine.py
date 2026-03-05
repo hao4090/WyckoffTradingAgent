@@ -78,7 +78,7 @@ class FunnelConfig:
     trading_days: int = 500
 
     # Layer 1
-    min_market_cap_yi: float = 20.0
+    min_market_cap_yi: float = 50.0
     min_avg_amount_wan: float = 5000.0
     amount_avg_window: int = 20
 
