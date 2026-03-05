@@ -1091,7 +1091,7 @@ def layer5_exit_signals(
     cfg: FunnelConfig,
 ) -> dict[str, dict]:
     """
-    为已持仓的 Accumulation 和 Markup 阶段股票生成 Exit 信号。
+    为 Accumulation 和 Markup 阶段股票生成静态参考 Exit 信号（实际实盘止损在 OMS 中独立维护）。
     返回 {symbol: {signal: ..., price: ..., reason: ...}}
     """
     if not cfg.enable_exit_signals:
@@ -1107,42 +1107,62 @@ def layer5_exit_signals(
         df_s = _sorted_if_needed(df)
         close = pd.to_numeric(df_s["close"], errors="coerce")
         low = pd.to_numeric(df_s["low"], errors="coerce")
+        high = pd.to_numeric(df_s["high"], errors="coerce")
 
-        if close.empty or low.empty:
+        if close.empty or low.empty or high.empty:
             continue
 
-        # 查找 Accumulation 底部（用于计算止盈目标）
-        lookback_w = max(int(cfg.accum_lookback_days), 2)
-        accum_low = float(low.tail(lookback_w).min())
         last_close = float(close.iloc[-1])
+        stage = accum_stage_map.get(sym, "Markup") # 默认按主升处理
 
-        # 止盈目标
-        profit_target = _detect_profit_target(df_s, accum_low, cfg)
+        profit_target = None
+        stop_loss_price = None
+
+        if stage.startswith("Accum_"):
+            # 对于吸筹股，锚定“年内最低点”
+            lookback_w = max(int(cfg.accum_lookback_days), 2)
+            accum_low = float(low.tail(lookback_w).min())
+            
+            # 止盈目标
+            profit_target = _detect_profit_target(df_s, accum_low, cfg)
+            # 止损：底部跌破 8%
+            stop_loss_price = accum_low * (1.0 + cfg.exit_stop_loss_pct / 100.0)
+        else:
+            # 对于 Markup 强势主升股，锚定“近期高点”向下计算跟踪止损 或 跌破 MA50
+            # 避免使用一年前的水下最低价
+            ma_short = close.rolling(cfg.ma_short).mean().iloc[-1]
+            recent_high = float(high.tail(60).max())
+            if not pd.isna(ma_short):
+                # 以 MA50 和 近期高点回撤较大者作为跟踪止损
+                stop_loss_price = max(float(ma_short) * 0.98, recent_high * (1.0 + cfg.exit_stop_loss_pct / 100.0))
+            else:
+                stop_loss_price = recent_high * (1.0 + cfg.exit_stop_loss_pct / 100.0)
+            
+            # 主升股通常不设硬止盈目标（让利润奔跑直到跌破跟踪止损），此处设为 None 或很高
+
         if profit_target is not None and last_close >= profit_target:
             signals[sym] = {
                 "signal": "profit_target",
                 "price": profit_target,
                 "current": last_close,
-                "reason": f"已达利润目标（+{cfg.exit_profit_target_pct:.0f}%）",
+                "reason": f"已达估测底部利润目标（+{cfg.exit_profit_target_pct:.0f}%）",
             }
             continue
 
-        # 止损
-        stop_loss_price = accum_low * (1.0 + cfg.exit_stop_loss_pct / 100.0)
-        if last_close <= stop_loss_price:
+        if stop_loss_price is not None and last_close <= stop_loss_price:
             signals[sym] = {
                 "signal": "stop_loss",
                 "price": stop_loss_price,
                 "current": last_close,
-                "reason": f"触发风险控制止损（{cfg.exit_stop_loss_pct:.1f}%）",
+                "reason": f"破位防守（{stage}）",
             }
             continue
 
-        # Distribution 警告
+        # Distribution 警告 (主要针对高位股)
         if _detect_distribution_start(df_s, cfg):
             signals[sym] = {
                 "signal": "distribution_warning",
-                "reason": "检测到 Distribution 阶段迹象（高位缩量）",
+                "reason": "检测到高位 Distribution 阶段迹象（放量不涨/高位缩量）",
             }
 
     return signals
