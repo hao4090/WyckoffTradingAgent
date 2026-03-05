@@ -122,6 +122,22 @@ class FunnelConfig:
     accum_vol_dry_ratio: float = 0.65       # 近 N 日均量 / 参考均量 < 此值（量能萎缩）
     accum_ma_gap_max: float = 0.06          # |MA50 - MA200| / MA200 < 此值（均线胶着）
 
+    # Layer 2 地量蓄势通道（Dry Volume Channel）
+    # 低位区间内，近期某日出现了年内最低级别的单日成交量，说明卖压完全枯竭。
+    enable_dry_vol_channel: bool = True
+    dry_vol_lookback: int = 10              # 在最近 N 日内寻找地量
+    dry_vol_ref_window: int = 250           # 地量参考窗口（年维度）
+    dry_vol_quantile: float = 0.05          # 地量标准：低于年内成交量的 5% 分位数
+    dry_vol_price_from_low_max: float = 0.35  # 位阶保护：现价 <= 年内低点 +35%
+
+    # Layer 2 暗中护盘通道（RS Divergence Channel）
+    # 大盘近期创新低，但该股拒绝创新低，形成 Higher Low，说明有资金托底。
+    enable_rs_divergence_channel: bool = True
+    rs_div_bench_window: int = 20           # 大盘近 N 日内需出现新低
+    rs_div_stock_window: int = 20           # 个股同期窗口
+    rs_div_bench_ref_window: int = 60       # 大盘新低对比的参考窗口（近 60 日）
+    rs_div_price_from_low_max: float = 0.50 # 位阶保护：现价 <= 年内低点 +50%
+
     # Layer 3
     # 行业共振过滤：按”行业样本数分位阈值 + 最小样本数”动态过滤，避免固定 TopN 误杀。
     top_n_sectors: int = 5
@@ -494,6 +510,65 @@ def layer2_strength_detailed(
 
             accum_ok = accum_low_ok and accum_range_ok and accum_vol_ok and accum_ma_ok
 
+        # 地量蓄势通道（Dry Volume Channel）
+        # 低位区 + 近 N 日内出现了年内最低级别的单日成交量 → 卖压完全枯竭
+        dry_vol_ok = False
+        if cfg.enable_dry_vol_channel and len(df_sorted) >= cfg.dry_vol_ref_window:
+            vol = pd.to_numeric(df_sorted.get("volume"), errors="coerce")
+            _c_dv = close
+            lookback_dv = max(int(cfg.dry_vol_ref_window), 2)
+            period_low_dv = float(_c_dv.tail(lookback_dv).min())
+            if (
+                period_low_dv > 0
+                and float(last_close) <= period_low_dv * (1.0 + cfg.dry_vol_price_from_low_max)
+            ):
+                ref_vol = vol.tail(cfg.dry_vol_ref_window)
+                if len(ref_vol.dropna()) >= 50:
+                    vol_threshold = float(np.quantile(
+                        ref_vol.dropna().values, cfg.dry_vol_quantile
+                    ))
+                    recent_vol = vol.tail(cfg.dry_vol_lookback)
+                    if float(recent_vol.min()) <= vol_threshold:
+                        dry_vol_ok = True
+
+        # 暗中护盘通道（RS Divergence Channel）
+        # 大盘近期在更大窗口内创了新低，但个股同期拒绝创新低（Higher Low）
+        rs_div_ok = False
+        if (
+            cfg.enable_rs_divergence_channel
+            and bench_sorted is not None
+            and not bench_sorted.empty
+            and len(df_sorted) >= cfg.rs_div_bench_ref_window
+        ):
+            bench_close = pd.to_numeric(bench_sorted.get("close"), errors="coerce")
+            if len(bench_close.dropna()) >= cfg.rs_div_bench_ref_window:
+                # 位阶保护
+                _c_rd = close
+                lookback_rd = max(int(cfg.dry_vol_ref_window), 250)
+                period_low_rd = float(_c_rd.tail(min(lookback_rd, len(_c_rd))).min())
+                if (
+                    period_low_rd > 0
+                    and float(last_close) <= period_low_rd * (1.0 + cfg.rs_div_price_from_low_max)
+                ):
+                    # 大盘：近 N 日的最低收盘价 < 前 ref_window 日的最低收盘价（创新低）
+                    bench_recent = bench_close.tail(cfg.rs_div_bench_window)
+                    bench_ref = bench_close.tail(cfg.rs_div_bench_ref_window).iloc[:-cfg.rs_div_bench_window]
+                    if not bench_ref.dropna().empty and not bench_recent.dropna().empty:
+                        bench_recent_low = float(bench_recent.min())
+                        bench_ref_low = float(bench_ref.min())
+                        bench_made_lower_low = bench_recent_low < bench_ref_low
+
+                        if bench_made_lower_low:
+                            # 个股：近 N 日的最低收盘价 >= 前 ref_window 日的最低收盘价（Higher Low）
+                            stock_low_col = pd.to_numeric(df_sorted.get("low"), errors="coerce")
+                            stock_recent = stock_low_col.tail(cfg.rs_div_stock_window)
+                            stock_ref = stock_low_col.tail(cfg.rs_div_bench_ref_window).iloc[:-cfg.rs_div_stock_window]
+                            if not stock_ref.dropna().empty and not stock_recent.dropna().empty:
+                                stock_recent_low = float(stock_recent.min())
+                                stock_ref_low = float(stock_ref.min())
+                                if stock_recent_low >= stock_ref_low:
+                                    rs_div_ok = True
+
         # 点火破局通道（SOS Bypass）
         # 如果当天爆发了放量大阳线，哪怕它此前 RPS 很低或者量能没萎缩，也直接送入 L4 让扳机去二次确认
         sos_ok = False
@@ -502,7 +577,7 @@ def layer2_strength_detailed(
             if sos_score is not None:
                 sos_ok = True
 
-        if momentum_ok or ambush_ok or accum_ok or sos_ok:
+        if momentum_ok or ambush_ok or accum_ok or dry_vol_ok or rs_div_ok or sos_ok:
             passed.append(sym)
             labels: list[str] = []
             if momentum_ok:
@@ -511,6 +586,10 @@ def layer2_strength_detailed(
                 labels.append("潜伏通道")
             if accum_ok:
                 labels.append("吸筹通道")
+            if dry_vol_ok:
+                labels.append("地量蓄势")
+            if rs_div_ok:
+                labels.append("暗中护盘")
             if sos_ok:
                 labels.append("点火破局")
                 

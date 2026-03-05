@@ -1098,6 +1098,8 @@ def run_funnel_job(
     l2_momentum = sum(1 for v in l2_channel_map.values() if "主升通道" in v)
     l2_ambush   = sum(1 for v in l2_channel_map.values() if "潜伏通道" in v)
     l2_accum    = sum(1 for v in l2_channel_map.values() if "吸筹通道" in v)
+    l2_dry_vol  = sum(1 for v in l2_channel_map.values() if "地量蓄势" in v)
+    l2_rs_div   = sum(1 for v in l2_channel_map.values() if "暗中护盘" in v)
     l2_sos      = sum(1 for v in l2_channel_map.values() if "点火破局" in v)
 
     # Layer 3 (Sector Resonance)
@@ -1144,6 +1146,8 @@ def run_funnel_job(
         "layer2_momentum": l2_momentum,
         "layer2_ambush": l2_ambush,
         "layer2_accum": l2_accum,
+        "layer2_dry_vol": l2_dry_vol,
+        "layer2_rs_div": l2_rs_div,
         "layer2_sos": l2_sos,
         "layer2_channel_map": l2_channel_map,
         "layer3": len(l3_passed),
@@ -1174,7 +1178,7 @@ def run_funnel_job(
         }
     print(
         f"[funnel] L1={metrics['layer1']}, L2={metrics['layer2']}, "
-        f"(主升={l2_momentum}, 潜伏={l2_ambush}, 吸筹={l2_accum}), "
+        f"(主升={l2_momentum}, 潜伏={l2_ambush}, 吸筹={l2_accum}, 地量={l2_dry_vol}, 护盘={l2_rs_div}, 点火={l2_sos}), "
         f"L3={metrics['layer3']}, 命中={total_hits}, "
         f"Top行业={top_sectors}, 各触发={metrics['by_trigger']}"
     )
@@ -1215,7 +1219,7 @@ def run(webhook_url: str) -> tuple[bool, list[dict], dict]:
     l2_channel_map = metrics.get("layer2_channel_map", {}) or {}
     selected_for_ai: list[str] = []
     seen_ai: set[str] = set()
-    channel_counts = {"主升通道": 0, "潜伏通道": 0, "吸筹通道": 0, "点火破局": 0}
+    channel_counts = {"主升通道": 0, "潜伏通道": 0, "吸筹通道": 0, "地量蓄势": 0, "暗中护盘": 0, "点火破局": 0}
     per_channel_cap = 10
     total_cap = 30
 
@@ -1227,6 +1231,10 @@ def run(webhook_url: str) -> tuple[bool, list[dict], dict]:
             return "潜伏通道"
         if "吸筹通道" in raw:
             return "吸筹通道"
+        if "地量蓄势" in raw:
+            return "地量蓄势"
+        if "暗中护盘" in raw:
+            return "暗中护盘"
         if "点火破局" in raw:
             return "点火破局"
         return ""
@@ -1255,6 +1263,8 @@ def run(webhook_url: str) -> tuple[bool, list[dict], dict]:
     l2_momentum = int(metrics.get("layer2_momentum", 0) or 0)
     l2_ambush   = int(metrics.get("layer2_ambush", 0) or 0)
     l2_accum    = int(metrics.get("layer2_accum", 0) or 0)
+    l2_dry_vol  = int(metrics.get("layer2_dry_vol", 0) or 0)
+    l2_rs_div   = int(metrics.get("layer2_rs_div", 0) or 0)
     l2_sos      = int(metrics.get("layer2_sos", 0) or 0)
     markup_symbols = metrics.get("markup_symbols", []) or []
     accum_stage_map = metrics.get("accum_stage_map", {}) or {}
@@ -1276,7 +1286,8 @@ def run(webhook_url: str) -> tuple[bool, list[dict], dict]:
     print(
         f"[funnel] 候选分层: 命中事件={metrics['total_hits']}, 命中股票={unique_hit_count}, "
         f"AI输入=命中{hit_selected_count}+L3补充{l3_only_count}=>{len(selected_for_ai)} "
-        f"(主升{channel_counts['主升通道']}, 潜伏{channel_counts['潜伏通道']}, 吸筹{channel_counts['吸筹通道']}, 点火{channel_counts['点火破局']}), "
+        f"(主升{channel_counts['主升通道']}, 潜伏{channel_counts['潜伏通道']}, 吸筹{channel_counts['吸筹通道']}, "
+        f"地量{channel_counts['地量蓄势']}, 护盘{channel_counts['暗中护盘']}, 点火{channel_counts['点火破局']}), "
         f"AI分析={len(selected_for_ai)}"
     )
 
@@ -1316,7 +1327,7 @@ def run(webhook_url: str) -> tuple[bool, list[dict], dict]:
         f"= {metrics['total_symbols']} (共{metrics['pool_batches']}批)"
         ),
         f"**漏斗概览**: {metrics['total_symbols']}只 → L1:{metrics['layer1']} → L2:{metrics['layer2']} → L3:{metrics['layer3']} → 命中:{metrics['total_hits']}",
-        f"**L2通道分布**: 主升{l2_momentum} | 潜伏{l2_ambush} | 吸筹{l2_accum} | 点火{l2_sos}",
+        f"**L2通道分布**: 主升{l2_momentum} | 潜伏{l2_ambush} | 吸筹{l2_accum} | 地量{l2_dry_vol} | 护盘{l2_rs_div} | 点火{l2_sos}",
         f"**威科夫阶段**: Markup{markup_count} | Accum_A{accum_a_count} | Accum_B{accum_b_count} | Accum_C{accum_c_count}",
         f"**Exit信号**: 止盈{profit_target_count} | 止损{stop_loss_count} | Distribution警告{dist_warning_count}",
         (
@@ -1329,7 +1340,8 @@ def run(webhook_url: str) -> tuple[bool, list[dict], dict]:
         (
             f"**候选分层**: L3股票{metrics['layer3']} "
             f"-> AI配额输入(L4命中{hit_selected_count}+L3补充{max(l3_only_count, 0)})={len(selected_for_ai)} "
-            f"(主升{channel_counts['主升通道']} | 潜伏{channel_counts['潜伏通道']} | 吸筹{channel_counts['吸筹通道']} | 点火{channel_counts['点火破局']})"
+            f"(主升{channel_counts['主升通道']} | 潜伏{channel_counts['潜伏通道']} | 吸筹{channel_counts['吸筹通道']} | "
+            f"地量{channel_counts['地量蓄势']} | 护盘{channel_counts['暗中护盘']} | 点火{channel_counts['点火破局']})"
         ),
         f"**Top 行业**: {', '.join(metrics['top_sectors']) if metrics['top_sectors'] else '无'}",
         "",
