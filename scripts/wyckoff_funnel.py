@@ -69,6 +69,9 @@ PANIC_SNAPSHOT_TIMEOUT = max(
     float(os.getenv("FUNNEL_PANIC_SNAPSHOT_TIMEOUT", "25.0")),
     1.0,
 )
+PANIC_SNAPSHOT_RETRIES = max(int(os.getenv("FUNNEL_PANIC_SNAPSHOT_RETRIES", "3")), 1)
+PANIC_SNAPSHOT_BACKOFF_BASE = max(float(os.getenv("FUNNEL_PANIC_SNAPSHOT_BACKOFF_BASE", "1.0")), 0.0)
+PANIC_LOCAL_MIN_SAMPLES = max(int(os.getenv("FUNNEL_PANIC_LOCAL_MIN_SAMPLES", "1000")), 1)
 BATCH_SIZE = int(os.getenv("FUNNEL_BATCH_SIZE", "250"))
 BATCH_SLEEP = float(os.getenv("FUNNEL_BATCH_SLEEP", "2"))
 MAX_WORKERS = int(os.getenv("FUNNEL_MAX_WORKERS", "8"))
@@ -768,10 +771,30 @@ def _fetch_market_extreme_snapshot(target_trade_date: date | None = None) -> dic
             return out
     try:
         import akshare as ak
+    except Exception as e:
+        print(f"[funnel] 市场极端快照模块不可用: {e}")
+        return out
 
-        with ThreadPoolExecutor(max_workers=1) as ex:
-            fut = ex.submit(ak.stock_zh_a_spot_em)
-            df = fut.result(timeout=max(timeout_s, 1.0))
+    df = None
+    for attempt in range(1, PANIC_SNAPSHOT_RETRIES + 1):
+        try:
+            with ThreadPoolExecutor(max_workers=1) as ex:
+                fut = ex.submit(ak.stock_zh_a_spot_em)
+                df = fut.result(timeout=max(timeout_s, 1.0))
+            if df is not None and not df.empty:
+                break
+            print(f"[funnel] 市场极端快照为空 (尝试 {attempt}/{PANIC_SNAPSHOT_RETRIES})")
+        except FuturesTimeoutError:
+            print(f"[funnel] 市场极端快照超时 (尝试 {attempt}/{PANIC_SNAPSHOT_RETRIES})")
+        except Exception as e:
+            print(f"[funnel] 市场极端快照获取失败 (尝试 {attempt}/{PANIC_SNAPSHOT_RETRIES}): {e}")
+
+        if attempt < PANIC_SNAPSHOT_RETRIES:
+            sleep_s = PANIC_SNAPSHOT_BACKOFF_BASE * (2 ** (attempt - 1))
+            if sleep_s > 0:
+                time.sleep(sleep_s)
+
+    try:
         if df is None or df.empty:
             return out
         snap_trade_date = _extract_spot_snapshot_trade_date(df)
@@ -797,12 +820,62 @@ def _fetch_market_extreme_snapshot(target_trade_date: date | None = None) -> dic
         out["down_10_count"] = int((pct <= -10.0).sum())
         out["up_9_count"] = int((pct >= 9.0).sum())
         return out
-    except FuturesTimeoutError:
-        print(f"[funnel] 市场极端快照超时: >{timeout_s:.1f}s")
-        return out
     except Exception as e:
-        print(f"[funnel] 市场极端快照获取失败: {e}")
+        print(f"[funnel] 市场极端快照解析失败: {e}")
         return out
+
+
+def _build_panic_snapshot_from_hist(
+    df_map: dict[str, pd.DataFrame],
+    target_date: date,
+) -> dict:
+    """
+    远端实时快照不可用时，使用本地已拉取的全市场日线做恐慌指标降级推算。
+    """
+    total = 0
+    down_extreme = 0
+    down_9 = 0
+    down_10 = 0
+    up_9 = 0
+    target_iso = target_date.isoformat()
+
+    for df in df_map.values():
+        if df is None or df.empty or "date" not in df.columns:
+            continue
+        try:
+            last_row = df.iloc[-1]
+        except Exception:
+            continue
+
+        row_date = pd.to_datetime(last_row.get("date"), errors="coerce")
+        if pd.isna(row_date):
+            continue
+        if row_date.date().isoformat() != target_iso:
+            continue
+
+        pct = pd.to_numeric(last_row.get("pct_chg"), errors="coerce")
+        if pd.isna(pct):
+            continue
+        pct_f = float(pct)
+        total += 1
+        if pct_f <= CRASH_EXTREME_DROP_PCT:
+            down_extreme += 1
+        if pct_f <= -9.0:
+            down_9 += 1
+        if pct_f <= -10.0:
+            down_10 += 1
+        if pct_f >= 9.0:
+            up_9 += 1
+
+    return {
+        "ok": total > 0,
+        "total": total,
+        "down_extreme_count": down_extreme,
+        "down_9_count": down_9,
+        "down_10_count": down_10,
+        "up_9_count": up_9,
+        "snapshot_trade_date": target_iso,
+    }
 
 
 def _dump_full_fetch_snapshot(
@@ -1325,6 +1398,24 @@ def run_funnel_job() -> tuple[dict[str, list[tuple[str, float]]], dict]:
 
     # Step 0: 大盘总闸 + 全市场广度 + 动态阈值
     breadth_context = _calc_market_breadth(all_df_map, BREADTH_MA_WINDOW)
+    if not panic_snapshot.get("ok"):
+        print("[funnel] 远端快照 API 获取失败，启动本地全量日线降级推算...")
+        local_snap = _build_panic_snapshot_from_hist(all_df_map, window.end_trade_date)
+        if int(local_snap.get("total") or 0) >= PANIC_LOCAL_MIN_SAMPLES:
+            panic_snapshot = local_snap
+            print(
+                "[funnel] 本地推算成功: "
+                f"样本={local_snap.get('total')}只, "
+                f"down_extreme({CRASH_EXTREME_DROP_PCT:g})={local_snap.get('down_extreme_count')}, "
+                f"down_9={local_snap.get('down_9_count')}, "
+                f"up_9={local_snap.get('up_9_count')}"
+            )
+        else:
+            print(
+                f"[funnel] 本地推算样本不足(仅 {local_snap.get('total')} 只，阈值 {PANIC_LOCAL_MIN_SAMPLES})，"
+                "可能日线未更新，继续按 unavailable 处理。"
+            )
+
     benchmark_context = _analyze_benchmark_and_tune_cfg(
         bench_df,
         smallcap_df,
