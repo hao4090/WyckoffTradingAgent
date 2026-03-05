@@ -903,7 +903,7 @@ def _rank_l3_watchlist(
         if hot_bonus > 0:
             parts.append("Top行业共振")
         else:
-            parts.append("行业共振通过")
+            parts.append("威科夫候选")
         if trigger_reason:
             parts.append(f"L4痕迹:{trigger_reason}")
         else:
@@ -938,7 +938,7 @@ def _rank_l3_watchlist(
     top_rows: list[dict] = []
     for _, r in rank_df.head(max(int(top_k), 0)).iterrows():
         code = str(r["code"])
-        reason = "L3共振通过"
+        reason = "威科夫候选"
         for row in ranked_rows:
             if row.get("code") == code:
                 reason = str(row.get("reason", "")).strip() or reason
@@ -1318,8 +1318,6 @@ def run(webhook_url: str) -> tuple[bool, list[dict], dict]:
     hit_selected_count = sum(1 for c in selected_for_ai if c in hit_set)
     l3_only_count = len(selected_for_ai) - hit_selected_count
     l3_score_map = metrics.get("layer3_score_map", {}) or {}
-    l3_ranked_rows = metrics.get("layer3_ranked_rows", []) or []
-    watchlist_top15 = metrics.get("watchlist_top15", []) or []
     by_trigger = metrics.get("by_trigger", {}) or {}
     l2_momentum = int(metrics.get("layer2_momentum", 0) or 0)
     l2_ambush   = int(metrics.get("layer2_ambush", 0) or 0)
@@ -1345,7 +1343,7 @@ def run(webhook_url: str) -> tuple[bool, list[dict], dict]:
         f"[funnel] 候选分层: 命中事件={metrics['total_hits']}, 命中股票={unique_hit_count}, "
         f"AI输入=命中{hit_selected_count}+L3补充{l3_only_count}=>{len(selected_for_ai)} "
         f"(主升{channel_counts['主升通道']}, 潜伏{channel_counts['潜伏通道']}, 吸筹{channel_counts['吸筹通道']}), "
-        f"AI分析={len(selected_for_ai)}, Top15自选={len(watchlist_top15)}"
+        f"AI分析={len(selected_for_ai)}"
     )
 
     bench_line = "未知"
@@ -1395,7 +1393,7 @@ def run(webhook_url: str) -> tuple[bool, list[dict], dict]:
         ),
         f"**大盘水温**: {bench_line}",
         (
-            f"**候选分层**: L3股票{metrics['layer3']} -> Top15自选更新{len(watchlist_top15)} "
+            f"**候选分层**: L3股票{metrics['layer3']} "
             f"-> AI配额输入(L4命中{hit_selected_count}+L3补充{max(l3_only_count, 0)})={len(selected_for_ai)} "
             f"(主升{channel_counts['主升通道']} | 潜伏{channel_counts['潜伏通道']} | 吸筹{channel_counts['吸筹通道']})"
         ),
@@ -1412,7 +1410,7 @@ def run(webhook_url: str) -> tuple[bool, list[dict], dict]:
         if not stage and code in markup_symbols:
             stage = "Markup"
         stage_str = f"[{stage}]" if stage else ""
-        base_reason = trigger_reason or "L3共振通过"
+        base_reason = trigger_reason or "威科夫候选"
         reasons = f"{channel} | {base_reason}" if channel else base_reason
 
         # Exit 信号
@@ -1442,54 +1440,6 @@ def run(webhook_url: str) -> tuple[bool, list[dict], dict]:
             ]
         )
 
-    if watchlist_top15:
-        lines.extend(
-            [
-                "",
-                "**Top15 自选更新（建议重点跟踪）代码 名称 | 行业 | 理由 | 分值**",
-                "",
-            ]
-        )
-        for row in watchlist_top15:
-            code = str(row.get("code", ""))
-            if not code:
-                continue
-            name = name_map.get(code, code)
-            industry = str(row.get("industry", "")).strip() or "未知行业"
-            reason = str(row.get("reason", "")).strip() or "L3共振通过"
-            channel = str(row.get("l2_channel", "")).strip()
-            score = float(row.get("score", 0.0))
-            if channel and "L2:" not in reason:
-                reason = f"L2:{channel}；{reason}"
-            lines.append(
-                f"• {code} {name} | {industry} | {reason} | score={score:.2f}"
-            )
-
-    lines.extend(
-        [
-            "",
-            f"**L3 全量清单（共{len(l3_ranked_rows)}）代码 名称 | 行业 | 选择原因 | 分值**",
-            "",
-        ]
-    )
-    if not l3_ranked_rows:
-        lines.append("无")
-    else:
-        for row in l3_ranked_rows:
-            code = str(row.get("code", ""))
-            if not code:
-                continue
-            name = name_map.get(code, code)
-            industry = str(row.get("industry", "")).strip() or "未知行业"
-            reason = str(row.get("reason", "")).strip() or "L3共振通过"
-            channel = str(row.get("l2_channel", "")).strip()
-            score = float(row.get("score", 0.0))
-            if channel and "L2:" not in reason:
-                reason = f"L2:{channel}；{reason}"
-            lines.append(
-                f"• {code} {name} | {industry} | {reason} | score={score:.2f}"
-            )
-
     content = "\n".join(lines)
     title = f"🔬 Wyckoff Funnel {date.today().strftime('%Y-%m-%d')}"
     ok = send_feishu_notification(webhook_url, title, content)
@@ -1500,7 +1450,7 @@ def run(webhook_url: str) -> tuple[bool, list[dict], dict]:
             "name": name_map.get(c, c),
             "tag": (
                 f"{str(l2_channel_map.get(c, '')).strip()} | "
-                f"{'、'.join(code_to_reasons.get(c, [])) or 'L3共振通过'}"
+                f"{'、'.join(code_to_reasons.get(c, [])) or '威科夫候选'}"
             ).strip(" |"),
         }
         for c in selected_for_ai

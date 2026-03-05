@@ -524,14 +524,12 @@ def layer3_sector_resonance(
     df_map: dict[str, pd.DataFrame] | None = None,
 ) -> tuple[list[str], list[str]]:
     """
-    统计行业分布，做“行业通过率 + 行业强度中位数”动态过滤：
+    统计行业分布，做“行业通过率 + 行业强度中位数”分析：
     - 行业通过率 = L2行业样本数 / 基准池(L1)行业样本数
     - 行业强度 = 行业内个股短中期动量分数中位数
-    最终保留同时满足：
-    1) 行业样本数 >= 动态阈值
-    2) 行业通过率 >= 动态阈值
-    3) 行业强度中位数 >= 动态阈值
-    返回 (过滤后 symbols, top_sectors)。
+    注：为了避免错杀刚刚启动的威科夫吸筹/潜伏标的，
+    本层不再对股票做硬性剔除，仅进行 Top 行业计算以供后续打分和标识使用。
+    返回 (原始输入 symbols 列表, top_sectors 强势行业列表)。
     """
     if base_symbols is None:
         base_symbols = symbols
