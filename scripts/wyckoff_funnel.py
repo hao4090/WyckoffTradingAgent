@@ -1217,7 +1217,10 @@ def run(webhook_url: str) -> tuple[bool, list[dict], dict]:
         if str(c).strip()
     ]
     l2_channel_map = metrics.get("layer2_channel_map", {}) or {}
-    
+    # 提前取出，供后面的闭包函数引用
+    markup_symbols = metrics.get("markup_symbols", []) or []
+    accum_stage_map = metrics.get("accum_stage_map", {}) or {}
+    exit_signals = metrics.get("exit_signals", {}) or {}
     # 策略：大盘水温驱动的双轨制（Top-Down 择时顺势策略）
     # 配额配置（可通过环境变量覆盖）
     total_cap = max(int(os.getenv("FUNNEL_AI_TOTAL_CAP", "20")), 0)
@@ -1426,9 +1429,6 @@ def run(webhook_url: str) -> tuple[bool, list[dict], dict]:
     l2_dry_vol  = int(metrics.get("layer2_dry_vol", 0) or 0)
     l2_rs_div   = int(metrics.get("layer2_rs_div", 0) or 0)
     l2_sos      = int(metrics.get("layer2_sos", 0) or 0)
-    markup_symbols = metrics.get("markup_symbols", []) or []
-    accum_stage_map = metrics.get("accum_stage_map", {}) or {}
-    exit_signals = metrics.get("exit_signals", {}) or {}
     markup_count = len(markup_symbols)
     accum_a_count = sum(1 for v in accum_stage_map.values() if v == "Accum_A")
     accum_b_count = sum(1 for v in accum_stage_map.values() if v == "Accum_B")
