@@ -1237,15 +1237,12 @@ def run(webhook_url: str) -> tuple[bool, list[dict], dict]:
     if regime == "RISK_ON":
         trend_quota = risk_on_trend      # Trend 占大头
         accum_quota = risk_on_accum      # Accum 补充
-        first_track = "Trend"
     elif regime == "RISK_OFF":
         trend_quota = risk_off_trend     # Trend 只补充
         accum_quota = risk_off_accum     # Accum 占大头
-        first_track = "Accum"
     else:  # NEUTRAL
         trend_quota = neutral_trend      # 平衡
         accum_quota = neutral_accum
-        first_track = "Trend"  # 中立时优先主升
 
     trend_channel_tags = {"主升通道", "点火破局"}
     accum_channel_tags = {"潜伏通道", "吸筹通道", "地量蓄势", "暗中护盘"}
@@ -1279,15 +1276,35 @@ def run(webhook_url: str) -> tuple[bool, list[dict], dict]:
     sos_hit_set = set(str(code).strip() for code, _ in triggers.get("sos", []))
     spring_hit_set = set(str(code).strip() for code, _ in triggers.get("spring", []))
     lps_hit_set = set(str(code).strip() for code, _ in triggers.get("lps", []))
+    blocked_exit_signals = {"stop_loss", "distribution_warning"}
+
+    def _stage_name(code: str) -> str:
+        stage = str(accum_stage_map.get(code, "")).strip()
+        if stage:
+            return stage
+        if code in markup_symbols:
+            return "Markup"
+        return ""
+
+    def _is_blocked_exit(code: str) -> bool:
+        sig = str((exit_signals.get(code, {}) or {}).get("signal", "")).strip()
+        return sig in blocked_exit_signals
 
     # 构建候选集，并计算优先级权重
     def _calc_priority_score(code: str, is_trend_side: bool) -> float:
         """计算优先级分数（越高越优先）"""
         score = 0.0
+        stage_name = _stage_name(code)
 
         # Markup 股票加权（+100）
         if code in markup_symbols:
             score += 100.0
+        if stage_name == "Accum_C":
+            score += 35.0 if not is_trend_side else 10.0
+        elif stage_name == "Accum_B":
+            score += 18.0 if not is_trend_side else 5.0
+        elif stage_name == "Accum_A":
+            score += 8.0 if not is_trend_side else 0.0
 
         # 触发信号加权
         if code in sos_hit_set:
@@ -1296,6 +1313,10 @@ def run(webhook_url: str) -> tuple[bool, list[dict], dict]:
             score += 45.0
         if code in lps_hit_set:
             score += 40.0
+        if is_trend_side and code in sos_hit_set:
+            score += 10.0
+        if (not is_trend_side) and (code in spring_hit_set or code in lps_hit_set):
+            score += 10.0
 
         # Exit 信号减权
         exit_sig = exit_signals.get(code, {})
@@ -1333,7 +1354,11 @@ def run(webhook_url: str) -> tuple[bool, list[dict], dict]:
 
     # 其他 Trend 通道的候选
     for code in sorted_codes + l3_ranked_symbols:
-        if _is_trend_track(code) and code not in [c[0] for c in trend_candidates_with_score]:
+        if (
+            _is_trend_track(code)
+            and not _is_blocked_exit(code)
+            and code not in [c[0] for c in trend_candidates_with_score]
+        ):
             score = _calc_priority_score(code, True)
             trend_candidates_with_score.append((code, score))
 
@@ -1341,12 +1366,18 @@ def run(webhook_url: str) -> tuple[bool, list[dict], dict]:
     accum_hit_candidates = triggers.get("spring", []) + triggers.get("lps", [])
     for code, _ in sorted(accum_hit_candidates, key=lambda x: -float(x[1] if x[1] is not None else 0.0)):
         code = str(code).strip()
+        if _is_blocked_exit(code):
+            continue
         score = _calc_priority_score(code, False)
         accum_candidates_with_score.append((code, score))
 
     # 其他 Accum 通道的候选
     for code in sorted_codes + l3_ranked_symbols:
-        if _is_accum_track(code) and code not in [c[0] for c in accum_candidates_with_score]:
+        if (
+            _is_accum_track(code)
+            and not _is_blocked_exit(code)
+            and code not in [c[0] for c in accum_candidates_with_score]
+        ):
             score = _calc_priority_score(code, False)
             accum_candidates_with_score.append((code, score))
 
@@ -1354,8 +1385,8 @@ def run(webhook_url: str) -> tuple[bool, list[dict], dict]:
     trend_candidates_with_score.sort(key=lambda x: -x[1])
     accum_candidates_with_score.sort(key=lambda x: -x[1])
 
-    trend_candidates = [c[0] for c in trend_candidates_with_score]
-    accum_candidates = [c[0] for c in accum_candidates_with_score]
+    trend_candidates = [c[0] for c in trend_candidates_with_score if not _is_blocked_exit(c[0])]
+    accum_candidates = [c[0] for c in accum_candidates_with_score if not _is_blocked_exit(c[0])]
 
     selected_seen: set[str] = set()
     trend_selected: list[str] = []
@@ -1442,6 +1473,10 @@ def run(webhook_url: str) -> tuple[bool, list[dict], dict]:
     dist_warning_count = sum(
         1 for sig in exit_signals.values() if sig.get("signal") == "distribution_warning"
     )
+    blocked_exit_codes = [
+        code for code in l3_ranked_symbols
+        if _is_blocked_exit(code)
+    ]
 
     print(
         f"[funnel] 候选分层: 命中事件={metrics['total_hits']}, 命中股票={unique_hit_count}, "
@@ -1499,7 +1534,7 @@ def run(webhook_url: str) -> tuple[bool, list[dict], dict]:
             f"**候选分层**: L3股票{metrics['layer3']} "
             f"-> AI双轨输入={len(selected_for_ai)} "
             f"[{regime} 配额 Trend={trend_quota}/Accum={accum_quota}, 总上限{total_cap}] "
-            f"[Markup优先{len([c for c in selected_for_ai if c in markup_symbols])} | L4命中{hit_selected_count}]"
+            f"[Markup优先{len([c for c in selected_for_ai if c in markup_symbols])} | L4命中{hit_selected_count} | 硬剔除{len(blocked_exit_codes)}]"
         ),
         f"**Top 行业**: {', '.join(metrics['top_sectors']) if metrics['top_sectors'] else '无'}",
         "",
@@ -1578,6 +1613,16 @@ def run(webhook_url: str) -> tuple[bool, list[dict], dict]:
                 f"{str(l2_channel_map.get(c, '')).strip()} | "
                 f"{'、'.join(code_to_reasons.get(c, [])) or '威科夫候选'}"
             ).strip(" |"),
+            "track": (
+                "Trend"
+                if c in trend_selected
+                else "Accum" if c in accum_selected else ""
+            ),
+            "stage": _stage_name(c),
+            "score": float(l3_score_map.get(c, 0.0)),
+            "exit_signal": str((exit_signals.get(c, {}) or {}).get("signal", "")).strip(),
+            "exit_price": (exit_signals.get(c, {}) or {}).get("price"),
+            "exit_reason": str((exit_signals.get(c, {}) or {}).get("reason", "")).strip(),
         }
         for c in selected_for_ai
     ]

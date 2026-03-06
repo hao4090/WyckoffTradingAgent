@@ -529,6 +529,12 @@ def generate_stock_payload(
     quant_score: float | None = None,
     industry_rank: int | None = None,
     policy_tag: str | None = None,
+    track: str | None = None,
+    stage: str | None = None,
+    funnel_score: float | None = None,
+    exit_signal: str | None = None,
+    exit_price: float | None = None,
+    exit_reason: str | None = None,
 ) -> str:
     """
     第五步：将 500 天 OHLCV 浓缩为发给 AI 的高密度文本。
@@ -568,6 +574,22 @@ def generate_stock_payload(
         f"  [价格锚点] 最新实际收盘价={close_val:.2f}（执行建议需围绕该锚点给出结构战区，不得给单点预测价）。\n"
         f"{background}\n"
     )
+    machine_ctx: list[str] = []
+    if track:
+        machine_ctx.append(f"AI轨道={track}")
+    if stage:
+        machine_ctx.append(f"阶段={stage}")
+    if funnel_score is not None:
+        machine_ctx.append(f"漏斗分={funnel_score:.3f}")
+    if exit_signal:
+        exit_text = f"Exit={exit_signal}"
+        if exit_price is not None:
+            exit_text += f"@{float(exit_price):.2f}"
+        if exit_reason:
+            exit_text += f"({exit_reason})"
+        machine_ctx.append(exit_text)
+    if machine_ctx:
+        header += f"  [机器上下文] {' | '.join(machine_ctx)}\n"
     if industry:
         header += f"  [行业] {industry}\n"
     if quant_score is not None:
@@ -697,6 +719,12 @@ def run(
                     "code": code,
                     "name": name,
                     "tag": tag,
+                    "track": str(item.get("track", "")).strip(),
+                    "stage": str(item.get("stage", "")).strip(),
+                    "funnel_score": pd.to_numeric(item.get("score"), errors="coerce"),
+                    "exit_signal": str(item.get("exit_signal", "")).strip(),
+                    "exit_price": pd.to_numeric(item.get("exit_price"), errors="coerce"),
+                    "exit_reason": str(item.get("exit_reason", "")).strip(),
                     "industry": sector_map.get(code, "未知行业"),
                     "bias_200": bias_200,
                     "rs_10": rs_10,
@@ -717,7 +745,10 @@ def run(
     candidates_df["code"] = candidates_df["code"].astype(str).str.strip()
     candidates_df["policy_tag"] = ""
     selected_df = candidates_df.copy()
-    selected_df["wyckoff_score"] = pd.NA
+    selected_df["wyckoff_score"] = pd.to_numeric(
+        selected_df.get("funnel_score"),
+        errors="coerce",
+    )
     selected_df["industry_rank"] = pd.NA
 
     if STEP3_ENABLE_COMPRESSION:
@@ -822,6 +853,16 @@ def run(
             quant_score=float(row["wyckoff_score"]) if pd.notna(row.get("wyckoff_score")) else None,
             industry_rank=int(row["industry_rank"]) if pd.notna(row.get("industry_rank")) else None,
             policy_tag=policy_text,
+            track=str(row.get("track", "")).strip() or None,
+            stage=str(row.get("stage", "")).strip() or None,
+            funnel_score=(
+                float(row["funnel_score"]) if pd.notna(row.get("funnel_score")) else None
+            ),
+            exit_signal=str(row.get("exit_signal", "")).strip() or None,
+            exit_price=(
+                float(row["exit_price"]) if pd.notna(row.get("exit_price")) else None
+            ),
+            exit_reason=str(row.get("exit_reason", "")).strip() or None,
         )
         parts.append(payload)
 
