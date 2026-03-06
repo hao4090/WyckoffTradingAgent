@@ -44,6 +44,8 @@ from core.wyckoff_engine import (
     detect_markup_stage,
     detect_accum_stage,
     layer5_exit_signals,
+    FunnelResult,
+    allocate_ai_candidates,
 )
 from integrations.data_source import (
     fetch_index_hist,
@@ -1222,215 +1224,26 @@ def run(webhook_url: str) -> tuple[bool, list[dict], dict]:
     accum_stage_map = metrics.get("accum_stage_map", {}) or {}
     exit_signals = metrics.get("exit_signals", {}) or {}
     # 策略：大盘水温驱动的双轨制（Top-Down 择时顺势策略）
-    # 配额配置（可通过环境变量覆盖）
-    total_cap = max(int(os.getenv("FUNNEL_AI_TOTAL_CAP", "20")), 0)
-    risk_on_trend = max(int(os.getenv("FUNNEL_AI_RISK_ON_TREND", "15")), 0)
-    risk_on_accum = max(int(os.getenv("FUNNEL_AI_RISK_ON_ACCUM", "8")), 0)
-    risk_off_trend = max(int(os.getenv("FUNNEL_AI_RISK_OFF_TREND", "8")), 0)
-    risk_off_accum = max(int(os.getenv("FUNNEL_AI_RISK_OFF_ACCUM", "15")), 0)
-    neutral_trend = max(int(os.getenv("FUNNEL_AI_NEUTRAL_TREND", "10")), 0)
-    neutral_accum = max(int(os.getenv("FUNNEL_AI_NEUTRAL_ACCUM", "10")), 0)
-
     regime = benchmark_context.get("regime", "NEUTRAL")
-
-    # 根据大盘水温动态分配配额（确保轨道差异化）
-    if regime == "RISK_ON":
-        trend_quota = risk_on_trend      # Trend 占大头
-        accum_quota = risk_on_accum      # Accum 补充
-    elif regime == "RISK_OFF":
-        trend_quota = risk_off_trend     # Trend 只补充
-        accum_quota = risk_off_accum     # Accum 占大头
-    else:  # NEUTRAL
-        trend_quota = neutral_trend      # 平衡
-        accum_quota = neutral_accum
-
-    trend_channel_tags = {"主升通道", "点火破局"}
-    accum_channel_tags = {"潜伏通道", "吸筹通道", "地量蓄势", "暗中护盘"}
-
+    mock_result = FunnelResult(
+        layer1_symbols=[],
+        layer2_symbols=[],
+        layer3_symbols=metrics.get("layer3_symbols", []) or [],
+        top_sectors=[],
+        triggers=triggers,
+        stage_map=accum_stage_map,
+        markup_symbols=markup_symbols,
+        exit_signals=exit_signals,
+        channel_map=l2_channel_map,
+    )
+    trend_selected, accum_selected, score_map = allocate_ai_candidates(mock_result, l3_ranked_symbols, regime)
+    selected_for_ai = trend_selected + accum_selected
+    
     def _channel_tags(code: str) -> set[str]:
         raw = str(l2_channel_map.get(code, "")).strip()
         if not raw:
             return set()
         return {x.strip() for x in raw.split("+") if x.strip()}
-
-    def _is_trend_track(code: str) -> bool:
-        tags = _channel_tags(code)
-        return bool(tags & trend_channel_tags)
-
-    def _is_accum_track(code: str) -> bool:
-        tags = _channel_tags(code)
-        return bool(tags & accum_channel_tags)
-
-    def _dedup_order(codes: list[str]) -> list[str]:
-        out: list[str] = []
-        seen: set[str] = set()
-        for code in codes:
-            c = str(code).strip()
-            if not c or c in seen:
-                continue
-            seen.add(c)
-            out.append(c)
-        return out
-
-    # 构建触发信号映射（用于优先级判定）
-    sos_hit_set = set(str(code).strip() for code, _ in triggers.get("sos", []))
-    spring_hit_set = set(str(code).strip() for code, _ in triggers.get("spring", []))
-    lps_hit_set = set(str(code).strip() for code, _ in triggers.get("lps", []))
-    evr_hit_set = set(str(code).strip() for code, _ in triggers.get("evr", []))
-    blocked_exit_signals = {"stop_loss", "distribution_warning"}
-
-    def _stage_name(code: str) -> str:
-        stage = str(accum_stage_map.get(code, "")).strip()
-        if stage:
-            return stage
-        if code in markup_symbols:
-            return "Markup"
-        return ""
-
-    def _is_blocked_exit(code: str) -> bool:
-        sig = str((exit_signals.get(code, {}) or {}).get("signal", "")).strip()
-        return sig in blocked_exit_signals
-
-    # 构建候选集，并计算优先级权重
-    def _calc_priority_score(code: str, is_trend_side: bool) -> float:
-        """计算优先级分数（越高越优先）"""
-        score = 0.0
-        stage_name = _stage_name(code)
-
-        # Markup 股票加权（+100）
-        if code in markup_symbols:
-            score += 100.0
-        if stage_name == "Accum_C":
-            score += 35.0 if not is_trend_side else 10.0
-        elif stage_name == "Accum_B":
-            score += 18.0 if not is_trend_side else 5.0
-        elif stage_name == "Accum_A":
-            score += 8.0 if not is_trend_side else 0.0
-
-        # 触发信号加权
-        if code in sos_hit_set:
-            score += 50.0
-        if code in spring_hit_set:
-            score += 45.0
-        if code in lps_hit_set:
-            score += 40.0
-        if is_trend_side and code in sos_hit_set:
-            score += 10.0
-        if (not is_trend_side) and (code in spring_hit_set or code in lps_hit_set):
-            score += 10.0
-
-        # Exit 信号减权
-        exit_sig = exit_signals.get(code, {})
-        if exit_sig.get("signal") == "profit_target":
-            score -= 30.0  # 已达止盈，降低优先级但不排除
-        elif exit_sig.get("signal") == "stop_loss":
-            score -= 100.0  # 触发止损，几乎不选
-        elif exit_sig.get("signal") == "distribution_warning":
-            score -= 20.0  # Distribution 警告，略微降低
-
-        return score
-
-    # 优先级排序的候选集
-    trend_candidates_with_score = []
-    accum_candidates_with_score = []
-
-    # L4触发 + Markup 股票优先入 Trend
-    markup_trend_candidates = [c for c in markup_symbols if _is_trend_track(c) or c in sos_hit_set]
-    for code in _dedup_order(markup_trend_candidates):
-        score = _calc_priority_score(code, True)
-        trend_candidates_with_score.append((code, score))
-
-    # SOS 触发的 Trend 股票
-    sos_hit_codes = [
-        str(code).strip()
-        for code, _ in sorted(
-            triggers.get("sos", []), key=lambda x: -float(x[1] if x[1] is not None else 0.0)
-        )
-        if str(code).strip()
-    ]
-    for code in _dedup_order(sos_hit_codes):
-        if code not in [c[0] for c in trend_candidates_with_score]:
-            score = _calc_priority_score(code, True)
-            trend_candidates_with_score.append((code, score))
-
-    # 其他 Trend 通道的候选
-    for code in sorted_codes + l3_ranked_symbols:
-        if (
-            _is_trend_track(code)
-            and not _is_blocked_exit(code)
-            and code not in [c[0] for c in trend_candidates_with_score]
-        ):
-            score = _calc_priority_score(code, True)
-            trend_candidates_with_score.append((code, score))
-
-    # Accum 触发（Spring/LPS）
-    accum_hit_candidates = triggers.get("spring", []) + triggers.get("lps", [])
-    for code, _ in sorted(accum_hit_candidates, key=lambda x: -float(x[1] if x[1] is not None else 0.0)):
-        code = str(code).strip()
-        if _is_blocked_exit(code):
-            continue
-        score = _calc_priority_score(code, False)
-        accum_candidates_with_score.append((code, score))
-
-    # 其他 Accum 通道的候选
-    for code in sorted_codes + l3_ranked_symbols:
-        if (
-            _is_accum_track(code)
-            and not _is_blocked_exit(code)
-            and code not in [c[0] for c in accum_candidates_with_score]
-        ):
-            score = _calc_priority_score(code, False)
-            accum_candidates_with_score.append((code, score))
-
-    # 按优先级排序
-    trend_candidates_with_score.sort(key=lambda x: -x[1])
-    accum_candidates_with_score.sort(key=lambda x: -x[1])
-
-    trend_candidates = [c[0] for c in trend_candidates_with_score if not _is_blocked_exit(c[0])]
-    accum_candidates = [c[0] for c in accum_candidates_with_score if not _is_blocked_exit(c[0])]
-
-    selected_seen: set[str] = set()
-    trend_selected: list[str] = []
-    accum_selected: list[str] = []
-
-    def _add_to_selected(code: str, track_name: str) -> bool:
-        if total_cap > 0 and len(selected_seen) >= total_cap:
-            return False
-        if code in selected_seen:
-            return False
-        if track_name == "Trend":
-            if len(trend_selected) >= trend_quota:
-                return False
-            trend_selected.append(code)
-        else:
-            if len(accum_selected) >= accum_quota:
-                return False
-            accum_selected.append(code)
-        selected_seen.add(code)
-        return True
-
-    # 改进的选入策略：两轨轮番补充（而非一轨拿满再补充）
-    # 这样可以确保两轨都有最高优先级的候选
-    trend_idx = 0
-    accum_idx = 0
-
-    # 轮番从两轨中各取一个，直到配额满或候选耗尽
-    while (len(trend_selected) < trend_quota or len(accum_selected) < accum_quota) and (trend_idx < len(trend_candidates) or accum_idx < len(accum_candidates)):
-        # Trend 轨补充
-        if len(trend_selected) < trend_quota and trend_idx < len(trend_candidates):
-            code = trend_candidates[trend_idx]
-            trend_idx += 1
-            if code not in selected_seen:
-                _add_to_selected(code, "Trend")
-
-        # Accum 轨补充
-        if len(accum_selected) < accum_quota and accum_idx < len(accum_candidates):
-            code = accum_candidates[accum_idx]
-            accum_idx += 1
-            if code not in selected_seen:
-                _add_to_selected(code, "Accum")
-
-    selected_for_ai = trend_selected + accum_selected
 
     hit_set = set(sorted_codes)
     hit_selected_count = sum(1 for c in selected_for_ai if c in hit_set)

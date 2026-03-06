@@ -757,7 +757,19 @@ def generate_stock_payload(
         background = f"  [结构背景] 现价:{close_val:.2f}（数据不足以计算 MA200）"
 
     policy_prefix = f" {policy_tag}" if policy_tag else ""
-    tag_text = f" | 候选标签：{wyckoff_tag}" if str(wyckoff_tag or "").strip() else ""
+    tag_text = ""
+    raw_tag = str(wyckoff_tag or "").strip()
+    if raw_tag:
+        # Convert internal trigger tags to neutral fact-based labels
+        facts = []
+        for t in ["sos", "spring", "lps", "evr"]:
+            if t.lower() in raw_tag.lower():
+                facts.append(t.upper())
+        if facts:
+            tag_text = f" | 触发事实：{'/'.join(facts)}"
+        else:
+            tag_text = f" | 触发事实：{raw_tag}"
+            
     header = (
         f"• {stock_code} {stock_name}{policy_prefix}{tag_text}\n"
         f"  [价格锚点] 最新实际收盘价={close_val:.2f}（执行建议需围绕该锚点给出结构战区，不得给单点预测价）。\n"
@@ -766,7 +778,7 @@ def generate_stock_payload(
     if stage:
         header += f"  [阶段参考] {stage}\n"
     if industry:
-        header += f"  [行业] {industry}\n"
+        header += f"  [行业/主营] {industry}\n"
 
     supply_summary = _build_supply_demand_summary(df)
 
@@ -1061,17 +1073,12 @@ def run(
             f"ma50_slope_5d={benchmark_context.get('ma50_slope_5d')}"
         )
         benchmark_lines.append(
-            f"recent3_pct={benchmark_context.get('recent3_pct')}, "
-            f"recent3_cum_pct={benchmark_context.get('recent3_cum_pct')}, "
-            f"tuned={benchmark_context.get('tuned')}"
+            f"recent3_cum_pct={benchmark_context.get('recent3_cum_pct')}"
         )
         if breadth_ctx:
             benchmark_lines.append(
                 f"breadth_pct={breadth_ctx.get('ratio_pct')}, "
-                f"breadth_prev_pct={breadth_ctx.get('prev_ratio_pct')}, "
-                f"breadth_delta_pct={breadth_ctx.get('delta_pct')}, "
-                f"breadth_sample={breadth_ctx.get('sample_size')}, "
-                f"breadth_ma_window={breadth_ctx.get('ma_window')}"
+                f"breadth_delta_pct={breadth_ctx.get('delta_pct')}"
             )
 
     active_tracks = [

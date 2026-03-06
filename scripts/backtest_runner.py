@@ -28,7 +28,7 @@ import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core.wyckoff_engine import FunnelConfig, normalize_hist_from_fetch, run_funnel
+from core.wyckoff_engine import FunnelConfig, normalize_hist_from_fetch, run_funnel, allocate_ai_candidates
 from integrations.data_source import fetch_index_hist, fetch_market_cap_map, fetch_sector_map, fetch_stock_hist
 from integrations.fetch_a_share_csv import get_stocks_by_board, _normalize_symbols
 from scripts.wyckoff_funnel import (
@@ -396,8 +396,10 @@ def run_backtest(
         bench_df = bench_df.dropna(subset=["date"]).reset_index(drop=True)
 
     trade_dates = [d for d in bench_df["date"].tolist() if start_dt <= d <= end_dt]
+    print(f"[backtest] DEBUG: start={start_dt}, end={end_dt}, bench_min={bench_df['date'].min()}, bench_max={bench_df['date'].max()}")
+    print(f"[backtest] DEBUG: trade_dates count={len(trade_dates)}")
     if len(trade_dates) <= hold_days:
-        raise RuntimeError("回测区间交易日过少，无法计算 forward return")
+        raise RuntimeError(f"回测区间交易日过少({len(trade_dates)})，无法计算 forward return (hold_days={hold_days})")
 
     if use_current_meta:
         market_cap_map = fetch_market_cap_map()
@@ -464,12 +466,17 @@ def run_backtest(
             sector_map=sector_map,
             cfg=day_cfg,
         )
-        score_map = _combine_trigger_scores(result.triggers)
-        if not score_map:
+        
+        regime = day_breadth.get("regime", "NEUTRAL")
+        trend_sel, accum_sel, p_score_map = allocate_ai_candidates(result, result.layer3_symbols, regime)
+        merged_candidates = trend_sel + accum_sel
+        
+        if not merged_candidates:
             continue
-
+            
+        # Optional tie_breaker_map just to strictly order same priority scores
         tie_breaker_map = {}
-        for c in score_map.keys():
+        for c in merged_candidates:
             cdf = day_df_map.get(c)
             if cdf is not None and len(cdf) >= 21:
                 try:
@@ -481,13 +488,17 @@ def run_backtest(
             tie_breaker_map[c] = tb
 
         ranked_codes = sorted(
-            score_map.keys(),
+            merged_candidates,
             key=lambda c: (
-                -score_map[c][0],
+                -p_score_map.get(c, 0.0),
                 -tie_breaker_map.get(c, 0.0),
                 c,
             ),
         )[:top_n]
+        
+        # Only needed for string names
+        name_score_map = _combine_trigger_scores(result.triggers)
+
         signal_days += 1
         for code in ranked_codes:
             full_df = all_df_map.get(code)
@@ -566,7 +577,8 @@ def run_backtest(
             if entry_exec <= 0:
                 continue
             ret_pct = (exit_exec - entry_exec) / entry_exec * 100.0
-            score, trigger_name = score_map[code]
+            _, trigger_name = name_score_map.get(code, (0.0, "Layer3_Backup"))
+            score = float(p_score_map.get(code, 0.0))
             records.append(
                 TradeRecord(
                     signal_date=signal_date,

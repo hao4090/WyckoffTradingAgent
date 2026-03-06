@@ -207,6 +207,7 @@ class FunnelResult(NamedTuple):
     stage_map: dict[str, str]  # code -> stage_name（如 "Accumulation A"、"Markup"、"Distribution"）
     markup_symbols: list[str]  # 已进入 Markup 的股票
     exit_signals: dict[str, dict]  # code -> {"signal": "profit_target|stop_loss", "price": xxx, "reason": xxx}
+    channel_map: dict[str, str]
 
 
 
@@ -1392,7 +1393,7 @@ def run_funnel(
     }
 
     l1 = layer1_filter(all_symbols, name_map, market_cap_map, prepared_df_map, cfg)
-    l2 = layer2_strength(l1, prepared_df_map, bench_df, cfg)
+    l2, channel_map = layer2_strength_detailed(l1, prepared_df_map, bench_df, cfg)
     l3, top_sectors = layer3_sector_resonance(
         l2,
         sector_map,
@@ -1425,4 +1426,194 @@ def run_funnel(
         stage_map=stage_map,
         markup_symbols=markup_symbols,
         exit_signals=exit_signals,
+        channel_map=channel_map,
     )
+
+
+def allocate_ai_candidates(
+    result: FunnelResult,
+    l3_ranked_symbols: list[str],
+    regime: str,
+    override_total_cap: int = -1,
+) -> tuple[list[str], list[str], dict[str, float]]:
+    """
+    根据大盘政权和各轨配额，计算优先级得分，输出 (trend_selected, accum_selected, score_map)
+    """
+    import os
+
+    total_cap = max(int(os.getenv("FUNNEL_AI_TOTAL_CAP", "20")), 0) if override_total_cap < 0 else max(override_total_cap, 0)
+    risk_on_trend = max(int(os.getenv("FUNNEL_AI_RISK_ON_TREND", "15")), 0)
+    risk_on_accum = max(int(os.getenv("FUNNEL_AI_RISK_ON_ACCUM", "8")), 0)
+    risk_off_trend = max(int(os.getenv("FUNNEL_AI_RISK_OFF_TREND", "5")), 0)
+    risk_off_accum = max(int(os.getenv("FUNNEL_AI_RISK_OFF_ACCUM", "15")), 0)
+    neutral_trend = max(int(os.getenv("FUNNEL_AI_NEUTRAL_TREND", "10")), 0)
+    neutral_accum = max(int(os.getenv("FUNNEL_AI_NEUTRAL_ACCUM", "10")), 0)
+
+    if regime == "RISK_ON":
+        trend_quota = risk_on_trend
+        accum_quota = risk_on_accum
+    elif regime == "RISK_OFF":
+        trend_quota = risk_off_trend
+        accum_quota = risk_off_accum
+    else:
+        trend_quota = neutral_trend
+        accum_quota = neutral_accum
+
+    trend_channel_tags = {"主升通道", "点火破局"}
+    accum_channel_tags = {"潜伏通道", "吸筹通道", "地量蓄势", "暗中护盘"}
+
+    def _channel_tags(code: str) -> set[str]:
+        raw = str(result.channel_map.get(code, "")).strip()
+        if not raw:
+            return set()
+        return {x.strip() for x in raw.split("+") if x.strip()}
+
+    def _is_trend_track(code: str) -> bool:
+        return bool(_channel_tags(code) & trend_channel_tags)
+
+    def _is_accum_track(code: str) -> bool:
+        return bool(_channel_tags(code) & accum_channel_tags)
+
+    def _dedup_order(codes: list[str]) -> list[str]:
+        out = []
+        seen = set()
+        for c in codes:
+            c = str(c).strip()
+            if c and c not in seen:
+                seen.add(c)
+                out.append(c)
+        return out
+
+    sos_hit_set = set(str(c).strip() for c, _ in result.triggers.get("sos", []))
+    spring_hit_set = set(str(c).strip() for c, _ in result.triggers.get("spring", []))
+    lps_hit_set = set(str(c).strip() for c, _ in result.triggers.get("lps", []))
+    # evr_hit_set = set(str(c).strip() for c, _ in result.triggers.get("evr", []))
+    blocked_exit_signals = {"stop_loss", "distribution_warning"}
+
+    def _stage_name(code: str) -> str:
+        return result.stage_map.get(code, "")
+
+    def _is_blocked_exit(code: str) -> bool:
+        sig = str((result.exit_signals.get(code, {}) or {}).get("signal", "")).strip()
+        return sig in blocked_exit_signals
+
+    def _calc_priority_score(code: str, is_trend_side: bool) -> float:
+        score = 0.0
+        stage_name = _stage_name(code)
+        
+        if code in result.markup_symbols:
+            score += 100.0
+        if stage_name == "Accum_C":
+            score += 35.0 if not is_trend_side else 10.0
+        elif stage_name == "Accum_B":
+            score += 18.0 if not is_trend_side else 5.0
+        elif stage_name == "Accum_A":
+            score += 8.0 if not is_trend_side else 0.0
+
+        if code in sos_hit_set:
+            score += 50.0
+        if code in spring_hit_set:
+            score += 45.0
+        if code in lps_hit_set:
+            score += 40.0
+        if is_trend_side and code in sos_hit_set:
+            score += 10.0
+        if (not is_trend_side) and (code in spring_hit_set or code in lps_hit_set):
+            score += 10.0
+
+        exit_sig = result.exit_signals.get(code, {})
+        if exit_sig.get("signal") == "profit_target":
+            score -= 30.0
+        elif exit_sig.get("signal") == "stop_loss":
+            score -= 100.0
+        elif exit_sig.get("signal") == "distribution_warning":
+            score -= 20.0
+
+        return score
+
+    trend_candidates_with_score = []
+    accum_candidates_with_score = []
+
+    markup_trend_candidates = [c for c in result.markup_symbols if _is_trend_track(c) or c in sos_hit_set]
+    for code in _dedup_order(markup_trend_candidates):
+        trend_candidates_with_score.append((code, _calc_priority_score(code, True)))
+
+    sos_hit_codes = [
+        str(c).strip()
+        for c, _ in sorted(result.triggers.get("sos", []), key=lambda x: -float(x[1] if x[1] is not None else 0.0))
+        if str(c).strip()
+    ]
+    for code in _dedup_order(sos_hit_codes):
+        if code not in [c[0] for c in trend_candidates_with_score]:
+            trend_candidates_with_score.append((code, _calc_priority_score(code, True)))
+
+    # Compute `sorted_codes` implicitly from triggers like funnel does
+    all_triggers = []
+    for k, v in result.triggers.items():
+        all_triggers.extend(v)
+    sorted_codes = [c for c, _ in sorted(all_triggers, key=lambda x: -float(x[1] if x[1] is not None else 0.0))]
+    sorted_codes = _dedup_order(sorted_codes)
+
+    for code in sorted_codes + l3_ranked_symbols:
+        if _is_trend_track(code) and not _is_blocked_exit(code) and code not in [c[0] for c in trend_candidates_with_score]:
+            trend_candidates_with_score.append((code, _calc_priority_score(code, True)))
+
+    accum_hit_candidates = result.triggers.get("spring", []) + result.triggers.get("lps", [])
+    for code, _ in sorted(accum_hit_candidates, key=lambda x: -float(x[1] if x[1] is not None else 0.0)):
+        code = str(code).strip()
+        if _is_blocked_exit(code):
+            continue
+        accum_candidates_with_score.append((code, _calc_priority_score(code, False)))
+
+    for code in sorted_codes + l3_ranked_symbols:
+        if _is_accum_track(code) and not _is_blocked_exit(code) and code not in [c[0] for c in accum_candidates_with_score]:
+            accum_candidates_with_score.append((code, _calc_priority_score(code, False)))
+
+    trend_candidates_with_score.sort(key=lambda x: -x[1])
+    accum_candidates_with_score.sort(key=lambda x: -x[1])
+
+    trend_candidates = [c[0] for c in trend_candidates_with_score if not _is_blocked_exit(c[0])]
+    accum_candidates = [c[0] for c in accum_candidates_with_score if not _is_blocked_exit(c[0])]
+
+    selected_seen = set()
+    trend_selected = []
+    accum_selected = []
+
+    def _add_to_selected(code: str, track_name: str) -> bool:
+        if total_cap > 0 and len(selected_seen) >= total_cap:
+            return False
+        if code in selected_seen:
+            return False
+        if track_name == "Trend":
+            if len(trend_selected) >= trend_quota:
+                return False
+            trend_selected.append(code)
+        else:
+            if len(accum_selected) >= accum_quota:
+                return False
+            accum_selected.append(code)
+        selected_seen.add(code)
+        return True
+
+    trend_idx = 0
+    accum_idx = 0
+
+    while (len(trend_selected) < trend_quota or len(accum_selected) < accum_quota) and (trend_idx < len(trend_candidates) or accum_idx < len(accum_candidates)):
+        if len(trend_selected) < trend_quota and trend_idx < len(trend_candidates):
+            code = trend_candidates[trend_idx]
+            trend_idx += 1
+            if code not in selected_seen:
+                _add_to_selected(code, "Trend")
+        if len(accum_selected) < accum_quota and accum_idx < len(accum_candidates):
+            code = accum_candidates[accum_idx]
+            accum_idx += 1
+            if code not in selected_seen:
+                _add_to_selected(code, "Accum")
+
+    score_map = {}
+    for c, s in trend_candidates_with_score:
+        score_map[c] = s
+    for c, s in accum_candidates_with_score:
+        score_map[c] = max(score_map.get(c, -9999.0), s)
+
+    return trend_selected, accum_selected, score_map
