@@ -20,7 +20,12 @@ from integrations.ai_prompts import WYCKOFF_FUNNEL_SYSTEM_PROMPT
 from integrations.fetch_a_share_csv import _resolve_trading_window, _fetch_hist
 from integrations.llm_client import call_llm
 from integrations.rag_veto import is_rag_veto_enabled, run_negative_news_veto
-from integrations.data_source import fetch_index_hist, fetch_sector_map, fetch_stock_spot_snapshot
+from integrations.data_source import (
+    fetch_index_hist,
+    fetch_market_cap_map,
+    fetch_sector_map,
+    fetch_stock_spot_snapshot,
+)
 from utils.feishu import send_feishu_notification
 from utils.trading_clock import CN_TZ, resolve_end_calendar_day
 from core.wyckoff_engine import normalize_hist_from_fetch
@@ -714,6 +719,8 @@ def generate_stock_payload(
     df: pd.DataFrame,
     *,
     industry: str | None = None,
+    market_cap_yi: float | None = None,
+    avg_amount_20_yi: float | None = None,
     quant_score: float | None = None,
     industry_rank: int | None = None,
     policy_tag: str | None = None,
@@ -726,22 +733,42 @@ def generate_stock_payload(
 ) -> str:
     """
     第五步：将 500 天 OHLCV 浓缩为发给 AI 的高密度文本。
-    1. 大背景（MA50 / MA200 / 乖离率）
-    2. 近 15 日量价切片（放量比 + 涨跌幅）
+    1. 大背景（MA50 / MA200 / 乖离率 / 市值 / 成交额）
+    2. 近 15 日量价切片（放量比 + 涨跌幅 + 振幅 + 收盘位置）
     3. 近 60 日异动高光时刻
     """
     df = df.copy().sort_values("date").reset_index(drop=True)
     close = df["close"].astype(float)
+    high = df["high"].astype(float)
+    low = df["low"].astype(float)
     volume = df["volume"].astype(float)
+    amount = (
+        pd.to_numeric(df["amount"], errors="coerce")
+        if "amount" in df.columns
+        else pd.Series(close * volume, index=df.index, dtype=float)
+    )
+    if amount.isna().all():
+        amount = pd.Series(close * volume, index=df.index, dtype=float)
     df["ma50"] = close.rolling(50).mean()
     df["ma200"] = close.rolling(200).mean()
     df["vol_ma20"] = volume.rolling(20).mean()
+    df["amount_ma20"] = amount.rolling(20).mean()
     df["pct_chg_calc"] = close.pct_change() * 100
+    prev_close = close.shift(1)
+    amplitude_base = prev_close.where(prev_close > 0, close.where(close > 0, pd.NA))
+    df["amplitude_pct"] = ((high - low) / amplitude_base.replace(0, pd.NA) * 100).astype(float)
+    span = (high - low).replace(0, pd.NA)
+    df["close_pos_pct"] = ((close - low) / span * 100).clip(lower=0, upper=100).fillna(50.0)
 
     latest = df.iloc[-1]
     ma50_val = latest["ma50"]
     ma200_val = latest["ma200"]
     close_val = latest["close"]
+    amount_ma20_val = latest.get("amount_ma20", pd.NA)
+    market_cap_val = pd.to_numeric(market_cap_yi, errors="coerce")
+    avg_amount_val = pd.to_numeric(avg_amount_20_yi, errors="coerce")
+    if pd.isna(avg_amount_val):
+        avg_amount_val = amount_ma20_val / 1e8 if pd.notna(amount_ma20_val) else pd.NA
 
     if pd.notna(ma50_val) and pd.notna(ma200_val) and ma200_val > 0:
         if ma50_val > ma200_val:
@@ -749,12 +776,24 @@ def generate_stock_payload(
         else:
             trend = "长期空头或震荡 (MA50 <= MA200)"
         bias_200 = (close_val - ma200_val) / ma200_val * 100
+        extra_parts: list[str] = []
+        if pd.notna(market_cap_val):
+            extra_parts.append(f"总市值:{float(market_cap_val):.0f}亿")
+        if pd.notna(avg_amount_val):
+            extra_parts.append(f"20日均成交额:{float(avg_amount_val):.2f}亿")
+        extra_text = f"，{'，'.join(extra_parts)}" if extra_parts else ""
         background = (
             f"  [结构背景] 现价:{close_val:.2f}, MA50:{ma50_val:.2f}, MA200:{ma200_val:.2f}。"
-            f"{trend}，年线乖离率:{bias_200:.1f}%"
+            f"{trend}，年线乖离率:{bias_200:.1f}%{extra_text}"
         )
     else:
-        background = f"  [结构背景] 现价:{close_val:.2f}（数据不足以计算 MA200）"
+        extra_parts = []
+        if pd.notna(market_cap_val):
+            extra_parts.append(f"总市值:{float(market_cap_val):.0f}亿")
+        if pd.notna(avg_amount_val):
+            extra_parts.append(f"20日均成交额:{float(avg_amount_val):.2f}亿")
+        extra_text = f"，{'，'.join(extra_parts)}" if extra_parts else ""
+        background = f"  [结构背景] 现价:{close_val:.2f}（数据不足以计算 MA200）{extra_text}"
 
     policy_prefix = f" {policy_tag}" if policy_tag else ""
     tag_text = ""
@@ -788,8 +827,14 @@ def generate_stock_payload(
     for _, row in recent.iterrows():
         vol_ratio = row["volume"] / row["vol_ma20"] if pd.notna(row["vol_ma20"]) and row["vol_ma20"] > 0 else 0
         pct = row["pct_chg_calc"] if pd.notna(row["pct_chg_calc"]) else 0
+        amplitude_pct = row.get("amplitude_pct", pd.NA)
+        close_pos_pct = row.get("close_pos_pct", pd.NA)
         date_str = str(row["date"])[5:10]
-        recent_lines.append(f"    {date_str}: 收{row['close']:.2f} ({pct:+.1f}%), 量比:{vol_ratio:.1f}x")
+        amp_text = f"{float(amplitude_pct):.1f}%" if pd.notna(amplitude_pct) else "NA"
+        close_pos_text = f"{float(close_pos_pct):.0f}%" if pd.notna(close_pos_pct) else "NA"
+        recent_lines.append(
+            f"    {date_str}: 收{row['close']:.2f} ({pct:+.1f}%), 振幅:{amp_text}, 收位:{close_pos_text}, 量比:{vol_ratio:.1f}x"
+        )
 
     # 近 60 日异动高光
     tail60 = df.tail(HIGHLIGHT_DAYS)
@@ -843,6 +888,7 @@ def run(
 
     regime = (benchmark_context or {}).get("regime", "NEUTRAL")
     sector_map = fetch_sector_map()
+    market_cap_map = fetch_market_cap_map()
     benchmark_ret_10: float | None = None
     try:
         bench_df = fetch_index_hist("000001", window.start_trade_date, window.end_trade_date)
@@ -883,6 +929,13 @@ def run(
 
             close = pd.to_numeric(df["close"], errors="coerce")
             volume = pd.to_numeric(df["volume"], errors="coerce")
+            amount = (
+                pd.to_numeric(df["amount"], errors="coerce")
+                if "amount" in df.columns
+                else pd.Series(close * volume, index=df.index, dtype=float)
+            )
+            if amount.isna().all():
+                amount = pd.Series(close * volume, index=df.index, dtype=float)
             ma200 = close.rolling(200).mean()
             latest_close = close.iloc[-1] if len(close) else pd.NA
             latest_ma200 = ma200.iloc[-1] if len(ma200) else pd.NA
@@ -896,8 +949,14 @@ def run(
                 rs_10 = stock_ret_10 - benchmark_ret_10
 
             vol_ma20 = volume.rolling(20).mean()
+            amount_ma20 = amount.rolling(20).mean()
             vol_ratio = volume / vol_ma20.replace(0, pd.NA)
             min_vol_ratio_5d = pd.to_numeric(vol_ratio.tail(5), errors="coerce").min()
+            avg_amount_20_yi = (
+                float(amount_ma20.iloc[-1]) / 1e8
+                if len(amount_ma20) and pd.notna(amount_ma20.iloc[-1])
+                else pd.NA
+            )
 
             candidate_rows.append(
                 {
@@ -911,6 +970,8 @@ def run(
                     "exit_price": pd.to_numeric(item.get("exit_price"), errors="coerce"),
                     "exit_reason": str(item.get("exit_reason", "")).strip(),
                     "industry": sector_map.get(code, "未知行业"),
+                    "market_cap_yi": pd.to_numeric(market_cap_map.get(code), errors="coerce"),
+                    "avg_amount_20_yi": avg_amount_20_yi,
                     "bias_200": bias_200,
                     "rs_10": rs_10,
                     "min_vol_ratio_5d": min_vol_ratio_5d,
@@ -1048,6 +1109,8 @@ def run(
             wyckoff_tag=str(row.get("tag", "")),
             df=df,
             industry=str(row.get("industry", "")),
+            market_cap_yi=pd.to_numeric(row.get("market_cap_yi"), errors="coerce"),
+            avg_amount_20_yi=pd.to_numeric(row.get("avg_amount_20_yi"), errors="coerce"),
             policy_tag=policy_text,
             stage=str(row.get("stage", "")).strip() or None,
         )

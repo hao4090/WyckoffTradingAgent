@@ -56,6 +56,8 @@ class TradeRecord:
     entry_close: float
     exit_close: float
     ret_pct: float
+    track: str = ""  # "Trend" / "Accum" / "" (unclassified)
+    regime: str = ""  # market regime at signal time
 
 
 def _parse_date(v: str) -> date:
@@ -470,6 +472,11 @@ def run_backtest(
         regime = day_breadth.get("regime", "NEUTRAL")
         trend_sel, accum_sel, p_score_map = allocate_ai_candidates(result, result.layer3_symbols, regime)
         merged_candidates = trend_sel + accum_sel
+        track_map: dict[str, str] = {}
+        for c in trend_sel:
+            track_map[c] = "Trend"
+        for c in accum_sel:
+            track_map[c] = "Accum"
         
         if not merged_candidates:
             continue
@@ -590,6 +597,8 @@ def run_backtest(
                     entry_close=entry_close,
                     exit_close=exit_close,
                     ret_pct=ret_pct,
+                    track=track_map.get(code, ""),
+                    regime=regime,
                 )
             )
 
@@ -634,6 +643,9 @@ def run_backtest(
                 "var95_ret_pct": var95_ret_pct,
                 "cvar95_ret_pct": cvar95_ret_pct,
                 "max_consecutive_losses": _calc_max_consecutive_losses(ret),
+                "sharpe_ratio": _calc_sharpe_ratio(ret),
+                "calmar_ratio": _calc_calmar_ratio(ret),
+                "stratified": _calc_stratified_stats(trades_df),
             }
         )
     else:
@@ -648,6 +660,9 @@ def run_backtest(
                 "var95_ret_pct": None,
                 "cvar95_ret_pct": None,
                 "max_consecutive_losses": 0,
+                "sharpe_ratio": None,
+                "calmar_ratio": None,
+                "stratified": {},
             }
         )
     return trades_df, summary
@@ -699,6 +714,128 @@ def _calc_max_consecutive_losses(ret: pd.Series) -> int:
     return int(max_streak)
 
 
+def _calc_sharpe_ratio(
+    ret: pd.Series,
+    risk_free_annual: float = 2.0,
+    periods_per_year: float = 250.0,
+) -> float | None:
+    """
+    年化夏普比 = (年化收益 - 无风险利率) / 年化波动率。
+    ret: 每笔交易收益率(%)序列。
+    """
+    s = pd.to_numeric(ret, errors="coerce").dropna()
+    if len(s) < 3:
+        return None
+    mean_pct = float(s.mean())
+    std_pct = float(s.std(ddof=1))
+    if std_pct <= 0:
+        return None
+    ann_ret = mean_pct * periods_per_year / 100.0
+    ann_std = std_pct * (periods_per_year ** 0.5) / 100.0
+    rf = risk_free_annual / 100.0
+    return float((ann_ret - rf) / ann_std)
+
+
+def _calc_calmar_ratio(
+    ret: pd.Series,
+    periods_per_year: float = 250.0,
+) -> float | None:
+    """卡玛比 = 年化收益 / abs(最大回撤)。"""
+    s = pd.to_numeric(ret, errors="coerce").dropna()
+    if len(s) < 3:
+        return None
+    mdd = _calc_max_drawdown_pct(s)
+    if mdd is None or mdd >= 0:
+        return None
+    mean_pct = float(s.mean())
+    ann_ret_pct = mean_pct * periods_per_year
+    return float(ann_ret_pct / abs(mdd))
+
+
+def _calc_information_ratio(
+    ret: pd.Series,
+    bench_ret: pd.Series | None,
+    periods_per_year: float = 250.0,
+) -> float | None:
+    """信息比 = 年化超额收益 / 年化跟踪误差。"""
+    if bench_ret is None:
+        return None
+    s = pd.to_numeric(ret, errors="coerce").dropna()
+    b = pd.to_numeric(bench_ret, errors="coerce").dropna()
+    n = min(len(s), len(b))
+    if n < 3:
+        return None
+    excess = s.iloc[:n].values - b.iloc[:n].values
+    excess_mean = float(excess.mean())
+    excess_std = float(excess.std(ddof=1))
+    if excess_std <= 0:
+        return None
+    ann_excess = excess_mean * periods_per_year / 100.0
+    ann_te = excess_std * (periods_per_year ** 0.5) / 100.0
+    return float(ann_excess / ann_te)
+
+
+def _calc_stratified_stats(trades_df: pd.DataFrame) -> dict[str, dict]:
+    """
+    按 track (Trend/Accum) 和 regime 分层统计。
+    返回 {"by_track": {"Trend": {...}, "Accum": {...}},
+           "by_regime": {"RISK_ON": {...}, "RISK_OFF": {...}, ...}}
+    """
+    result: dict[str, dict] = {"by_track": {}, "by_regime": {}}
+    if trades_df.empty:
+        return result
+
+    def _stats_for_slice(df_slice: pd.DataFrame) -> dict:
+        ret = pd.to_numeric(df_slice.get("ret_pct"), errors="coerce").dropna()
+        n = len(ret)
+        if n == 0:
+            return {"trades": 0}
+        var95, cvar95 = _calc_cvar95_pct(ret)
+        return {
+            "trades": n,
+            "win_rate_pct": float((ret > 0).mean() * 100.0),
+            "avg_ret_pct": float(ret.mean()),
+            "median_ret_pct": float(ret.median()),
+            "max_drawdown_pct": _calc_max_drawdown_pct(ret),
+            "sharpe_ratio": _calc_sharpe_ratio(ret),
+            "calmar_ratio": _calc_calmar_ratio(ret),
+            "var95_ret_pct": var95,
+            "cvar95_ret_pct": cvar95,
+            "max_consecutive_losses": _calc_max_consecutive_losses(ret),
+        }
+
+    # by track
+    for track_val in ["Trend", "Accum"]:
+        mask = trades_df["track"] == track_val
+        if mask.any():
+            result["by_track"][track_val] = _stats_for_slice(trades_df[mask])
+
+    # by regime
+    if "regime" in trades_df.columns:
+        for regime_val in trades_df["regime"].dropna().unique():
+            regime_str = str(regime_val).strip()
+            if regime_str:
+                mask = trades_df["regime"] == regime_str
+                if mask.any():
+                    result["by_regime"][regime_str] = _stats_for_slice(trades_df[mask])
+
+    # cross: track × regime
+    cross: dict[str, dict] = {}
+    for track_val in ["Trend", "Accum"]:
+        if "regime" not in trades_df.columns:
+            break
+        for regime_val in trades_df["regime"].dropna().unique():
+            regime_str = str(regime_val).strip()
+            mask = (trades_df["track"] == track_val) & (trades_df["regime"] == regime_str)
+            if mask.any():
+                key = f"{track_val}_{regime_str}"
+                cross[key] = _stats_for_slice(trades_df[mask])
+    if cross:
+        result["by_track_regime"] = cross
+
+    return result
+
+
 def _build_summary_md(summary: dict) -> str:
     use_current_meta = bool(summary.get("use_current_meta"))
     meta_mode = (
@@ -721,8 +858,7 @@ def _build_summary_md(summary: dict) -> str:
             "- 本次已关闭当前截面市值/行业映射过滤（Layer1 市值 + Layer3 行业共振），"
             "用于降低前视偏差。"
         )
-    return "\n".join(
-        [
+    lines = [
             "# Wyckoff Funnel Daily Backtest",
             "",
             f"- 区间: {summary.get('start')} ~ {summary.get('end')}",
@@ -747,16 +883,56 @@ def _build_summary_md(summary: dict) -> str:
             f"- 25%分位: {_fmt_metric(summary.get('q25_ret_pct'), 3)}%",
             f"- 75%分位: {_fmt_metric(summary.get('q75_ret_pct'), 3)}%",
             "",
-            "## 风险统计",
+            "## 风险调整指标",
+            f"- 夏普比 (Sharpe Ratio): {_fmt_metric(summary.get('sharpe_ratio'), 3)}",
+            f"- 卡玛比 (Calmar Ratio): {_fmt_metric(summary.get('calmar_ratio'), 3)}",
             f"- 最大回撤(逐笔复利): {_fmt_metric(summary.get('max_drawdown_pct'), 3)}%",
             f"- VaR95(单笔收益): {_fmt_metric(summary.get('var95_ret_pct'), 3)}%",
             f"- CVaR95(最差5%%均值): {_fmt_metric(summary.get('cvar95_ret_pct'), 3)}%",
             f"- 最长连续亏损笔数: {_fmt_metric(summary.get('max_consecutive_losses'), 0)}",
-            "",
-            "## 说明",
-            *notes,
+    ]
+
+    # Stratified stats tables
+    stratified = summary.get("stratified", {})
+    by_track = stratified.get("by_track", {})
+    if by_track:
+        lines.extend(["", "## 分层统计：Trend vs Accum", ""])
+        lines.append("| 指标 | Trend | Accum |")
+        lines.append("|------|-------|-------|")
+        metrics_labels = [
+            ("trades", "成交笔数", 0),
+            ("win_rate_pct", "胜率(%)", 2),
+            ("avg_ret_pct", "平均收益(%)", 3),
+            ("median_ret_pct", "中位收益(%)", 3),
+            ("max_drawdown_pct", "最大回撤(%)", 3),
+            ("sharpe_ratio", "夏普比", 3),
+            ("calmar_ratio", "卡玛比", 3),
+            ("max_consecutive_losses", "最长连亏", 0),
         ]
-    )
+        for key, label, nd in metrics_labels:
+            t_val = by_track.get("Trend", {}).get(key)
+            a_val = by_track.get("Accum", {}).get(key)
+            lines.append(f"| {label} | {_fmt_metric(t_val, nd)} | {_fmt_metric(a_val, nd)} |")
+
+    by_regime = stratified.get("by_regime", {})
+    if by_regime:
+        lines.extend(["", "## 分层统计：按大盘水温", ""])
+        regime_keys = sorted(by_regime.keys())
+        header = "| 指标 | " + " | ".join(regime_keys) + " |"
+        sep = "|------|" + "|".join(["-------"] * len(regime_keys)) + "|"
+        lines.append(header)
+        lines.append(sep)
+        for key, label, nd in [
+            ("trades", "成交笔数", 0),
+            ("win_rate_pct", "胜率(%)", 2),
+            ("avg_ret_pct", "平均收益(%)", 3),
+            ("sharpe_ratio", "夏普比", 3),
+        ]:
+            vals = [_fmt_metric(by_regime[rk].get(key), nd) for rk in regime_keys]
+            lines.append(f"| {label} | " + " | ".join(vals) + " |")
+
+    lines.extend(["", "## 说明", *notes])
+    return "\n".join(lines)
 
 
 def main() -> int:
