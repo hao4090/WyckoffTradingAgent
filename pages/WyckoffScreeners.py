@@ -24,7 +24,7 @@ from integrations.fetch_a_share_csv import (
     get_stocks_by_board,
     _normalize_symbols,
 )
-from integrations.data_source import fetch_sector_map, fetch_market_cap_map
+from integrations.data_source import fetch_index_hist, fetch_sector_map, fetch_market_cap_map
 from app.navigation import show_right_nav
 
 _CACHE_DIR = os.path.abspath(
@@ -43,6 +43,7 @@ with content_col:
     )
 
     TRIGGER_LABELS = {
+        "sos": "SOS（量价点火）",
         "spring": "Spring（终极震仓）",
         "lps": "LPS（缩量回踩）",
         "evr": "Effort vs Result（放量不跌）",
@@ -184,8 +185,18 @@ with content_col:
             market_cap_map = fetch_market_cap_map()
             name_map = _stock_name_map()
 
-        # 大盘基准：web 端不拉取，直接传 None（避免额外网络请求）
+        # 大盘基准：有 TUSHARE_TOKEN 时尝试加载；失败则自动降级，不影响 web 端继续运行。
         bench_df = None
+        bench_note = "未启用大盘基准（自动降级）"
+        if os.getenv("TUSHARE_TOKEN", "").strip():
+            try:
+                bench_df = fetch_index_hist("000001", start_s, end_s)
+                bench_note = "已启用上证指数基准"
+            except Exception as exc:
+                bench_note = f"大盘基准加载失败，已自动降级：{exc}"
+        else:
+            bench_note = "未配置 TUSHARE_TOKEN，已自动降级为无基准模式"
+        st.caption(f"大盘基准: {bench_note}")
 
         # 并发拉取日线
         progress = st.progress(0)

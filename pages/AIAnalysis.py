@@ -31,7 +31,7 @@ from core.wyckoff_engine import (
     normalize_hist_from_fetch,
     run_funnel,
 )
-from integrations.data_source import fetch_sector_map, fetch_market_cap_map
+from integrations.data_source import fetch_index_hist, fetch_sector_map, fetch_market_cap_map
 from core.single_stock_logic import render_single_stock_page
 from scripts.step3_batch_report import generate_stock_payload
 from integrations.ai_prompts import WYCKOFF_FUNNEL_SYSTEM_PROMPT
@@ -56,6 +56,7 @@ STOCK_QUOTES = [
 ]
 
 TRIGGER_LABELS = {
+    "sos": "SOS（量价点火）",
     "spring": "Spring（终极震仓）",
     "lps": "LPS（缩量回踩）",
     "evr": "Effort vs Result（放量不跌）",
@@ -194,8 +195,16 @@ with content_col:
                         progress_bar.progress((idx + 1) / len(pool_symbols))
                     progress_ph.empty()
 
-                    # web 端大盘基准不拉取，直接传 None
+                    # web 端优先尝试加载大盘基准；失败则自动降级，不影响继续筛选。
                     bench_df_fg = None
+                    if os.getenv("TUSHARE_TOKEN", "").strip():
+                        try:
+                            bench_df_fg = fetch_index_hist("000001", start_s, end_s)
+                            st.caption("Find Gold 大盘基准: 已启用上证指数基准")
+                        except Exception as exc:
+                            st.caption(f"Find Gold 大盘基准: 加载失败，已自动降级（{exc}）")
+                    else:
+                        st.caption("Find Gold 大盘基准: 未配置 TUSHARE_TOKEN，已自动降级为无基准模式")
 
                     funnel_result = run_funnel(
                         all_symbols=list(data_map_fg.keys()),
@@ -207,7 +216,7 @@ with content_col:
                     )
                     result_list: list[tuple[str, float]] = []
                     seen: set[str] = set()
-                    for trig_key in ("spring", "lps", "evr"):
+                    for trig_key in ("sos", "spring", "lps", "evr"):
                         for code, score in funnel_result.triggers.get(trig_key, []):
                             if code not in seen:
                                 seen.add(code)
