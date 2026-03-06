@@ -1293,6 +1293,17 @@ def run(webhook_url: str) -> tuple[bool, list[dict], dict]:
         if str((exit_signals.get(code, {}) or {}).get("signal", "")).strip() in blocked_exit_signals_set
     ]
 
+    total_cap = max(int(os.getenv("FUNNEL_AI_TOTAL_CAP", "20")), 0)
+    if regime == "RISK_ON":
+        trend_quota = max(int(os.getenv("FUNNEL_AI_RISK_ON_TREND", "15")), 0)
+        accum_quota = max(int(os.getenv("FUNNEL_AI_RISK_ON_ACCUM", "8")), 0)
+    elif regime == "RISK_OFF":
+        trend_quota = max(int(os.getenv("FUNNEL_AI_RISK_OFF_TREND", "5")), 0)
+        accum_quota = max(int(os.getenv("FUNNEL_AI_RISK_OFF_ACCUM", "15")), 0)
+    else:
+        trend_quota = max(int(os.getenv("FUNNEL_AI_NEUTRAL_TREND", "10")), 0)
+        accum_quota = max(int(os.getenv("FUNNEL_AI_NEUTRAL_ACCUM", "10")), 0)
+
     print(
         f"[funnel] 候选分层: 命中事件={metrics['total_hits']}, 命中股票={unique_hit_count}, "
         f"配额配置=[{regime}: Trend={trend_quota}, Accum={accum_quota}, 总上限={total_cap}], "
