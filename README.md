@@ -210,7 +210,7 @@ Step4 完全由 GitHub Actions Secrets 驱动：读取 `SUPABASE_USER_ID` 定位
 ├── streamlit_app.py        # Web 入口
 ├── app/                    # UI 组件（layout/auth/navigation）
 ├── core/                   # 核心策略与领域逻辑
-│   ├── wyckoff_engine.py   # Wyckoff 多层漏斗引擎（三通道L2 + Markup L2.5 + Exit L5）
+│   ├── wyckoff_engine.py   # Wyckoff 多层漏斗引擎（六通道L2 + Markup L2.5）
 │   ├── wyckoff_single_prompt.py  # 单股分析 Prompt
 │   ├── single_stock_logic.py    # 单股分析页面逻辑
 │   ├── download_history.py      # 下载历史记录
@@ -222,6 +222,7 @@ Step4 完全由 GitHub Actions Secrets 驱动：读取 `SUPABASE_USER_ID` 定位
 │   ├── llm_client.py      # LLM 客户端
 │   ├── ai_prompts.py      # AI 提示词（Alpha 投委会）
 │   ├── supabase_client.py # Supabase 云端同步
+│   ├── supabase_portfolio.py # Supabase 策略持仓同步
 │   ├── rag_veto.py        # RAG 防雷模块
 │   └── feishu.py          # 飞书推送
 ├── pages/                  # Streamlit 页面
@@ -236,6 +237,7 @@ Step4 完全由 GitHub Actions Secrets 驱动：读取 `SUPABASE_USER_ID` 定位
 │   ├── wyckoff_funnel.py  # 定时选股任务
 │   ├── step3_batch_report.py  # AI 研报
 │   ├── step4_rebalancer.py    # 私人决断
+│   ├── premarket_risk_job.py  # 盘前风控预警
 │   ├── daily_job.py      # 日终流水线
 │   ├── benchmark_funnel_fetch.py  # 取数性能基准测试
 │   └── backtest_runner.py  # 日线轻量回测
@@ -334,7 +336,7 @@ tushare → akshare → baostock → efinance
 
 **版权声明 | Copyright & License**
 
-- **版权所有** © 2024 youngcan. All Rights Reserved.
+- **版权所有** © 2026 youngcan. All Rights Reserved.
 - **开源用途**：个人学习研究免费使用，署名即可
 - **商业授权**：如需将本项目用于商业产品或服务（包括但不限于 SaaS、付费咨询、代客选股、量化基金、OEM/嵌入式等），**必须先联系作者获得授权并支付授权费用**
 - **联系方式**：可通过微信/飞书，或 GitHub Issue 联系
