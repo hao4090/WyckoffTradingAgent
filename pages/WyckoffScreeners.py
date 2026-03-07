@@ -111,7 +111,7 @@ with content_col:
         st.subheader("漏斗参数")
 
         st.markdown("**Layer 1: 剥离垃圾**")
-        min_cap = st.number_input("最小市值(亿)", min_value=5.0, max_value=100.0, value=20.0, step=5.0, format="%.0f")
+        min_cap = st.number_input("最小市值(亿)", min_value=5.0, max_value=100.0, value=35.0, step=5.0, format="%.0f")
         min_amt = st.number_input("近20日均成交额阈值(万)", min_value=1000.0, max_value=20000.0, value=5000.0, step=1000.0, format="%.0f")
 
         st.markdown("**Layer 2: 强弱甄别**")

@@ -121,7 +121,7 @@ def _parse_bool(raw: str) -> bool:
 def _apply_funnel_cfg_overrides(cfg: FunnelConfig) -> None:
     """
     将 .env 中的 FUNNEL_CFG_* 参数映射到 FunnelConfig。
-    示例：FUNNEL_CFG_MIN_MARKET_CAP_YI=20
+    示例：FUNNEL_CFG_MIN_MARKET_CAP_YI=35
     """
     for f in dataclass_fields(FunnelConfig):
         if f.name == "enable_evr_trigger":

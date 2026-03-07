@@ -1,8 +1,8 @@
 # A 股选股与行情工具
 
-> 每天从全市场筛选出**最值得次日操作的 6 只股票**，并生成 AI 研报；同时支持行情数据查询与 CSV 导出。
+> 每天从全市场多层筛选出高弹性标的，由「Alpha 全栈虚拟投委会」出具**三阵营研报（逻辑破产/储备营地/处于起跳板）**；涵盖量化风控、状态签名防重传机制与个人持仓管理。
 
-用 [akshare](https://github.com/akfamily/akshare) + 自研 Wyckoff 漏斗做量化初筛，再用大模型做深度分析。适合想快速拿到每日「明日可买清单」的 A 股投资者。
+用 [akshare](https://github.com/akfamily/akshare) + 自研 Wyckoff 漏斗做量化初筛，交由大模型开展多空博弈深度剖析，最后由 OMS 负责执行约束。适合拒绝无脑黑盒、需“白盒逻辑 + 量化防守 + AI参谋预判”的 A 股散户投资者。
 
 **在线体验：** [https://wyckoff-analysis-youngcanphoenix.streamlit.app/](https://wyckoff-analysis-youngcanphoenix.streamlit.app/)
 
@@ -15,14 +15,14 @@
 | 📊 **每日选股** | 配置 GitHub Actions 后，北京时间周日到周四 18:30 自动跑 Wyckoff Funnel，从主板+创业板筛选候选并推送飞书 |
 | 📘 **策略手册** | 见 `README_STRATEGY.md`（策略流程、风控公式、Step2/3/4 执行口径） |
 | 🔬 **Wyckoff Funnel** | 多层漏斗筛选：剥离垃圾 → 六通道强弱甄别（主升/点火/潜伏/吸筹/地量/护盘）→ Markup 识别 → 威科夫狙击 → AI 双轨分析 |
-| 🤖 **AI 研报** | 对筛选结果生成观察池 + 操作池，含技术结构、阻力位、交易计划等 |
+| 🤖 **AI 研报** | 对筛选结果生成三阵营判断（逻辑破产/储备营地/处于起跳板），含结构战区、确认条件及防踏空策略 |
 | 🎓 **AI 分析（大师模式）** | "Alpha"虚拟投委会，七位历史级交易大师人格（利弗莫尔/威科夫/缠论/彼得林奇等）多维分析 |
 | 🕶️ **私人决断** | 结合个人持仓与外部候选，生成 Buy/Hold/Sell 私密指令，并通过 Telegram 单独发送；自动跳过停牌股、验证数据日期对齐，AI 乱出止损价时自动降级为持有 |
 | 🛡️ **RAG 防雷** | 基于新闻检索自动过滤有负面舆情的股票（立案/调查/减持/业绩预亏等） |
 | 🧪 **日线回测** | 轻量回放 Funnel 命中后的 N 日收益，输出胜率/分位数（无需分钟级数据） |
 | 📁 **行情导出** | Web 或命令行拉取指定股票日线，导出原始/增强两份 CSV（OHLCV 开高低收量等） |
 | 🧰 **自定义导出** | 支持 A股/指数/ETF/宏观 CPI 等多数据源，灵活配置参数 |
-| 📈 **持仓管理** | 实时同步持仓至云端，记录成本价、买入日期、策略标签 |
+| 📈 **持仓管理** | 实时同步持仓至云端并生成状态签名；内置 AI 订单建议面板、自动作废旧单与过时预警 |
 | 🕘 **下载历史** | 查看历史下载记录（最近 20 条） |
 | 🔐 **登录与配置** | 支持登录、飞书 Webhook、API Key 云端同步 |
 
@@ -80,19 +80,19 @@ python -u -m integrations.fetch_a_share_csv --symbols 000973 600798 601390
 
 ## 📅 每日选股（Wyckoff Funnel）
 
-从全市场（主板 + 创业板）多轮过滤，最终输出**最值得次日操作的 6 只股票**，并生成 AI 研报，推送到飞书。  
-水温判断同时参考指数趋势 + 市场广度（站上 MA20 占比），弱市会自动收紧阈值。
+从全市场（主板 + 创业板）多轮过滤，最终输出高胜率的精要标的，经过量化压缩后交由 AI 研判并推送到飞书。  
+水温判断同时参考指数趋势 + 市场广度（站上 MA20 占比），弱市会自动收紧筛选与买入容忍度。
 
 ### 漏斗筛选逻辑（多层）
 
 | 层级 | 名称 | 筛选逻辑 |
 |------|------|----------|
-| Layer 1 | **剥离垃圾** | 剔除 ST/北交所/科创板，保留市值 ≥ 50 亿、日均成交额 ≥ 5000 万的股票 |
+| Layer 1 | **剥离垃圾** | 剔除 ST/北交所/科创板，保留市值 ≥ 35 亿、日均成交额 ≥ 5000 万的股票 |
 | Layer 2 | **六大独立通道甄选** | ① **主升**：MA多头+RPS双高；② **点火**：当日大阳爆量直接免死突破；③ **潜伏**：长强短弱回踩年线；④ **吸筹**：低位横盘紧凑极度缩量；⑤ **地量**：创下年内极小地量枯竭；⑥ **护盘**：大盘新低但个股拒创新低底背离 |
 | Layer 2.5 | **Markup 识别** | MA50 从下穿上 MA200 并连续确认 N 日，角度验证趋势强度，标注已进入上升趋势的股票 |
 | Layer 3 | **板块共振** | 行业分布 Top-N，筛选与热门板块共振的标的 |
 | Layer 4 | **威科夫微观狙击** | Spring（终极震仓假突破）、LPS（极其缩量的最后回踩）、SOS（跳跃小溪放量点火）、EVR（高位放量不跌的变异） |
-| Layer 5/AI | **双轨制 AI 评判** | Trend 轨（主升/点火） + Accum 轨（潜伏/左侧/地量/护盘）。采用“大盘水温驱动系统（Top-Down）”，根据宏观强弱动态分配总额度（默认20只）与单轨抢占上限（默认15只），顺势而为，提交大模型双头审阅 |
+| Layer 5/AI | **三阵营 AI 评判** | 将候选交由 LLM 进行独立审讯，输出“逻辑破产/储备营地/处于起跳板”三阵营决策。采用大盘水温动态压缩总容量配额，并在结构战区内提供 T+1 的 Plan A/B 计划说明 |
 
 ### 启用方式
 
@@ -220,7 +220,7 @@ Step4 完全由 GitHub Actions Secrets 驱动：读取 `SUPABASE_USER_ID` 定位
 ├── streamlit_app.py        # Web 入口
 ├── app/                    # UI 组件（layout/auth/navigation）
 ├── core/                   # 核心策略与领域逻辑
-│   ├── wyckoff_engine.py   # Wyckoff 多层漏斗引擎（三通道L2 + Markup L2.5 + Exit L5）
+│   ├── wyckoff_engine.py   # Wyckoff 多层漏斗引擎（六通道L2 + Markup L2.5）
 │   ├── wyckoff_single_prompt.py  # 单股分析 Prompt
 │   ├── single_stock_logic.py    # 单股分析页面逻辑
 │   ├── download_history.py      # 下载历史记录
@@ -232,6 +232,7 @@ Step4 完全由 GitHub Actions Secrets 驱动：读取 `SUPABASE_USER_ID` 定位
 │   ├── llm_client.py      # LLM 客户端
 │   ├── ai_prompts.py      # AI 提示词（Alpha 投委会）
 │   ├── supabase_client.py # Supabase 云端同步
+│   ├── supabase_portfolio.py # Supabase 策略持仓同步
 │   ├── rag_veto.py        # RAG 防雷模块
 │   └── feishu.py          # 飞书推送
 ├── pages/                  # Streamlit 页面
@@ -246,6 +247,7 @@ Step4 完全由 GitHub Actions Secrets 驱动：读取 `SUPABASE_USER_ID` 定位
 │   ├── wyckoff_funnel.py  # 定时选股任务
 │   ├── step3_batch_report.py  # AI 研报
 │   ├── step4_rebalancer.py    # 私人决断
+│   ├── premarket_risk_job.py  # 盘前风控预警
 │   ├── daily_job.py      # 日终流水线
 │   ├── benchmark_funnel_fetch.py  # 取数性能基准测试
 │   └── backtest_runner.py  # 日线轻量回测
@@ -344,7 +346,7 @@ tushare → akshare → baostock → efinance
 
 **版权声明 | Copyright & License**
 
-- **版权所有** © 2024 youngcan. All Rights Reserved.
+- **版权所有** © 2026 youngcan. All Rights Reserved.
 - **开源用途**：个人学习研究免费使用，署名即可
 - **商业授权**：如需将本项目用于商业产品或服务（包括但不限于 SaaS、付费咨询、代客选股、量化基金、OEM/嵌入式等），**必须先联系作者获得授权并支付授权费用**
 - **联系方式**：可通过微信/飞书，或 GitHub Issue 联系

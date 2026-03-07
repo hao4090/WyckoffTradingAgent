@@ -7,8 +7,11 @@ Supabase 投资组合读写（脚本侧，无 Streamlit 依赖）
 """
 from __future__ import annotations
 
+import hashlib
+import json
 from datetime import datetime
 import os
+import re
 from typing import Any
 
 from supabase import Client, create_client
@@ -40,6 +43,52 @@ def is_supabase_configured() -> bool:
     return bool(url and key)
 
 
+def _normalize_buy_dt_text(raw: Any) -> str:
+    text = str(raw or "").strip()
+    if re.fullmatch(r"\d{8}", text):
+        return text
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
+        return text.replace("-", "")
+    return text
+
+
+def compute_portfolio_state_signature(
+    free_cash: float | int | None,
+    positions: list[dict[str, Any]] | None,
+) -> str:
+    normalized_positions: list[dict[str, Any]] = []
+    for row in positions or []:
+        code = str(row.get("code", "") or "").strip()
+        if not re.fullmatch(r"\d{6}", code):
+            continue
+        normalized_positions.append(
+            {
+                "code": code,
+                "shares": int(row.get("shares", 0) or 0),
+                "cost_price": round(float(row.get("cost_price", row.get("cost", 0.0)) or 0.0), 4),
+                "buy_dt": _normalize_buy_dt_text(row.get("buy_dt")),
+                "strategy": str(row.get("strategy", "") or "").strip(),
+            }
+        )
+    normalized_positions.sort(key=lambda x: x["code"])
+    payload = {
+        "free_cash": round(float(free_cash or 0.0), 2),
+        "positions": normalized_positions,
+    }
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def extract_state_signature_from_run_id(run_id: Any) -> str:
+    text = str(run_id or "").strip()
+    m = re.search(r"_sig([0-9a-fA-F]{8,40})$", text)
+    return m.group(1).lower() if m else ""
+
+
+def _is_active_trade_order_status(status: Any) -> bool:
+    return str(status or "").strip().upper() not in {"", "CANCELLED", "CANCELED"}
+
+
 def load_portfolio_state(portfolio_id: str = "USER_LIVE") -> dict[str, Any] | None:
     """
     返回格式：
@@ -56,7 +105,7 @@ def load_portfolio_state(portfolio_id: str = "USER_LIVE") -> dict[str, Any] | No
         client = _get_supabase_admin_client()
         p_resp = (
             client.table(TABLE_PORTFOLIOS)
-            .select("portfolio_id,free_cash,total_equity")
+            .select("portfolio_id,free_cash,total_equity,updated_at")
             .eq("portfolio_id", portfolio_id)
             .limit(1)
             .execute()
@@ -66,13 +115,17 @@ def load_portfolio_state(portfolio_id: str = "USER_LIVE") -> dict[str, Any] | No
         p = p_resp.data[0]
         pos_resp = (
             client.table(TABLE_PORTFOLIO_POSITIONS)
-            .select("code,name,shares,cost_price,buy_dt,strategy,stop_loss")
+            .select("code,name,shares,cost_price,buy_dt,strategy,stop_loss,updated_at")
             .eq("portfolio_id", portfolio_id)
             .order("code")
             .execute()
         )
         positions: list[dict[str, Any]] = []
+        latest_updates: list[str] = [str(p.get("updated_at", "") or "").strip()]
         for row in pos_resp.data or []:
+            row_updated_at = str(row.get("updated_at", "") or "").strip()
+            if row_updated_at:
+                latest_updates.append(row_updated_at)
             positions.append(
                 {
                     "code": str(row.get("code", "")).strip(),
@@ -84,13 +137,20 @@ def load_portfolio_state(portfolio_id: str = "USER_LIVE") -> dict[str, Any] | No
                     "stop_loss": (
                         float(row["stop_loss"]) if row.get("stop_loss") is not None else None
                     ),
+                    "updated_at": row_updated_at,
                 }
             )
+        state_updated_at = max((x for x in latest_updates if x), default="")
         return {
             "portfolio_id": str(p.get("portfolio_id")),
             "free_cash": float(p.get("free_cash", 0.0) or 0.0),
             "total_equity": (
                 float(p["total_equity"]) if p.get("total_equity") is not None else None
+            ),
+            "updated_at": str(p.get("updated_at", "") or "").strip(),
+            "state_updated_at": state_updated_at,
+            "state_signature": compute_portfolio_state_signature(
+                p.get("free_cash", 0.0), positions
             ),
             "positions": positions,
         }
@@ -154,25 +214,39 @@ def list_step4_targets(target_user_id: str | None = None) -> list[dict[str, Any]
         return []
 
 
-def check_daily_run_exists(portfolio_id: str, trade_date: str) -> bool:
+def check_daily_run_exists(
+    portfolio_id: str,
+    trade_date: str,
+    state_signature: str | None = None,
+) -> bool:
     """
-    检查当日是否已存在交易订单（幂等性检查）。
-    返回 True 表示已运行过。
+    检查当日是否已存在同一持仓快照下的有效交易订单（幂等性检查）。
+    返回 True 表示当前快照已运行过。
     """
     if not is_supabase_configured():
         return False
     try:
         client = _get_supabase_admin_client()
-        # 只要查到一条记录，就说明跑过了
         resp = (
             client.table(TABLE_TRADE_ORDERS)
-            .select("id")
+            .select("run_id,status,created_at")
             .eq("portfolio_id", portfolio_id)
             .eq("trade_date", trade_date)
-            .limit(1)
+            .order("created_at", desc=True)
+            .limit(200)
             .execute()
         )
-        return bool(resp.data)
+        rows = resp.data or []
+        active_rows = [row for row in rows if _is_active_trade_order_status(row.get("status"))]
+        if not active_rows:
+            return False
+        expected_sig = str(state_signature or "").strip().lower()
+        if not expected_sig:
+            return True
+        return any(
+            extract_state_signature_from_run_id(row.get("run_id")) == expected_sig
+            for row in active_rows
+        )
     except Exception as e:
         print(f"[supabase_portfolio] check_daily_run_exists failed: {e}")
         return False
@@ -256,6 +330,40 @@ def save_ai_trade_orders(
     except Exception as e:
         print(f"[supabase_portfolio] save_ai_trade_orders failed: {e}")
         return False
+
+
+def cancel_trade_orders(
+    *,
+    portfolio_id: str,
+    trade_date: str,
+    exclude_run_id: str | None = None,
+) -> int:
+    if not is_supabase_configured():
+        return 0
+    try:
+        client = _get_supabase_admin_client()
+        query = (
+            client.table(TABLE_TRADE_ORDERS)
+            .select("id,status,run_id")
+            .eq("portfolio_id", portfolio_id)
+            .eq("trade_date", trade_date)
+            .limit(500)
+        )
+        if exclude_run_id:
+            query = query.neq("run_id", exclude_run_id)
+        rows = query.execute().data or []
+        active_rows = [row for row in rows if _is_active_trade_order_status(row.get("status"))]
+        for row in active_rows:
+            (
+                client.table(TABLE_TRADE_ORDERS)
+                .update({"status": "CANCELLED"})
+                .eq("id", row.get("id"))
+                .execute()
+            )
+        return len(active_rows)
+    except Exception as e:
+        print(f"[supabase_portfolio] cancel_trade_orders failed: {e}")
+        return 0
 
 
 def upsert_daily_nav(

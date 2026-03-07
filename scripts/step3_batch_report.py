@@ -171,7 +171,7 @@ def _has_required_sections(report: str) -> bool:
     )
     has_trade = any(
         token in text
-        for token in ("立刻建仓", "可操作池", "操作池", "处于起跳板")
+        for token in ("立刻建仓", "可操作池", "操作池", "处于起跳板", "起跳板")
     )
     return has_watch and has_trade
 
@@ -379,6 +379,34 @@ def _try_parse_structured_report(
         if normalized["watch_pool"] or normalized["operation_pool"]:
             return normalized
     return None
+
+
+def _extract_ops_codes_from_markdown(
+    report: str,
+    allowed_codes: set[str],
+) -> list[str]:
+    """从纯 Markdown 文本中提取“起跳板/可操作池”章节里的股票代码。"""
+    lines = str(report or "").splitlines()
+    in_ops_section = False
+    ops_codes: list[str] = []
+    stop_tokens = ("逻辑破产", "储备营地", "继续观察", "观察池")
+    start_tokens = ("处于起跳板", "起跳板", "立刻建仓", "可操作池", "操作池")
+
+    for raw_line in lines:
+        line = str(raw_line or "").strip()
+        if not line:
+            continue
+        if line.startswith("#"):
+            if any(token in line for token in start_tokens):
+                in_ops_section = True
+            elif any(token in line for token in stop_tokens):
+                in_ops_section = False
+        if not in_ops_section:
+            continue
+        for code in re.findall(r"\b\d{6}\b", line):
+            if code in allowed_codes and code not in ops_codes:
+                ops_codes.append(code)
+    return ops_codes
 
 
 
@@ -1268,14 +1296,14 @@ def run(
         for _, row in selected_df.iterrows()
     }
     selected_set = set(selected_codes)
-    # 优先直接 JSON 解析；若无法解析则不做“补齐到固定数量”。
+    # 优先从 Markdown 操作区提取；若未来回退为结构化 JSON，也保持兼容。
+    ops_codes = _extract_ops_codes_from_markdown(report, selected_set)
     structured = _try_parse_structured_report(
         report=report,
         allowed_codes=selected_set,
         code_name=code_name,
     )
-    ops_codes: list[str] = []
-    if structured and structured.get("operation_pool"):
+    if not ops_codes and structured and structured.get("operation_pool"):
         for item in structured["operation_pool"]:
             code = str(item.get("code", "")).strip()
             if code and code not in ops_codes:

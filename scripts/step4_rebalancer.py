@@ -25,7 +25,9 @@ from integrations.fetch_a_share_csv import _fetch_hist, _resolve_trading_window
 from integrations.llm_client import call_llm
 from integrations.data_source import fetch_stock_spot_snapshot
 from integrations.supabase_portfolio import (
+    cancel_trade_orders,
     check_daily_run_exists,
+    compute_portfolio_state_signature,
     load_portfolio_state as load_portfolio_state_from_supabase,
     save_ai_trade_orders,
     update_position_stops,
@@ -815,21 +817,41 @@ def _load_portfolio_from_env(env_key: str = "MY_PORTFOLIO_STATE") -> PortfolioSt
     return _build_portfolio_from_dict(data)
 
 
-def load_portfolio_from_supabase(portfolio_id: str) -> tuple[PortfolioState, str]:
+def _portfolio_state_signature_from_state(portfolio: PortfolioState) -> str:
+    return compute_portfolio_state_signature(
+        portfolio.free_cash,
+        [
+            {
+                "code": p.code,
+                "shares": p.shares,
+                "cost_price": p.cost,
+                "buy_dt": p.buy_dt,
+                "strategy": p.strategy,
+            }
+            for p in portfolio.positions
+        ],
+    )
+
+
+def load_portfolio_from_supabase(portfolio_id: str) -> tuple[PortfolioState, str, str]:
     """
     优先从 Supabase 读取指定 portfolio_id；
     若缺失则回退到 MY_PORTFOLIO_STATE（Action Secret）。
-    返回：(PortfolioState, source)
+    返回：(PortfolioState, source, state_signature)
     """
     sb_data = load_portfolio_state_from_supabase(portfolio_id)
     if sb_data:
         try:
-            return (_build_portfolio_from_dict(sb_data), f"supabase:{portfolio_id.lower()}")
+            portfolio = _build_portfolio_from_dict(sb_data)
+            state_signature = str(sb_data.get("state_signature", "") or "").strip().lower()
+            if not state_signature:
+                state_signature = _portfolio_state_signature_from_state(portfolio)
+            return (portfolio, f"supabase:{portfolio_id.lower()}", state_signature)
         except Exception as e:
             raise ValueError(f"Supabase {portfolio_id} 解析失败: {e}") from e
     try:
         p = _load_portfolio_from_env("MY_PORTFOLIO_STATE")
-        return (p, "env:MY_PORTFOLIO_STATE")
+        return (p, "env:MY_PORTFOLIO_STATE", _portfolio_state_signature_from_state(p))
     except Exception as e:
         raise ValueError(f"Supabase {portfolio_id} 未就绪，且 env 持仓不可用: {e}") from e
 
@@ -1495,19 +1517,23 @@ def run(
         return (True, "skipped_invalid_portfolio")
 
     try:
-        portfolio, portfolio_source = load_portfolio_from_supabase(portfolio_id)
+        portfolio, portfolio_source, state_signature = load_portfolio_from_supabase(portfolio_id)
     except Exception as e:
         print(f"[step4] 持仓读取失败: {e}")
         return (True, "skipped_invalid_portfolio")
-    print(f"[step4] 持仓来源: {portfolio_source} | portfolio_id={portfolio_id}")
+    print(
+        f"[step4] 持仓来源: {portfolio_source} | portfolio_id={portfolio_id} | state_sig={state_signature or '-'}"
+    )
 
     if not str(tg_bot_token or "").strip() or not str(tg_chat_id or "").strip():
         print("[step4] tg_bot_token/tg_chat_id 未配置，跳过 Step4 推送")
         return (True, "skipped_telegram_unconfigured")
 
     trade_date = _job_end_calendar_day().strftime("%Y-%m-%d")
-    if check_daily_run_exists(portfolio_id, trade_date):
-        print(f"[step4] 幂等性检查: {portfolio_id} {trade_date} 已运行过，跳过。")
+    if check_daily_run_exists(portfolio_id, trade_date, state_signature=state_signature):
+        print(
+            f"[step4] 幂等性检查: {portfolio_id} {trade_date} 当前持仓快照已运行过，跳过。"
+        )
         return (True, "skipped_idempotency")
 
     end_day = _job_end_calendar_day()
@@ -1704,6 +1730,8 @@ def run(
             print(f"[step4] 持仓止损价更新失败 | portfolio_id={portfolio_id}")
 
     run_id = datetime.now(CN_TZ).strftime("%Y%m%d_%H%M%S") + "_" + str(uuid4())[:8]
+    if state_signature:
+        run_id += f"_sig{state_signature.lower()}"
     ticket_rows = [
         {
             "code": t.code,
@@ -1755,6 +1783,13 @@ def run(
         orders=ticket_rows,
     ):
         print(f"[step4] 已写入 AI 订单记录: run_id={run_id}, count={len(ticket_rows)}, portfolio_id={portfolio_id}")
+        cancelled = cancel_trade_orders(
+            portfolio_id=portfolio_id,
+            trade_date=trade_date,
+            exclude_run_id=run_id,
+        )
+        if cancelled:
+            print(f"[step4] 已作废同日旧 AI 订单: cancelled={cancelled}, portfolio_id={portfolio_id}")
     else:
         print(f"[step4] AI 订单记录写入失败（已忽略，不阻断流程） | portfolio_id={portfolio_id}")
 
