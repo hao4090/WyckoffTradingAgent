@@ -17,6 +17,10 @@ from supabase import Client, create_client
 from core.constants import TABLE_MARKET_SIGNAL_DAILY
 
 
+def _log_market_signal(message: str) -> None:
+    print(f"[supabase_market_signal] {message}", flush=True)
+
+
 def _get_supabase_admin_client() -> Client:
     url = (os.getenv("SUPABASE_URL") or "").strip()
     key = (
@@ -239,21 +243,47 @@ def upsert_market_signal_daily(trade_date: date | str, patch: dict[str, Any]) ->
 
 
 def load_latest_market_signal_daily(client: Client | None = None) -> dict[str, Any] | None:
-    try:
-        sb = client
-        if sb is None:
+    attempts: list[tuple[str, Client | None]] = []
+    if client is not None:
+        attempts.append(("provided", client))
+    else:
+        if is_supabase_admin_configured():
+            try:
+                attempts.append(("admin", _get_supabase_admin_client()))
+            except Exception as e:
+                _log_market_signal(
+                    f"load_latest_market_signal_daily admin init failed: {type(e).__name__}: {e}"
+                )
+        try:
             from integrations.supabase_client import get_supabase_client
 
-            sb = get_supabase_client()
-        resp = (
-            sb.table(TABLE_MARKET_SIGNAL_DAILY)
-            .select("*")
-            .order("trade_date", desc=True)
-            .limit(1)
-            .execute()
-        )
-        if not resp.data:
-            return None
-        return dict(resp.data[0])
-    except Exception:
-        return None
+            attempts.append(("session", get_supabase_client()))
+        except Exception as e:
+            _log_market_signal(
+                f"load_latest_market_signal_daily session init failed: {type(e).__name__}: {e}"
+            )
+
+    for source, sb in attempts:
+        try:
+            if sb is None:
+                continue
+            resp = (
+                sb.table(TABLE_MARKET_SIGNAL_DAILY)
+                .select("*")
+                .order("trade_date", desc=True)
+                .limit(1)
+                .execute()
+            )
+            if not resp.data:
+                _log_market_signal(f"load_latest_market_signal_daily: no rows (source={source})")
+                continue
+            row = dict(resp.data[0])
+            _log_market_signal(
+                f"load_latest_market_signal_daily: ok trade_date={row.get('trade_date')} source={source}"
+            )
+            return row
+        except Exception as e:
+            _log_market_signal(
+                f"load_latest_market_signal_daily failed (source={source}): {type(e).__name__}: {e}"
+            )
+    return None
