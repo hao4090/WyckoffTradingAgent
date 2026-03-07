@@ -81,11 +81,20 @@ with content_col:
         format_func=lambda x: "Gemini" if x == "gemini" else x,
         key="ai_provider",
     )
-    model = st.selectbox(
-        "模型",
-        options=list(GEMINI_MODELS),
-        key="ai_model",
+    default_model = (
+        st.session_state.get("ai_model")
+        or st.session_state.get("gemini_model")
+        or "gemini-2.5-flash-lite"
     )
+    model = st.text_input(
+        "模型",
+        value=str(default_model),
+        key="ai_model",
+        help="可手动填写任意 Gemini 模型名，不再受下拉框限制。",
+    ).strip()
+    if not model:
+        model = str(default_model).strip()
+    st.caption("常用模型示例：" + "、".join(GEMINI_MODELS[:6]))
 
     # 2) API Key 校验
     api_key = (st.session_state.get("gemini_api_key") or "").strip()
