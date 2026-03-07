@@ -260,6 +260,26 @@ def _cancel_todays_orders(portfolio_id: str, trade_date: str) -> tuple[int, str]
         return 0, f"AI 建议作废失败: {e}"
 
 
+def _fmt_cn_dt_short(dt: datetime | None) -> str:
+    if not isinstance(dt, datetime):
+        return "-"
+    return dt.astimezone(CN_TZ).strftime("%Y%m%d %H:%M")
+
+
+def _render_notice(kind: str, text: str) -> None:
+    tone = str(kind or "").strip().lower()
+    if tone not in {"info", "success", "warning", "danger"}:
+        tone = "info"
+    st.markdown(
+        f"""
+<div class="portfolio-notice portfolio-notice-{tone}">
+  <div class="notice-text">{text}</div>
+</div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def _load_user_live(portfolio_id: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     supabase = get_supabase_client()
 
@@ -461,8 +481,71 @@ with content_col:
   letter-spacing: 0.2px;
   line-height: 1.1;
 }
+.portfolio-notice {
+  border-radius: 16px;
+  padding: 14px 16px;
+  border: 1px solid #d9dee8;
+  background: linear-gradient(135deg, #f7f9fc 0%, #eef3fb 100%);
+  margin-bottom: 14px;
+}
+.portfolio-notice .notice-text {
+  color: #1e2b45;
+  font-size: 15px;
+  line-height: 1.45;
+  font-weight: 520;
+}
+.portfolio-notice-info {
+  border-color: #cfd9ea;
+  background: linear-gradient(135deg, #f6f8fc 0%, #ecf2fb 100%);
+}
+.portfolio-notice-success {
+  border-color: #cfe6d5;
+  background: linear-gradient(135deg, #f6fbf7 0%, #eaf6ee 100%);
+}
+.portfolio-notice-warning {
+  border-color: #ecd7b0;
+  background: linear-gradient(135deg, #fffaf0 0%, #fff2d9 100%);
+}
+.portfolio-notice-danger {
+  border-color: #ebc9c9;
+  background: linear-gradient(135deg, #fff6f6 0%, #fdeaea 100%);
+}
+.portfolio-run-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin: 10px 0 14px;
+}
+.portfolio-run-card {
+  border: 1px solid #e6e9f0;
+  border-radius: 16px;
+  background: #fbfcfe;
+  padding: 14px 16px;
+}
+.portfolio-run-card .label {
+  color: #7a808c;
+  font-size: 13px;
+  line-height: 1.3;
+  margin-bottom: 8px;
+}
+.portfolio-run-card .value {
+  color: #1f2430;
+  font-size: 26px;
+  line-height: 1.15;
+  font-weight: 650;
+  word-break: break-word;
+}
+.portfolio-section-title {
+  color: #1f2430;
+  font-size: 18px;
+  font-weight: 650;
+  margin: 18px 0 6px;
+}
 @media (max-width: 960px) {
   .portfolio-summary {
+    grid-template-columns: 1fr;
+  }
+  .portfolio-run-summary {
     grid-template-columns: 1fr;
   }
 }
@@ -546,34 +629,30 @@ with content_col:
     flash_notice = str(st.session_state.pop("portfolio_flash_notice", "") or "").strip()
     flash_warning = str(st.session_state.pop("portfolio_flash_warning", "") or "").strip()
     if flash_notice:
-        st.success(flash_notice)
+        _render_notice("success", flash_notice)
     if flash_warning:
-        st.warning(flash_warning)
+        _render_notice("warning", flash_warning)
 
     tab_edit, tab_orders = st.tabs(["📝 持仓编辑", "📋 AI 建议"])
 
     with tab_edit:
         st.caption("当前页仅显示当前登录账号持仓。编辑过程中不会自动刷新，点击保存后才会提交并重载。")
         if edit_locked:
-            st.warning(f"当前处于编辑禁区：{edit_locked_reason}。为避免与定时任务冲突，暂时禁止修改持仓。")
+            _render_notice("warning", f"当前处于编辑禁区：{edit_locked_reason}。为避免与定时任务冲突，暂时禁止修改持仓。")
         elif latest_active_run and active_order_stale:
-            st.warning("检测到当前持仓已与最新 AI 建议脱节。保存持仓后，系统会自动作废当日旧建议。")
+            _render_notice("warning", "检测到当前持仓已与最新 AI 建议脱节。保存持仓后，系统会自动作废当日旧建议。")
         elif latest_active_run:
-            st.info("当前 AI 建议与最新持仓状态一致，可在下方继续编辑。")
+            _render_notice("success", "当前 AI 建议与最新持仓状态一致，可在下方继续编辑。")
 
         with st.form("portfolio_edit_form", clear_on_submit=False):
-            c1, c2 = st.columns([1, 2])
-            with c1:
-                free_cash_input = st.text_input(
-                    "现金",
-                    value=f"{free_cash_initial:.2f}",
-                    help="用于 Step4 的可用现金",
-                    disabled=edit_locked,
-                )
-            with c2:
-                st.info("总资产按“现金 + 持仓成本市值”自动计算并保存。")
+            free_cash_input = st.text_input(
+                "现金",
+                value=f"{free_cash_initial:.2f}",
+                help="用于 Step4 的可用现金",
+                disabled=edit_locked,
+            )
 
-            st.markdown("### 持仓股")
+            st.markdown('<div class="portfolio-section-title">持仓股</div>', unsafe_allow_html=True)
             st.caption("每行一只股票。勾选“删除”或把数量改为 0，保存后会清仓。可直接新增行。")
 
             editor_df = st.data_editor(
@@ -665,28 +744,39 @@ with content_col:
     with tab_orders:
         st.caption("展示当前账号最近的 AI 订单建议。若持仓已变更而建议未刷新，这里会直接提示。")
         if order_error:
-            st.warning(order_error)
+            _render_notice("warning", order_error)
         elif not order_rows:
-            st.info("暂无 AI 建议记录。")
+            _render_notice("info", "暂无 AI 建议记录。")
         else:
             ref_run = latest_active_run or latest_run
             ref_created = ref_run.get("created_at") if ref_run else None
-            ref_created_text = (
-                ref_created.astimezone(CN_TZ).strftime("%Y-%m-%d %H:%M:%S")
-                if isinstance(ref_created, datetime)
-                else "-"
+            ref_created_text = _fmt_cn_dt_short(ref_created)
+            st.markdown(
+                f"""
+<div class="portfolio-run-summary">
+  <div class="portfolio-run-card">
+    <div class="label">最近运行时间</div>
+    <div class="value">{ref_created_text}</div>
+  </div>
+  <div class="portfolio-run-card">
+    <div class="label">当前有效建议</div>
+    <div class="value">{int(latest_active_run.get("active_count", 0)) if latest_active_run else 0}</div>
+  </div>
+  <div class="portfolio-run-card">
+    <div class="label">最近运行作废数</div>
+    <div class="value">{int(ref_run.get("cancelled_count", 0)) if ref_run else 0}</div>
+  </div>
+</div>
+                """,
+                unsafe_allow_html=True,
             )
-            c1, c2, c3 = st.columns(3)
-            c1.metric("最近运行时间", ref_created_text)
-            c2.metric("当前有效建议", int(latest_active_run.get("active_count", 0)) if latest_active_run else 0)
-            c3.metric("最近运行作废数", int(ref_run.get("cancelled_count", 0)) if ref_run else 0)
 
             if latest_active_run and active_order_stale:
-                st.warning("最新有效 AI 建议基于旧持仓生成，当前已过时。保存持仓后旧建议会自动作废。")
+                _render_notice("warning", "最新有效 AI 建议基于旧持仓生成，当前已过时。保存持仓后旧建议会自动作废。")
             elif latest_active_run:
-                st.success("最新有效 AI 建议与当前持仓一致。")
+                _render_notice("success", "最新有效 AI 建议与当前持仓一致。")
             else:
-                st.info("当前没有有效 AI 建议，最近记录可能都已被作废。")
+                _render_notice("info", "当前没有有效 AI 建议，最近记录可能都已被作废。")
 
             run_label = "最新有效 run" if latest_active_run else "最近 run"
             st.markdown(
@@ -704,7 +794,9 @@ with content_col:
                 ref_df["持仓关联"] = ref_df["code"].astype(str).apply(
                     lambda x: "当前持仓" if x in existing_codes else "已不在持仓"
                 )
-                ref_df["生成时间"] = ref_df["created_at"].astype(str).str.slice(0, 19).str.replace("T", " ", regex=False)
+                ref_df["生成时间"] = ref_df["created_at"].apply(
+                    lambda x: _fmt_cn_dt_short(_parse_iso_ts(x))
+                )
                 display_cols = [
                     "code",
                     "name",
@@ -749,11 +841,7 @@ with content_col:
                                 "model": run.get("model"),
                                 "active_count": run.get("active_count"),
                                 "cancelled_count": run.get("cancelled_count"),
-                                "created_at": (
-                                    run.get("created_at").astimezone(CN_TZ).strftime("%Y-%m-%d %H:%M:%S")
-                                    if isinstance(run.get("created_at"), datetime)
-                                    else "-"
-                                ),
+                                "created_at": _fmt_cn_dt_short(run.get("created_at")),
                                 "state_sig": run.get("state_signature") or "-",
                             }
                             for run in order_runs
