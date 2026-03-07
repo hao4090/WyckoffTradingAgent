@@ -623,13 +623,13 @@ def _build_track_user_message(
         scope = (
             "[本轮分析范围]\n"
             "本轮仅分析 Trend轨（右侧主升 / 放量点火 / 突破组）。\n"
-            "请重点审查是否存在高潮诱多、深水区反抽、爆量次日承接不足等问题。"
+            "请重点审查是否存在高潮诱多、深水区反抽、爆量次日承接不足，以及看似突破实为派发等问题。"
         )
     else:
         scope = (
             "[本轮分析范围]\n"
             "本轮仅分析 Accum轨（左侧潜伏 / Spring / LPS / Accum_C 组）。\n"
-            "请重点审查供应是否真正枯竭；若下跌放量或支撑反复失守，应直接归入继续观察。"
+            "请重点审查供应是否真正枯竭；若下跌放量或支撑反复失守，应归入继续观察。若出现长下影、高收位、放量拉回，不得机械判死刑，必须分辨是真Spring还是失败反抽。"
         )
 
     message = (
@@ -649,7 +649,10 @@ def _build_track_user_message(
         + "1) 禁止单点价格指令，必须给“结构战区(Action Zone) + 盘面确认条件(Tape Condition)”。\n"
         + "2) 战区需围绕每只股票的“价格锚点（最新收盘价）”描述，但不得刻舟求剑。\n"
         + "3) 买入触发必须包含量价确认条件（如缩量回踩/拒绝下破）；若放量下破，必须取消买入。\n"
-        + "4) 强势突破标的必须给“防踏空策略”：开盘强势确认后可先用计划仓位1/3试单，其余等待二次确认。\n\n"
+        + "4) 强势突破标的必须给“防踏空策略”：开盘强势确认后可先用计划仓位1/3试单，其余等待二次确认。\n"
+        + "5) 输入中的“量化初筛假设/阶段假设”只是程序的一阶假设，不是结论；若15日切片证据冲突，你必须直接推翻它。\n"
+        + "6) 盘面解剖必须结合振幅、收位与量比，明确说明盘中洗盘、承接、冲高回落或拒绝下跌的博弈痕迹。\n"
+        + "7) 次日计划优先用 Plan A / Plan B 条件树表达，不要写机械目标价。\n\n"
         + "\n".join(payloads)
     )
     return message
@@ -805,9 +808,9 @@ def generate_stock_payload(
             if t.lower() in raw_tag.lower():
                 facts.append(t.upper())
         if facts:
-            tag_text = f" | 触发事实：{'/'.join(facts)}"
+            tag_text = f" | 量化初筛假设：{'/'.join(facts)}"
         else:
-            tag_text = f" | 触发事实：{raw_tag}"
+            tag_text = f" | 量化初筛假设：{raw_tag}"
             
     header = (
         f"• {stock_code} {stock_name}{policy_prefix}{tag_text}\n"
@@ -815,7 +818,7 @@ def generate_stock_payload(
         f"{background}\n"
     )
     if stage:
-        header += f"  [阶段参考] {stage}\n"
+        header += f"  [阶段假设] {stage}\n"
     if industry:
         header += f"  [行业/主营] {industry}\n"
 
