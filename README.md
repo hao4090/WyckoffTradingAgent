@@ -1,8 +1,8 @@
 # A 股选股与行情工具
 
-> 每天从全市场筛选出**最值得次日操作的 6 只股票**，并生成 AI 研报；同时支持行情数据查询与 CSV 导出。
+> 每天从全市场多层筛选出高弹性标的，由「Alpha 全栈虚拟投委会」出具**三阵营研报（逻辑破产/储备营地/处于起跳板）**；涵盖量化风控、状态签名防重传机制与个人持仓管理。
 
-用 [akshare](https://github.com/akfamily/akshare) + 自研 Wyckoff 漏斗做量化初筛，再用大模型做深度分析。适合想快速拿到每日「明日可买清单」的 A 股投资者。
+用 [akshare](https://github.com/akfamily/akshare) + 自研 Wyckoff 漏斗做量化初筛，交由大模型开展多空博弈深度剖析，最后由 OMS 负责执行约束。适合拒绝无脑黑盒、需“白盒逻辑 + 量化防守 + AI参谋预判”的 A 股散户投资者。
 
 **在线体验：** [https://wyckoff-analysis-youngcanphoenix.streamlit.app/](https://wyckoff-analysis-youngcanphoenix.streamlit.app/)
 
@@ -70,8 +70,8 @@ python -u -m integrations.fetch_a_share_csv --symbols 000973 600798 601390
 
 ## 📅 每日选股（Wyckoff Funnel）
 
-从全市场（主板 + 创业板）多轮过滤，最终输出**最值得次日操作的 6 只股票**，并生成 AI 研报，推送到飞书。  
-水温判断同时参考指数趋势 + 市场广度（站上 MA20 占比），弱市会自动收紧阈值。
+从全市场（主板 + 创业板）多轮过滤，最终输出高胜率的精要标的，经过量化压缩后交由 AI 研判并推送到飞书。  
+水温判断同时参考指数趋势 + 市场广度（站上 MA20 占比），弱市会自动收紧筛选与买入容忍度。
 
 ### 漏斗筛选逻辑（多层）
 
