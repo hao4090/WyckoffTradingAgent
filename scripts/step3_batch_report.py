@@ -843,30 +843,23 @@ def generate_stock_payload(
     if pd.isna(avg_amount_val):
         avg_amount_val = amount_ma20_val / 1e8 if pd.notna(amount_ma20_val) else pd.NA
 
-    if pd.notna(ma50_val) and pd.notna(ma200_val) and ma200_val > 0:
-        if ma50_val > ma200_val:
-            trend = "长期多头排列 (MA50 > MA200)"
-        else:
-            trend = "长期空头或震荡 (MA50 <= MA200)"
+    extra_parts: list[str] = []
+    if pd.notna(ma50_val):
+        extra_parts.append(f"MA50:{ma50_val:.2f}")
+    if pd.notna(ma200_val):
+        extra_parts.append(f"MA200:{ma200_val:.2f}")
+    if pd.notna(ma200_val) and ma200_val > 0:
         bias_200 = (close_val - ma200_val) / ma200_val * 100
-        extra_parts: list[str] = []
-        if pd.notna(market_cap_val):
-            extra_parts.append(f"总市值:{float(market_cap_val):.0f}亿")
-        if pd.notna(avg_amount_val):
-            extra_parts.append(f"20日均成交额:{float(avg_amount_val):.2f}亿")
-        extra_text = f"，{'，'.join(extra_parts)}" if extra_parts else ""
-        background = (
-            f"  [结构背景] 现价:{close_val:.2f}, MA50:{ma50_val:.2f}, MA200:{ma200_val:.2f}。"
-            f"{trend}，年线乖离率:{bias_200:.1f}%{extra_text}"
-        )
+        extra_parts.append(f"年线乖离:{bias_200:.1f}%")
+    if pd.notna(market_cap_val):
+        extra_parts.append(f"市值:{float(market_cap_val):.0f}亿")
+    if pd.notna(avg_amount_val):
+        extra_parts.append(f"20日均成交:{float(avg_amount_val):.2f}亿")
+    extra_text = ", ".join(extra_parts)
+    if extra_text:
+        background = f"  [结构背景] 现价:{close_val:.2f}, {extra_text}"
     else:
-        extra_parts = []
-        if pd.notna(market_cap_val):
-            extra_parts.append(f"总市值:{float(market_cap_val):.0f}亿")
-        if pd.notna(avg_amount_val):
-            extra_parts.append(f"20日均成交额:{float(avg_amount_val):.2f}亿")
-        extra_text = f"，{'，'.join(extra_parts)}" if extra_parts else ""
-        background = f"  [结构背景] 现价:{close_val:.2f}（数据不足以计算 MA200）{extra_text}"
+        background = f"  [结构背景] 现价:{close_val:.2f}"
 
     policy_prefix = f" {policy_tag}" if policy_tag else ""
     tag_text = ""
@@ -938,7 +931,7 @@ def generate_stock_payload(
     if highlights:
         highlight_section = "\n  [近60日异动高光]:\n" + "\n".join(highlights) + "\n"
 
-    return header + supply_summary + "\n".join(recent_lines) + "\n" + highlight_section + "\n"
+    return header + "\n".join(recent_lines) + "\n" + supply_summary + highlight_section + "\n"
 
 
 def run(
