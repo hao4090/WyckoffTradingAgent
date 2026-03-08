@@ -4,7 +4,7 @@ import streamlit as st
 
 from app.auth_component import check_auth, login_form
 from core.token_storage import restore_tokens_from_storage
-from integrations.supabase_market_signal import load_latest_market_signal_daily
+from integrations.supabase_market_signal import compose_market_banner, load_latest_market_signal_daily
 
 def _set_default(key: str, value) -> None:
     if key not in st.session_state or st.session_state.get(key) is None:
@@ -339,9 +339,10 @@ def _render_market_signal_banner() -> None:
     if not isinstance(row, dict):
         return
 
-    tone = str(row.get("banner_tone", "谨慎") or "谨慎").strip()
-    title = str(row.get("banner_title", "") or "").strip()
-    body = str(row.get("banner_message", "") or "").strip()
+    banner = compose_market_banner(row)
+    tone = str(banner.get("banner_tone", "谨慎") or "谨慎").strip()
+    title = str(banner.get("banner_title", "") or "").strip()
+    body = str(banner.get("banner_message", "") or "").strip()
     benchmark_regime_raw = str(row.get("benchmark_regime", "") or "")
     regime = _benchmark_regime_cn(benchmark_regime_raw)
     main_close = row.get("main_index_close")

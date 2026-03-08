@@ -212,6 +212,16 @@ Step4 完全由 GitHub Actions Secrets 驱动：读取 `SUPABASE_USER_ID` 定位
 
 ---
 
+## ☕ 赞助与支持
+
+各位股友，觉得这个脚本筛选的股票形态很得您心，辛苦给个吆喝，点个star。如果这个借助这个脚本赚到钱了，也欢迎赞助作者一顿汉堡，升级下大模型和股票数据，非常感谢
+
+| 支付宝 (Alipay) | 微信支付 (WeChat) |
+| :---: | :---: |
+| <img src="attach/支付宝收款码.jpg" width="250" /> | <img src="attach/微信收款码.png" width="250" /> |
+
+---
+
 ## 附录
 
 ### 目录结构
