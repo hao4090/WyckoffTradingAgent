@@ -390,6 +390,43 @@ def _build_hit_map(triggers: dict[str, list[tuple[str, float]]]) -> dict[str, li
     return hit_map
 
 
+def _blocked_exit_signal_map(exit_signals: dict[str, dict] | None) -> dict[str, dict]:
+    blocked: dict[str, dict] = {}
+    for code, raw in (exit_signals or {}).items():
+        signal = str((raw or {}).get("signal", "")).strip()
+        if signal in {"stop_loss", "distribution_warning"}:
+            blocked[str(code)] = dict(raw or {})
+    return blocked
+
+
+def _explain_risk_reject(
+    code: str,
+    blocked_exit_map: dict[str, dict],
+    hit_map: dict[str, list[str]],
+) -> str:
+    exit_sig = blocked_exit_map.get(code, {}) or {}
+    signal = str(exit_sig.get("signal", "")).strip()
+    signal_label = {
+        "stop_loss": "触发结构止损",
+        "distribution_warning": "触发Distribution派发警告",
+    }.get(signal, "触发风控硬剔除")
+    reason = str(exit_sig.get("reason", "")).strip()
+    price = exit_sig.get("price")
+    trigger_labels = "、".join(hit_map.get(code, []))
+
+    parts = [signal_label]
+    if price is not None:
+        try:
+            parts.append(f"参考价={float(price):.2f}")
+        except Exception:
+            pass
+    if trigger_labels:
+        parts.append(f"L4命中={trigger_labels}")
+    if reason:
+        parts.append(reason)
+    return " | ".join(parts)
+
+
 def main() -> int:
     raw_list = os.getenv("REVIEW_LIST", "").strip() or os.getenv("review_list", "").strip()
     review_codes = _parse_review_list(raw_list)
@@ -428,6 +465,7 @@ def main() -> int:
 
     l2_ctx = _build_layer2_context(l1_symbols=l1_symbols, df_map=df_map, bench_df=bench_df, cfg=cfg)
     hit_map = _build_hit_map(triggers)
+    blocked_exit_map = _blocked_exit_signal_map(metrics.get("exit_signals", {}) or {})
 
     rows: list[dict[str, str]] = []
     stage_counter: Counter[str] = Counter()
@@ -463,6 +501,13 @@ def main() -> int:
         elif code not in l3_set:
             stage = "L3淘汰"
             reason = "行业共振层未通过"
+        elif code in blocked_exit_map:
+            stage = "风控淘汰[触发结构止损或派发]"
+            reason = _explain_risk_reject(
+                code=code,
+                blocked_exit_map=blocked_exit_map,
+                hit_map=hit_map,
+            )
         elif code in hit_map:
             stage = "L4命中"
             reason = "、".join(hit_map.get(code, []))
