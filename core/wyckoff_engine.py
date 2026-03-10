@@ -436,23 +436,22 @@ def layer2_strength_detailed(
             close_series = pd.to_numeric(df_sorted["close"], errors="coerce")
             rps_window = max(int(cfg.rps_slope_window), 2)
             
-            # 计算最近 N 日的收益率
-            recent_returns = []
+            # 修正：计算最近 N 日的累计收益率曲线（相对起点），而不是单日收益率
+            recent_closes = []
             for i in range(-rps_window, 0):
-                if len(close_series) + i >= 1 and len(close_series) + i - 1 >= 0:
-                    prev_close = float(close_series.iloc[i-1])
-                    curr_close = float(close_series.iloc[i])
-                    if prev_close > 0:
-                        ret = (curr_close - prev_close) / prev_close * 100.0
-                        recent_returns.append(ret)
+                if len(close_series) + i >= 0:
+                    recent_closes.append(float(close_series.iloc[i]))
             
-            # 线性回归斜率：判断收益率是否在上升
-            if len(recent_returns) >= 2:
+            # 线性回归斜率：判断累计涨幅曲线是否在爬升
+            if len(recent_closes) >= 2:
                 import numpy as np
-                x = np.arange(len(recent_returns))
-                y = np.array(recent_returns)
-                slope = np.polyfit(x, y, 1)[0]
-                rps_slope_ok = slope >= cfg.rps_slope_min
+                base_price = recent_closes[0]
+                if base_price > 0:
+                    cum_returns = [(p - base_price) / base_price * 100.0 for p in recent_closes]
+                    x = np.arange(len(cum_returns))
+                    y = np.array(cum_returns)
+                    slope = np.polyfit(x, y, 1)[0]
+                    rps_slope_ok = slope >= cfg.rps_slope_min
         
         if cfg.enable_rps_filter and rps_filter_active:
             momentum_rps_ok = (
@@ -873,9 +872,10 @@ def _detect_spring(df: pd.DataFrame, cfg: FunnelConfig) -> float | None:
     if len(df) < cfg.spring_support_window + 2:
         return None
     df_s = _sorted_if_needed(df)
-    support_zone = df_s.iloc[-(cfg.spring_support_window + 1) : -1]
+    # 修正：支撑位不能包含正在进行跌破测试的前一日（prev）
+    support_zone = df_s.iloc[-(cfg.spring_support_window + 2) : -2]
     # 调用时把历史前序 df_full 传进去计算 ATR
-    if not _is_trading_range_context(support_zone, cfg, df_full=df_s.iloc[:-1]):
+    if not _is_trading_range_context(support_zone, cfg, df_full=df_s.iloc[:-2]):
         return None
     support_level = support_zone["close"].min()
     prev = df_s.iloc[-2]
@@ -924,7 +924,9 @@ def _detect_lps(df: pd.DataFrame, cfg: FunnelConfig) -> float | None:
         return None
 
     recent_max_vol = recent["volume"].max()
-    ref_max_vol = df_s["volume"].tail(cfg.lps_vol_ref_window).max()
+    # 修正：参考期应剥离当前考察期（recent）
+    ref_window_df = df_s.tail(cfg.lps_vol_ref_window + cfg.lps_lookback).iloc[:-cfg.lps_lookback]
+    ref_max_vol = ref_window_df["volume"].max() if not ref_window_df.empty else 0
     if ref_max_vol <= 0:
         return None
     vol_ratio = recent_max_vol / ref_max_vol
@@ -1099,9 +1101,11 @@ def _detect_sos(df: pd.DataFrame, cfg: FunnelConfig) -> float | None:
     is_breakout = float(close_last) >= max_recent_high * (1.0 - breakout_tolerance)
 
     is_ma_crossover = False
-    if ma50_last is not None and pd.notna(ma50_last):
+    ma50_prev = ma50.iloc[-2] if len(ma50) >= 2 else None
+    if ma50_last is not None and pd.notna(ma50_last) and ma50_prev is not None and pd.notna(ma50_prev):
         prev_close = float(close.iloc[-2])
-        if prev_close <= float(ma50_last) and float(close_last) > float(ma50_last):
+        # 修正：Lookahead 问题，昨天的收盘价比昨天的 MA50，今天收盘价比今天的 MA50
+        if prev_close <= float(ma50_prev) and float(close_last) > float(ma50_last):
             is_ma_crossover = True
 
     if not (is_breakout or is_ma_crossover):
@@ -1144,12 +1148,10 @@ def layer4_triggers(
             if score is not None:
                 results["evr"].append((sym, score))
         
-        # 只有在 Layer 2 中没有检测到 SOS 的股票，才在 Layer 4 中检测
-        channels = channel_map.get(sym, "")
-        if "点火破局" not in channels:
-            score = _detect_sos(df, cfg)
-            if score is not None:
-                results["sos"].append((sym, score))
+        # 修正：Layer 2 虽然可以去重，但由于下游高度依赖 results["sos"]，所以必须每次都计算或填充
+        score = _detect_sos(df, cfg)
+        if score is not None:
+            results["sos"].append((sym, score))
     return results
 
 
