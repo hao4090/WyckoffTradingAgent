@@ -201,6 +201,20 @@ def main() -> int:
 
     payload = _load_payload(args.payload_json)
     requested_by_user_id = str(payload.get("user_id", "") or "").strip()
+    
+    # 注入用户配置的环境变量（Tushare Token 等）
+    if requested_by_user_id:
+        try:
+            from integrations.supabase_portfolio import load_user_settings_admin
+            user_settings = load_user_settings_admin(requested_by_user_id)
+            if user_settings:
+                ts_token = str(user_settings.get("tushare_token") or "").strip()
+                if ts_token:
+                    os.environ["TUSHARE_TOKEN"] = ts_token
+                    # print(f"[web_background_job] 已注入用户 {requested_by_user_id[:8]} 的 Tushare Token")
+        except Exception as e:
+            print(f"[web_background_job] 注入用户配置失败: {e}")
+
     base_result: dict[str, Any] = {
         "request_id": args.request_id,
         "job_kind": args.job_kind,
