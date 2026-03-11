@@ -224,6 +224,100 @@ class FunnelResult(NamedTuple):
     channel_map: dict[str, str]
 
 
+def fit_ai_candidate_quotas(
+    total_cap: int,
+    trend_quota: int,
+    accum_quota: int,
+) -> tuple[int, int]:
+    """Fit requested Trend/Accum quotas into a global total cap."""
+    total_cap_local = max(int(total_cap), 0)
+    trend_quota_local = max(int(trend_quota), 0)
+    accum_quota_local = max(int(accum_quota), 0)
+    if total_cap_local <= 0:
+        return (0, 0)
+
+    requested_total = trend_quota_local + accum_quota_local
+    if requested_total <= total_cap_local:
+        return (trend_quota_local, accum_quota_local)
+    if requested_total <= 0:
+        return (0, 0)
+
+    trend_eff = min(
+        max(int(round(total_cap_local * (trend_quota_local / requested_total))), 0),
+        trend_quota_local,
+    )
+    accum_eff = min(accum_quota_local, max(total_cap_local - trend_eff, 0))
+    remaining = max(total_cap_local - trend_eff - accum_eff, 0)
+
+    if remaining > 0 and trend_eff < trend_quota_local:
+        take = min(remaining, trend_quota_local - trend_eff)
+        trend_eff += take
+        remaining -= take
+    if remaining > 0 and accum_eff < accum_quota_local:
+        take = min(remaining, accum_quota_local - accum_eff)
+        accum_eff += take
+
+    return (trend_eff, accum_eff)
+
+
+def resolve_ai_candidate_policy(
+    regime: str,
+    override_total_cap: int = -1,
+) -> dict[str, int | str]:
+    """
+    Central source of truth for AI allocation defaults.
+
+    CRASH / PANIC_REPAIR / BLACK_SWAN all share the defensive quota family
+    instead of silently falling back to NEUTRAL.
+    """
+    import os
+
+    total_cap = (
+        max(int(os.getenv("FUNNEL_AI_TOTAL_CAP", "12")), 0)
+        if override_total_cap < 0
+        else max(int(override_total_cap), 0)
+    )
+    risk_on_trend = max(int(os.getenv("FUNNEL_AI_RISK_ON_TREND", "8")), 0)
+    risk_on_accum = max(int(os.getenv("FUNNEL_AI_RISK_ON_ACCUM", "4")), 0)
+    risk_off_trend = max(int(os.getenv("FUNNEL_AI_RISK_OFF_TREND", "3")), 0)
+    risk_off_accum = max(int(os.getenv("FUNNEL_AI_RISK_OFF_ACCUM", "6")), 0)
+    neutral_trend = max(int(os.getenv("FUNNEL_AI_NEUTRAL_TREND", "7")), 0)
+    neutral_accum = max(int(os.getenv("FUNNEL_AI_NEUTRAL_ACCUM", "5")), 0)
+    max_trend_l3_fill = max(int(os.getenv("FUNNEL_AI_MAX_TREND_L3_FILL", "0")), 0)
+    max_accum_l3_fill = max(int(os.getenv("FUNNEL_AI_MAX_ACCUM_L3_FILL", "0")), 0)
+
+    regime_norm = str(regime or "").strip().upper()
+    if regime_norm == "RISK_ON":
+        requested_trend = risk_on_trend
+        requested_accum = risk_on_accum
+        quota_family = "RISK_ON"
+    elif regime_norm in {"RISK_OFF", "CRASH", "PANIC_REPAIR", "BLACK_SWAN"}:
+        requested_trend = risk_off_trend
+        requested_accum = risk_off_accum
+        quota_family = "RISK_OFF"
+    else:
+        requested_trend = neutral_trend
+        requested_accum = neutral_accum
+        quota_family = "NEUTRAL"
+
+    trend_quota, accum_quota = fit_ai_candidate_quotas(
+        total_cap,
+        requested_trend,
+        requested_accum,
+    )
+    return {
+        "regime": regime_norm or "NEUTRAL",
+        "quota_family": quota_family,
+        "total_cap": total_cap,
+        "requested_trend_quota": requested_trend,
+        "requested_accum_quota": requested_accum,
+        "trend_quota": trend_quota,
+        "accum_quota": accum_quota,
+        "max_trend_l3_fill": max_trend_l3_fill,
+        "max_accum_l3_fill": max_accum_l3_fill,
+    }
+
+
 
 
 # Layer 1: 剥离垃圾
@@ -798,9 +892,10 @@ def layer3_sector_resonance(
         keep_sectors_sorted[:top_n] if top_n > 0 else keep_sectors_sorted
     )
 
-    # 威科夫重个股量价、轻板块。为了避免把底部尚未形成板块效应的吸筹股、潜伏股错杀，
-    # L3 板块共振不再做硬性拦截（不剔除股票），只作特征打标签和 Top 行业计算输出。
-    filtered = symbols
+    # 威科夫重个股量价、轻板块，但需要板块强度护航。
+    # 重新开启 L3 拦截（丢掉没有板块效应的个股）
+    keep_set = set(keep_sectors_sorted)
+    filtered = [sym for sym in symbols if sector_map.get(sym, "") in keep_set]
     return filtered, top_sectors
 
 
@@ -848,8 +943,8 @@ def _is_trading_range_context(zone: pd.DataFrame, cfg: FunnelConfig, df_full: pd
         if pd.notna(last_atr) and pd.notna(last_c) and last_c > 0:
             atr_pct = (last_atr / last_c) * 100.0
             max_allowed_range_pct = atr_pct * getattr(cfg, "spring_tr_atr_max_multiple", 4.0)
-            # 加一层硬风控：振幅哪怕放宽，最高不能超过45%，最低不低于15%
-            max_allowed_range_pct = min(max(max_allowed_range_pct, 15.0), 45.0)
+            # 放松动态振幅：不再死板卡 15~45，而是最低保底为原始配置（通常是30%），最高可达 60%，给大蓝筹和大盘股透气
+            max_allowed_range_pct = min(max(max_allowed_range_pct, float(cfg.spring_tr_max_range_pct)), 60.0)
 
     if range_pct > max_allowed_range_pct:
         return False
@@ -1074,20 +1169,9 @@ def _detect_sos(df: pd.DataFrame, cfg: FunnelConfig) -> float | None:
 
     vol_ratio = float(volume.iloc[-1]) / vol_ref_avg
 
-    # 引入分位数检测
-    target_quantile = getattr(cfg, "sos_vol_quantile", 0.95)
-    valid_vol_ref = vol_ref.replace(0, pd.NA).dropna()
-
-    if len(valid_vol_ref) < 20:
-        # 样本天数不够，回退到基础倍数判断
-        if vol_ratio < cfg.sos_vol_ratio:
-            return None
-    else:
-        # 要求当天的量必须突破过去一段时间的极值分位（比如 95%）
-        import numpy as np
-        quantile_threshold = float(np.quantile(valid_vol_ref.values, target_quantile))
-        if float(volume.iloc[-1]) < quantile_threshold:
-            return None
+    # 取消 95% 分位数极值爆量约束，回到常识性简单的放量倍数判断
+    if vol_ratio < float(getattr(cfg, "sos_vol_ratio", 2.0)):
+        return None
 
     # 结构突破要求：创N日新高，或强势穿透季线/半年线
     ma50 = close.rolling(50).mean()
@@ -1569,58 +1653,15 @@ def allocate_ai_candidates(
     """
     根据大盘政权和各轨配额，计算优先级得分，输出 (trend_selected, accum_selected, score_map)
     """
-    import os
-
-    total_cap = max(int(os.getenv("FUNNEL_AI_TOTAL_CAP", "20")), 0) if override_total_cap < 0 else max(override_total_cap, 0)
-    risk_on_trend = max(int(os.getenv("FUNNEL_AI_RISK_ON_TREND", "15")), 0)
-    risk_on_accum = max(int(os.getenv("FUNNEL_AI_RISK_ON_ACCUM", "8")), 0)
-    risk_off_trend = max(int(os.getenv("FUNNEL_AI_RISK_OFF_TREND", "5")), 0)
-    risk_off_accum = max(int(os.getenv("FUNNEL_AI_RISK_OFF_ACCUM", "15")), 0)
-    neutral_trend = max(int(os.getenv("FUNNEL_AI_NEUTRAL_TREND", "10")), 0)
-    neutral_accum = max(int(os.getenv("FUNNEL_AI_NEUTRAL_ACCUM", "10")), 0)
-
-    if regime == "RISK_ON":
-        trend_quota = risk_on_trend
-        accum_quota = risk_on_accum
-    elif regime == "RISK_OFF":
-        trend_quota = risk_off_trend
-        accum_quota = risk_off_accum
-    else:
-        trend_quota = neutral_trend
-        accum_quota = neutral_accum
+    policy = resolve_ai_candidate_policy(regime, override_total_cap=override_total_cap)
+    total_cap = int(policy["total_cap"])
+    trend_quota = int(policy["trend_quota"])
+    accum_quota = int(policy["accum_quota"])
+    max_trend_l3_fill = int(policy["max_trend_l3_fill"])
+    max_accum_l3_fill = int(policy["max_accum_l3_fill"])
 
     trend_channel_tags = {"主升通道", "点火破局"}
     accum_channel_tags = {"潜伏通道", "吸筹通道", "地量蓄势", "暗中护盘"}
-
-    def _fit_quotas_to_total_cap(
-        total_cap_local: int,
-        trend_quota_local: int,
-        accum_quota_local: int,
-    ) -> tuple[int, int]:
-        if total_cap_local <= 0:
-            return (0, 0)
-        requested_total = max(trend_quota_local, 0) + max(accum_quota_local, 0)
-        if requested_total <= total_cap_local:
-            return (max(trend_quota_local, 0), max(accum_quota_local, 0))
-        if requested_total <= 0:
-            return (0, 0)
-
-        trend_eff = min(
-            max(int(round(total_cap_local * (max(trend_quota_local, 0) / requested_total))), 0),
-            max(trend_quota_local, 0),
-        )
-        accum_eff = min(max(accum_quota_local, 0), max(total_cap_local - trend_eff, 0))
-        remaining = max(total_cap_local - trend_eff - accum_eff, 0)
-
-        if remaining > 0 and trend_eff < max(trend_quota_local, 0):
-            take = min(remaining, max(trend_quota_local, 0) - trend_eff)
-            trend_eff += take
-            remaining -= take
-        if remaining > 0 and accum_eff < max(accum_quota_local, 0):
-            take = min(remaining, max(accum_quota_local, 0) - accum_eff)
-            accum_eff += take
-
-        return (trend_eff, accum_eff)
 
     def _channel_tags(code: str) -> set[str]:
         raw = str(result.channel_map.get(code, "")).strip()
@@ -1657,6 +1698,9 @@ def allocate_ai_candidates(
         sig = str((result.exit_signals.get(code, {}) or {}).get("signal", "")).strip()
         return sig in blocked_exit_signals
 
+    def _is_accum_stage_candidate(code: str) -> bool:
+        return _stage_name(code) in {"Accum_B", "Accum_C"}
+
     def _calc_priority_score(code: str, is_trend_side: bool) -> float:
         score = 0.0
         stage_name = _stage_name(code)
@@ -1689,12 +1733,12 @@ def allocate_ai_candidates(
 
         return score
 
-    trend_candidates_with_score = []
-    accum_candidates_with_score = []
+    trend_candidates_with_score: list[tuple[str, float, bool]] = []
+    accum_candidates_with_score: list[tuple[str, float, bool]] = []
 
     markup_trend_candidates = [c for c in result.markup_symbols if _is_trend_track(c) or c in sos_hit_set]
     for code in _dedup_order(markup_trend_candidates):
-        trend_candidates_with_score.append((code, _calc_priority_score(code, True)))
+        trend_candidates_with_score.append((code, _calc_priority_score(code, True), False))
 
     sos_hit_codes = [
         str(c).strip()
@@ -1703,7 +1747,7 @@ def allocate_ai_candidates(
     ]
     for code in _dedup_order(sos_hit_codes):
         if code not in [c[0] for c in trend_candidates_with_score]:
-            trend_candidates_with_score.append((code, _calc_priority_score(code, True)))
+            trend_candidates_with_score.append((code, _calc_priority_score(code, True), False))
 
     # Compute `sorted_codes` implicitly from triggers like funnel does
     all_triggers = []
@@ -1713,22 +1757,34 @@ def allocate_ai_candidates(
     sorted_codes = _dedup_order(sorted_codes)
 
     for code in sorted_codes + l3_ranked_symbols:
-        if _is_trend_track(code) and not _is_blocked_exit(code) and code not in [c[0] for c in trend_candidates_with_score]:
-            trend_candidates_with_score.append((code, _calc_priority_score(code, True)))
+        if not _is_trend_track(code) or _is_blocked_exit(code):
+            continue
+        if code in [c[0] for c in trend_candidates_with_score]:
+            continue
+        if code in result.markup_symbols or code in sos_hit_set:
+            trend_candidates_with_score.append((code, _calc_priority_score(code, True), False))
+            continue
+        # 移除 L3 filler 逻辑: 宁缺毋滥，如果只有几个好标的，就只送这几个给 AI
 
     accum_hit_candidates = result.triggers.get("spring", []) + result.triggers.get("lps", [])
     for code, _ in sorted(accum_hit_candidates, key=lambda x: -float(x[1] if x[1] is not None else 0.0)):
         code = str(code).strip()
         if _is_blocked_exit(code):
             continue
-        accum_candidates_with_score.append((code, _calc_priority_score(code, False)))
+        accum_candidates_with_score.append((code, _calc_priority_score(code, False), False))
 
-    for code in sorted_codes + l3_ranked_symbols:
-        if _is_accum_track(code) and not _is_blocked_exit(code) and code not in [c[0] for c in accum_candidates_with_score]:
-            accum_candidates_with_score.append((code, _calc_priority_score(code, False)))
+    for code in _dedup_order(l3_ranked_symbols):
+        if not _is_accum_track(code) or _is_blocked_exit(code):
+            continue
+        if code in [c[0] for c in accum_candidates_with_score]:
+            continue
+        if _stage_name(code) == "Accum_C":
+            accum_candidates_with_score.append((code, _calc_priority_score(code, False), False))
+            continue
+        # 移除 L3 filler 逻辑: 宁缺毋滥
 
-    trend_candidates_with_score.sort(key=lambda x: -x[1])
-    accum_candidates_with_score.sort(key=lambda x: -x[1])
+    trend_candidates_with_score.sort(key=lambda x: (-x[1], x[2]))
+    accum_candidates_with_score.sort(key=lambda x: (-x[1], x[2]))
 
     trend_candidates = _dedup_order(
         [c[0] for c in trend_candidates_with_score if not _is_blocked_exit(c[0])]
@@ -1739,35 +1795,42 @@ def allocate_ai_candidates(
 
     if total_cap <= 0:
         score_map = {}
-        for c, s in trend_candidates_with_score:
+        for c, s, _ in trend_candidates_with_score:
             score_map[c] = s
-        for c, s in accum_candidates_with_score:
+        for c, s, _ in accum_candidates_with_score:
             score_map[c] = max(score_map.get(c, -9999.0), s)
         return ([], [], score_map)
-
-    trend_quota, accum_quota = _fit_quotas_to_total_cap(
-        total_cap,
-        trend_quota,
-        accum_quota,
-    )
 
     selected_seen = set()
     trend_selected = []
     accum_selected = []
+    trend_l3_fill_used = 0
+    accum_l3_fill_used = 0
+    trend_fill_map = {code: is_fill for code, _, is_fill in trend_candidates_with_score}
+    accum_fill_map = {code: is_fill for code, _, is_fill in accum_candidates_with_score}
 
     def _add_to_selected(code: str, track_name: str) -> bool:
+        nonlocal trend_l3_fill_used, accum_l3_fill_used
         if total_cap > 0 and len(selected_seen) >= total_cap:
             return False
         if code in selected_seen:
             return False
         if track_name == "Trend":
+            if trend_fill_map.get(code, False) and trend_l3_fill_used >= max_trend_l3_fill:
+                return False
             if len(trend_selected) >= trend_quota:
                 return False
             trend_selected.append(code)
+            if trend_fill_map.get(code, False):
+                trend_l3_fill_used += 1
         else:
+            if accum_fill_map.get(code, False) and accum_l3_fill_used >= max_accum_l3_fill:
+                return False
             if len(accum_selected) >= accum_quota:
                 return False
             accum_selected.append(code)
+            if accum_fill_map.get(code, False):
+                accum_l3_fill_used += 1
         selected_seen.add(code)
         return True
 
@@ -1804,9 +1867,9 @@ def allocate_ai_candidates(
             break
 
     score_map = {}
-    for c, s in trend_candidates_with_score:
+    for c, s, _ in trend_candidates_with_score:
         score_map[c] = s
-    for c, s in accum_candidates_with_score:
+    for c, s, _ in accum_candidates_with_score:
         score_map[c] = max(score_map.get(c, -9999.0), s)
 
     return trend_selected, accum_selected, score_map
