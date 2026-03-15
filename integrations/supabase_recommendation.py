@@ -37,8 +37,10 @@ def upsert_recommendations(recommend_date: int, symbols_info: list[dict[str, Any
         client = _get_supabase_admin_client()
         payload = []
         for s in symbols_info:
-            code_str = str(s.get("code", "")).strip()
-            if not code_str or not code_str.isdigit():
+            raw_code = str(s.get("code", "")).strip()
+            # 提取纯数字部分 (比如 "000001.SZ" -> "000001")
+            code_str = "".join(filter(str.isdigit, raw_code))
+            if not code_str:
                 continue
             
             # 这里的 price 通常是结果生成当日的收盘价
