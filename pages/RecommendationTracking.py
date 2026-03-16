@@ -51,6 +51,9 @@ with content_col:
     df["initial_price"] = pd.to_numeric(df.get("initial_price"), errors="coerce")
     df["current_price"] = pd.to_numeric(df.get("current_price"), errors="coerce")
     df["change_pct"] = pd.to_numeric(df.get("change_pct"), errors="coerce")
+    if "recommend_count" not in df.columns:
+        df["recommend_count"] = 1
+    df["recommend_count"] = pd.to_numeric(df.get("recommend_count"), errors="coerce").fillna(1).astype(int)
     
     # 格式化日期 (INT YYYYMMDD -> YYYY-MM-DD str)
     df['recommend_date_str'] = df['recommend_date'].apply(lambda x: f"{str(x)[:4]}-{str(x)[4:6]}-{str(x)[6:]}")
@@ -64,11 +67,12 @@ with content_col:
     avg_change = df['change_pct'].mean()
     max_change = df['change_pct'].max()
     ai_count = int(df["is_ai_recommended"].sum())
+    total_recommend_events = int(df["recommend_count"].sum())
 
-    col1.metric("总推荐数", f"{len(df)} 支")
+    col1.metric("覆盖股票数", f"{len(df)} 支")
     col2.metric("平均表现", f"{avg_change:+.2f}%")
     col3.metric("最高涨幅", f"{max_change:+.2f}%")
-    col4.metric("AI推荐数", f"{ai_count} 支")
+    col4.metric("总推荐次数", f"{total_recommend_events} 次")
 
     st.divider()
 
@@ -100,7 +104,12 @@ with content_col:
         filtered_df = filtered_df[filtered_df["is_ai_recommended"] == True]
 
     # 处理排序
-    sort_map = {"推荐日期": "recommend_date", "涨跌幅": "change_pct", "分值": "funnel_score", "代码": "code"}
+    sort_map = {
+        "推荐日期": "recommend_date",
+        "涨跌幅": "change_pct",
+        "分值": "funnel_score",
+        "代码": "code",
+    }
     filtered_df = filtered_df.sort_values(
         by=sort_map[sort_by], 
         ascending=(sort_order == "升序")
@@ -110,12 +119,13 @@ with content_col:
     # 构建最终展示的列表
     display_df = filtered_df[[
         'recommend_date_str', 'display_code', 'name', 
-        'recommend_reason', 'is_ai_recommended', 'funnel_score', 'initial_price', 'current_price', 'change_pct'
+        'recommend_reason', 'is_ai_recommended', 'funnel_score',
+        'initial_price', 'current_price', 'change_pct', 'recommend_count'
     ]].copy()
     display_df["is_ai_recommended"] = display_df["is_ai_recommended"].map(lambda x: "是" if bool(x) else "否")
 
     display_df.columns = [
-        "推荐日期", "代码", "名称", "推荐原因", "AI推荐", "分值", "加入价", "当前价", "累计涨跌幅"
+        "推荐日期", "代码", "名称", "推荐原因", "AI推荐", "分值", "加入价", "当前价", "累计涨跌幅", "推荐次数"
     ]
 
     # 使用 dataframe 渲染，增加一些样式建议

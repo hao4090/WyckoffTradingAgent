@@ -266,6 +266,15 @@ def main() -> int:
         summary.append({"step": "批量研报", "ok": True, "err": None, "elapsed_s": 0, "output": "skipped (no symbols)"})
         _log("阶段 2 批量研报: 跳过（无筛选结果）", logs_path)
 
+    # 在完成推荐与 AI 标记后，刷新推荐表中的实时价格与涨跌幅
+    if recommend_trade_date_int is not None:
+        try:
+            from integrations.supabase_recommendation import sync_all_tracking_prices
+            updated_rows = sync_all_tracking_prices()
+            _log(f"推荐记录价格同步: updated_rows={updated_rows}", logs_path)
+        except Exception as e:
+            _log(f"推荐记录价格同步失败: {e}", logs_path)
+
     # 阶段 3：私人账户再平衡（按 SUPABASE_USER_ID 唯一执行）
     if skip_step4:
         summary.append({

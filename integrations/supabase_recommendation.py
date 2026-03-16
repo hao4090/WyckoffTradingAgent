@@ -89,6 +89,24 @@ def upsert_recommendations(recommend_date: int, symbols_info: list[dict[str, Any
         return False
     try:
         client = _get_supabase_admin_client()
+
+        # 预读已有记录的 recommend_count（按 code 聚合），后续在此基础上自增
+        existing_counts: dict[int, int] = {}
+        try:
+            resp = (
+                client.table(TABLE_RECOMMENDATION_TRACKING)
+                .select("code,recommend_count")
+                .execute()
+            )
+            for row in resp.data or []:
+                try:
+                    code_int = int(row.get("code"))
+                except Exception:
+                    continue
+                existing_counts[code_int] = int(row.get("recommend_count") or 1)
+        except Exception:
+            existing_counts = {}
+
         payload = []
         for s in symbols_info:
             raw_code = str(s.get("code", "")).strip()
@@ -122,25 +140,32 @@ def upsert_recommendations(recommend_date: int, symbols_info: list[dict[str, Any
                 except Exception:
                     continue
             
+            code_int = int(code_str)
+            old_cnt = existing_counts.get(code_int, 0)
+            new_cnt = max(old_cnt + 1, 1)
+
             payload.append({
-                "code": int(code_str),  # 存为 INT，首位0会消失
+                "code": code_int,  # 存为 INT，首位0会消失
                 "name": str(s.get("name", "")).strip(),
                 "recommend_reason": str(s.get("tag", "")).strip(),
                 "recommend_date": recommend_date,
                 "initial_price": price,
                 "current_price": price, # 初始时当前价等于加入价
                 "change_pct": 0.0,      # 初始涨跌幅为 0
+                "recommend_count": new_cnt,
                 "funnel_score": score_val,
                 "is_ai_recommended": False,
                 "updated_at": datetime.utcnow().isoformat()
             })
         
         if payload:
-            # 使用 upsert，基于 (code, recommend_date) 唯一约束。
-            # 兼容旧表结构：若新列尚未迁移，自动回退到旧字段写入。
+            # 使用 upsert，基于 code 唯一约束：
+            # - recommendation_tracking 中每只股票(code)仅保留一条记录；
+            # - recommend_date / initial_price / current_price 等字段以“最近一次推荐”为准覆盖；
+            # - recommend_count 为该股票被推荐的累计次数。
             try:
                 client.table(TABLE_RECOMMENDATION_TRACKING).upsert(
-                    payload, on_conflict="code,recommend_date"
+                    payload, on_conflict="code"
                 ).execute()
             except Exception as e:
                 msg = str(e).lower()
