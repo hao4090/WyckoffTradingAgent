@@ -42,6 +42,22 @@ def _parse_recommend_date(raw_value: Any) -> date | None:
         return None
 
 
+def _parse_write_date(record: dict[str, Any]) -> date | None:
+    """优先用写入日 created_at 的日期，没有则用 recommend_date，用于纠错时查该日收盘价。"""
+    created = record.get("created_at")
+    if created is not None and str(created).strip():
+        try:
+            s = str(created).strip()
+            if "T" in s or " " in s:
+                return datetime.fromisoformat(s.replace("Z", "+00:00")).date()
+            if len(s) == 8 and s.isdigit():
+                return datetime.strptime(s, "%Y%m%d").date()
+            return datetime.fromisoformat(s).date()
+        except Exception:
+            pass
+    return _parse_recommend_date(record.get("recommend_date"))
+
+
 def _resolve_initial_price_from_history(code_str: str, rec_date: date) -> float:
     """
     用推荐日附近历史日线回填加入价：
@@ -228,51 +244,63 @@ def mark_ai_recommendations(recommend_date: int, ai_codes: list[str]) -> bool:
         print(f"[supabase_recommendation] mark_ai_recommendations failed: {e}")
         return False
 
-def sync_all_tracking_prices() -> int:
+def sync_all_tracking_prices(
+    price_map: dict[str, float] | None = None,
+) -> int:
     """
-    遍历表中所有股票，获取最新实时价格并刷新
-    返回成功更新的数量
+    遍历表中所有股票，用最新价刷新 current_price 与 change_pct。
+    price_map: 可选，code_str -> 最新收盘价。非空时直接使用；未传或为空时拉取全市场快照后更新。
+    返回成功更新的数量。
     """
     if not is_supabase_configured():
+        print("[supabase_recommendation] sync_all_tracking_prices: Supabase 未配置，跳过")
         return 0
-    
+
     try:
-        from integrations.data_source import fetch_stock_spot_snapshot
         client = _get_supabase_admin_client()
-        
-        # 1. 获取所有需要跟踪的股票代码（去重以节省 API 调用）
+
+        # 获取需要跟踪的股票代码（去重）
         resp = client.table(TABLE_RECOMMENDATION_TRACKING).select("code").execute()
         if not resp.data:
+            print("[supabase_recommendation] sync_all_tracking_prices: 推荐表无记录，跳过")
             return 0
-        
+
         unique_codes = sorted(list(set(int(r["code"]) for r in resp.data)))
-        
-        # 2. 批量获取实时价格并构建更新数据
-        # 实际上目前 fetch_stock_spot_snapshot 是一只只取的，后期可优化为批量接口
+
+        # 优先使用 price_map，否则拉取行情
+        use_provided_map = bool(price_map)
+        if not use_provided_map:
+            from integrations.data_source import fetch_stock_spot_snapshot
+            first_code = f"{unique_codes[0]:06d}"
+            fetch_stock_spot_snapshot(first_code, force_refresh=True)
+
         updated_count = 0
         for code_int in unique_codes:
-            code_str = f"{code_int:06d}" # 补齐 6 位以适配行情接口
-            snap = fetch_stock_spot_snapshot(code_str, force_refresh=True)
-            if not snap or snap.get("close") is None:
-                continue
+            code_str = f"{code_int:06d}"
+            if use_provided_map:
+                new_current_price = price_map.get(code_str)
+                if new_current_price is None or new_current_price <= 0:
+                    continue
+                new_current_price = float(new_current_price)
+            else:
+                snap = fetch_stock_spot_snapshot(code_str, force_refresh=False)
+                if not snap or snap.get("close") is None:
+                    continue
+                new_current_price = float(snap["close"])
             
-            new_current_price = float(snap["close"])
-            
-            # 3. 针对该股票的所有推荐记录进行价格和涨跌幅更新
-            # 注意：同一个股票可能在不同日期被推荐过，需要分别计算
+            # 该股票可能有多条推荐记录（不同日期），逐条更新价格与涨跌幅
             rec_resp = client.table(TABLE_RECOMMENDATION_TRACKING).select("*").eq("code", code_int).execute()
             for record in rec_resp.data:
                 initial_price = float(record.get("initial_price") or 0.0)
+                rec_date = _parse_recommend_date(record.get("recommend_date"))
                 update_payload = {
                     "current_price": new_current_price,
-                    "updated_at": datetime.utcnow().isoformat()
+                    "updated_at": datetime.utcnow().isoformat(),
                 }
                 if initial_price > 0:
                     change_pct = (new_current_price - initial_price) / initial_price * 100.0
                     update_payload["change_pct"] = round(change_pct, 2)
                 else:
-                    # 历史兼容：若初始价缺失（0），优先回填推荐日收盘价；失败再回填当前价
-                    rec_date = _parse_recommend_date(record.get("recommend_date"))
                     backfill_price = (
                         _resolve_initial_price_from_history(code_str, rec_date)
                         if rec_date
@@ -281,21 +309,74 @@ def sync_all_tracking_prices() -> int:
                     if backfill_price <= 0:
                         backfill_price = new_current_price
                     update_payload["initial_price"] = backfill_price
-                    if backfill_price > 0:
-                        update_payload["change_pct"] = round(
+                    update_payload["change_pct"] = (
+                        round(
                             (new_current_price - backfill_price) / backfill_price * 100.0,
                             2,
                         )
-                    else:
-                        update_payload["change_pct"] = 0.0
-                
+                        if backfill_price > 0
+                        else 0.0
+                    )
                 client.table(TABLE_RECOMMENDATION_TRACKING).update(update_payload).eq("id", record["id"]).execute()
                 updated_count += 1
-                
+
+        if unique_codes and updated_count == 0:
+            print(
+                "[supabase_recommendation] sync_all_tracking_prices: 推荐表有 {} 只股票但 0 条更新，"
+                "可能全市场行情拉取失败或非交易时段".format(len(unique_codes))
+            )
         return updated_count
     except Exception as e:
         print(f"[supabase_recommendation] sync_all_tracking_prices failed: {e}")
         return 0
+
+
+def correct_tracking_initial_prices() -> int:
+    """
+    纠错流程：遍历推荐表每条记录，用「写入日」当天收盘价（前复权）回填 initial_price，
+    并用当前 current_price 重算 change_pct。写入日优先取 created_at，没有则用 recommend_date。
+    每日执行可让历史数据逐步修正。
+    返回被更新的记录数。
+    """
+    if not is_supabase_configured():
+        print("[supabase_recommendation] correct_tracking_initial_prices: Supabase 未配置，跳过")
+        return 0
+    try:
+        client = _get_supabase_admin_client()
+        resp = client.table(TABLE_RECOMMENDATION_TRACKING).select("*").execute()
+        if not resp.data:
+            return 0
+        cache: dict[tuple[str, date], float] = {}
+        updated = 0
+        for record in resp.data:
+            write_date = _parse_write_date(record)
+            if not write_date:
+                continue
+            code_int = record.get("code")
+            if code_int is None:
+                continue
+            code_str = f"{int(code_int):06d}"
+            current_price = float(record.get("current_price") or 0.0)
+            if current_price <= 0:
+                continue
+            key = (code_str, write_date)
+            if key not in cache:
+                cache[key] = _resolve_initial_price_from_history(code_str, write_date)
+            initial_from_hist = cache[key]
+            if initial_from_hist <= 0:
+                continue
+            change_pct = round((current_price - initial_from_hist) / initial_from_hist * 100.0, 2)
+            client.table(TABLE_RECOMMENDATION_TRACKING).update({
+                "initial_price": initial_from_hist,
+                "change_pct": change_pct,
+                "updated_at": datetime.utcnow().isoformat(),
+            }).eq("id", record["id"]).execute()
+            updated += 1
+        return updated
+    except Exception as e:
+        print(f"[supabase_recommendation] correct_tracking_initial_prices failed: {e}")
+        return 0
+
 
 def load_recommendation_tracking(limit: int = 1000) -> list[dict[str, Any]]:
     """加载推荐跟踪数据"""
