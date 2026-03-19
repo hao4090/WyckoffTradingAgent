@@ -277,15 +277,6 @@ def main() -> int:
         summary.append({"step": "批量研报", "ok": True, "err": None, "elapsed_s": 0, "output": "skipped (no symbols)"})
         _log("阶段 2 批量研报: 跳过（无筛选结果）", logs_path)
 
-    # 在完成推荐与 AI 标记后，刷新推荐表中的实时价格与涨跌幅（复用 Step2 日线最后一笔收盘，不再拉行情）
-    if recommend_trade_date_int is not None:
-        try:
-            from integrations.supabase_recommendation import sync_all_tracking_prices
-            updated_rows = sync_all_tracking_prices(price_map=price_map_from_funnel)
-            _log(f"推荐记录价格同步: updated_rows={updated_rows}", logs_path)
-        except Exception as e:
-            _log(f"推荐记录价格同步失败: {e}", logs_path)
-
     # 阶段 3：私人账户再平衡（按 SUPABASE_USER_ID 唯一执行）
     if skip_step4:
         summary.append({
@@ -375,20 +366,35 @@ def main() -> int:
                 logs_path,
             )
 
-    _log("开始同步所有推荐记录的实时价格...", logs_path)
+    _log(
+        "开始同步所有推荐记录的实时价格..."
+        f"（price_map_size={len(price_map_from_funnel) if isinstance(price_map_from_funnel, dict) else 0}）",
+        logs_path,
+    )
     try:
         updated_n = sync_all_tracking_prices(price_map=price_map_from_funnel)
         _log(f"实时价格同步完成，共更新 {updated_n} 条记录", logs_path)
     except Exception as e:
         _log(f"实时价格同步失败: {e}", logs_path)
 
-    _log("开始推荐表纠错流程（按推荐日历史收盘回填加入价并重算涨跌幅）...", logs_path)
-    try:
-        from integrations.supabase_recommendation import correct_tracking_initial_prices
-        corrected_n = correct_tracking_initial_prices()
-        _log(f"推荐表纠错完成，共修正 {corrected_n} 条记录", logs_path)
-    except Exception as e:
-        _log(f"推荐表纠错失败: {e}", logs_path)
+    enable_daily_correction = os.getenv(
+        "RECOMMENDATION_ENABLE_DAILY_CORRECTION",
+        "",
+    ).strip().lower() in {"1", "true", "yes", "on"}
+    if enable_daily_correction:
+        _log("开始推荐表纠错流程（按推荐日历史收盘回填加入价并重算涨跌幅）...", logs_path)
+        try:
+            from integrations.supabase_recommendation import correct_tracking_initial_prices
+
+            corrected_n = correct_tracking_initial_prices()
+            _log(f"推荐表纠错完成，共修正 {corrected_n} 条记录", logs_path)
+        except Exception as e:
+            _log(f"推荐表纠错失败: {e}", logs_path)
+    else:
+        _log(
+            "推荐表纠错流程已跳过（RECOMMENDATION_ENABLE_DAILY_CORRECTION 未开启）",
+            logs_path,
+        )
 
     # 汇总
     total_elapsed = sum(s.get("elapsed_s", 0) for s in summary)
