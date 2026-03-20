@@ -38,6 +38,18 @@ with content_col:
 
     # 2. 转换数据为 DataFrame 并处理展示逻辑
     df = pd.DataFrame(raw_data)
+    if "recommend_date" not in df.columns:
+        st.error("推荐跟踪数据缺少 recommend_date 字段，请检查 recommendation_tracking 表结构或 RLS 权限。")
+        st.caption("返回字段：" + ", ".join(str(c) for c in df.columns.tolist()))
+        st.stop()
+    if "code" not in df.columns:
+        st.error("推荐跟踪数据缺少 code 字段，请检查 recommendation_tracking 表结构或 RLS 权限。")
+        st.caption("返回字段：" + ", ".join(str(c) for c in df.columns.tolist()))
+        st.stop()
+    if "name" not in df.columns:
+        df["name"] = ""
+    if "recommend_reason" not in df.columns:
+        df["recommend_reason"] = ""
     if "is_ai_recommended" not in df.columns:
         df["is_ai_recommended"] = False
     if "funnel_score" not in df.columns:
@@ -54,12 +66,19 @@ with content_col:
     if "recommend_count" not in df.columns:
         df["recommend_count"] = 1
     df["recommend_count"] = pd.to_numeric(df.get("recommend_count"), errors="coerce").fillna(1).astype(int)
+    df["recommend_date"] = pd.to_numeric(df.get("recommend_date"), errors="coerce").fillna(0).astype(int)
     
     # 格式化日期 (INT YYYYMMDD -> YYYY-MM-DD str)
-    df['recommend_date_str'] = df['recommend_date'].apply(lambda x: f"{str(x)[:4]}-{str(x)[4:6]}-{str(x)[6:]}")
+    def _format_date(v: int) -> str:
+        s = str(int(v))
+        if len(s) == 8 and s.isdigit():
+            return f"{s[:4]}-{s[4:6]}-{s[6:]}"
+        return "-"
+    df['recommend_date_str'] = df['recommend_date'].apply(_format_date)
     
     # 格式化代码 (INT -> 000001 str)
-    df['display_code'] = df['code'].apply(lambda x: f"{x:06d}")
+    df["code"] = pd.to_numeric(df.get("code"), errors="coerce").fillna(0).astype(int)
+    df['display_code'] = df['code'].apply(lambda x: f"{int(x):06d}")
 
     # 3. 统计指标 (KPIs)
     st.markdown("### 📊 表现摘要")

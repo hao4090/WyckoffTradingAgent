@@ -5,6 +5,7 @@ import streamlit as st
 from app.auth_component import check_auth, login_form
 from core.token_storage import restore_tokens_from_storage
 from integrations.supabase_market_signal import compose_market_banner, load_latest_market_signal_daily
+from integrations.llm_client import OPENAI_COMPATIBLE_BASE_URLS
 
 def _set_default(key: str, value) -> None:
     if key not in st.session_state or st.session_state.get(key) is None:
@@ -59,6 +60,11 @@ def init_session_state() -> None:
     for k in ("openai_model", "zhipu_model", "minimax_model", "deepseek_model", "qwen_model"):
         if st.session_state.get(k) is None:
             st.session_state[k] = ""
+    _set_default("openai_base_url", OPENAI_COMPATIBLE_BASE_URLS.get("openai", ""))
+    _set_default("zhipu_base_url", OPENAI_COMPATIBLE_BASE_URLS.get("zhipu", ""))
+    _set_default("minimax_base_url", OPENAI_COMPATIBLE_BASE_URLS.get("minimax", ""))
+    _set_default("deepseek_base_url", OPENAI_COMPATIBLE_BASE_URLS.get("deepseek", ""))
+    _set_default("qwen_base_url", OPENAI_COMPATIBLE_BASE_URLS.get("qwen", ""))
 
     _set_default("tg_bot_token", "")
     if st.session_state.tg_bot_token is None:
