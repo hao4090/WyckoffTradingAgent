@@ -37,7 +37,7 @@ from core.wyckoff_engine import fit_ai_candidate_quotas, normalize_hist_from_fet
 from core.sector_rotation import SECTOR_STATE_LABELS
 
 TRADING_DAYS = 500
-GEMINI_MODEL_FALLBACK = "gemini-3.1-flash-lite-preview"
+GEMINI_MODEL_FALLBACK = ""
 OPERATION_TARGET = 6
 STEP3_REPORT_STYLE = (
     os.getenv("STEP3_REPORT_STYLE", "legacy_dual_pool").strip().lower()
@@ -211,18 +211,15 @@ def _send_input_preview(
 
 def _has_required_sections(report: str) -> bool:
     text = (report or "").replace(" ", "")
+    # 如果还在用 legacy 模式，直接报错或兼容
     if STEP3_USE_LEGACY_REPORT:
-        has_watch = ("观察池" in text) or ("自选观察池" in text) or ("继续观察" in text)
-        has_trade = ("可操作池" in text) or ("操作池" in text) or ("立刻建仓" in text)
+        has_watch = ("观察池" in text)
+        has_trade = ("可操作池" in text)
         return has_watch and has_trade
-    has_watch = any(
-        token in text
-        for token in ("继续观察", "观察池", "逻辑破产", "储备营地")
-    )
-    has_trade = any(
-        token in text
-        for token in ("立刻建仓", "可操作池", "操作池", "处于起跳板", "起跳板")
-    )
+
+    # V3.0 威科夫原教旨主义：只认这三个词，少一个都不行！
+    has_watch = ("逻辑破产" in text) or ("储备营地" in text)
+    has_trade = ("处于起跳板" in text)
     return has_watch and has_trade
 
 
