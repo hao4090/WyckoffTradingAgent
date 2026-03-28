@@ -4,7 +4,6 @@ import re
 import traceback
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from datetime import date, datetime, timedelta
-import time
 from zoneinfo import ZoneInfo
 import pandas as pd
 import streamlit as st
@@ -20,12 +19,12 @@ from core.wyckoff_single_prompt import WYCKOFF_SINGLE_SYSTEM_PROMPT
 from app.layout import is_data_source_failure_message
 from app.ui_helpers import show_page_loading
 
-TRADING_DAYS_OHLCV = 500  # 威科夫分析需要较长周期
+TRADING_DAYS_OHLCV = 320  # 单股分析窗口：240~320 交易日，默认取上沿以保证 MA200 稳定
 ADJUST = "qfq"
 SINGLE_STOCK_FETCH_TIMEOUT_S = max(int(os.getenv("SINGLE_STOCK_FETCH_TIMEOUT_S", "70")), 20)
 SINGLE_STOCK_SECTOR_TIMEOUT_S = max(int(os.getenv("SINGLE_STOCK_SECTOR_TIMEOUT_S", "20")), 5)
-SINGLE_STOCK_LLM_TOTAL_TIMEOUT_S = max(int(os.getenv("SINGLE_STOCK_LLM_TOTAL_TIMEOUT_S", "160")), 60)
-SINGLE_STOCK_LLM_REQUEST_TIMEOUT_S = max(int(os.getenv("SINGLE_STOCK_LLM_REQUEST_TIMEOUT_S", "45")), 15)
+SINGLE_STOCK_LLM_TOTAL_TIMEOUT_S = max(int(os.getenv("SINGLE_STOCK_LLM_TOTAL_TIMEOUT_S", "240")), 60)
+SINGLE_STOCK_LLM_REQUEST_TIMEOUT_S = max(int(os.getenv("SINGLE_STOCK_LLM_REQUEST_TIMEOUT_S", "90")), 15)
 ALLOW_LLM_PLOT_EXEC = os.getenv("ALLOW_LLM_PLOT_EXEC", "").strip().lower() in {
     "1",
     "true",
@@ -371,7 +370,7 @@ def _build_safe_structure_plot(df_hist: pd.DataFrame, symbol: str, name: str):
 def render_single_stock_page(provider, model, api_key, *, base_url: str = ""):
     """渲染单股分析页面"""
     st.markdown("### 🔍 威科夫单股分析 (大师模式)")
-    st.caption("上传 K 线/分时图（可选），配合 500 天历史数据，生成大师级威科夫分析与标注图表。")
+    st.caption("上传 K 线/分时图（可选），配合近 320 个交易日数据，生成大师级威科夫分析与标注图表。")
 
     col1, col2 = st.columns([1, 1])
     with col1:

@@ -85,7 +85,7 @@ def main() -> int:
     parser.add_argument("--sample", type=int, default=200, help="未指定 symbols 时，从股票池取前 N 只")
     parser.add_argument("--workers", type=int, default=8, help="并发 worker 数")
     parser.add_argument("--mode", choices=["serial", "thread", "process"], default="thread")
-    parser.add_argument("--trading-days", type=int, default=500)
+    parser.add_argument("--trading-days", type=int, default=320)
     args = parser.parse_args()
 
     if args.symbols.strip():

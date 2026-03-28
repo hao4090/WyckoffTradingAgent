@@ -37,7 +37,7 @@ from integrations.supabase_portfolio import (
 from scripts.step3_batch_report import generate_stock_payload
 from utils.trading_clock import CN_TZ, resolve_end_calendar_day
 
-TRADING_DAYS = 500
+TRADING_DAYS = 320
 TELEGRAM_MAX_LEN = 3900
 ENFORCE_TARGET_TRADE_DATE = False
 DEBUG_MODEL_IO = os.getenv("DEBUG_MODEL_IO", "").strip().lower() in {"1", "true", "yes", "on"}

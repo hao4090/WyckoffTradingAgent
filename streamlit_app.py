@@ -353,7 +353,7 @@ with content_col:
             "回溯交易日数量",
             min_value=1,
             max_value=700,
-            value=min(500, 700),
+            value=min(320, 700),
             step=50,
             help="从结束日期向前回溯的交易日天数（上限 700）",
         )

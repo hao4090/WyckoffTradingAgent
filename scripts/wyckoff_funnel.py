@@ -68,7 +68,7 @@ TRIGGER_LABELS = {
     "lps": "LPS（缩量回踩）",
     "evr": "Effort vs Result（放量不跌）",
 }
-TRADING_DAYS = int(os.getenv("FUNNEL_TRADING_DAYS", "500"))
+TRADING_DAYS = int(os.getenv("FUNNEL_TRADING_DAYS", "320"))
 MAX_RETRIES = int(os.getenv("FUNNEL_FETCH_RETRIES", "2"))
 RETRY_BASE_DELAY = float(os.getenv("FUNNEL_RETRY_BASE_DELAY", "1.0"))
 SOCKET_TIMEOUT = int(os.getenv("FUNNEL_SOCKET_TIMEOUT", "20"))

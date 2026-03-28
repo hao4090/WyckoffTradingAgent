@@ -77,7 +77,7 @@ def _latest_trade_date(df: pd.DataFrame) -> object | None:
 
 @dataclass
 class FunnelConfig:
-    trading_days: int = 500
+    trading_days: int = 320
 
     # Layer 1
     min_market_cap_yi: float = 35.0

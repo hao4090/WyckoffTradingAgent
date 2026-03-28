@@ -168,7 +168,7 @@ with content_col:
         spring_support_w = st.number_input("Spring 支撑窗口", min_value=20, max_value=120, value=60, step=10)
         lps_vol_dry = st.number_input("LPS 缩量比", min_value=0.1, max_value=0.8, value=0.35, step=0.05, format="%.2f")
         evr_vol_ratio = st.number_input("EvR 量比阈值", min_value=1.0, max_value=5.0, value=2.0, step=0.5, format="%.1f")
-        trading_days = st.number_input("交易日数量", min_value=200, max_value=1200, value=500, step=50)
+        trading_days = st.number_input("交易日数量", min_value=200, max_value=1200, value=320, step=50)
         max_workers = int(st.number_input("后台并发拉取数", min_value=1, max_value=16, value=8, step=1))
         limit_count = int(st.number_input("股票数量上限", min_value=0, max_value=5000, value=500, step=100))
 

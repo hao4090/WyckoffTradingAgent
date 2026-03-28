@@ -457,7 +457,7 @@ def main() -> int:
         help='从一段文本中提取股票代码（支持夹中文/无空格），如 "000973 佛塑科技 600798鲁抗医药"',
     )
     parser.add_argument(
-        "--trading-days", type=int, default=500, help="交易日数量，默认 500"
+        "--trading-days", type=int, default=320, help="交易日数量，默认 320"
     )
     parser.add_argument(
         "--end-offset-days",
