@@ -56,7 +56,7 @@ def run_sensitivity(
     *,
     board: str = "all",
     sample_size: int = 300,
-    trading_days: int = 500,
+    trading_days: int = 320,
     max_workers: int = 8,
     snapshot_dir: Path | None = None,
     hold_days_grid: list[int] | None = None,
@@ -220,7 +220,7 @@ def main() -> int:
     parser.add_argument("--end", required=True)
     parser.add_argument("--board", default="all")
     parser.add_argument("--sample-size", type=int, default=300)
-    parser.add_argument("--trading-days", type=int, default=500)
+    parser.add_argument("--trading-days", type=int, default=320)
     parser.add_argument("--workers", type=int, default=8)
     parser.add_argument("--snapshot-dir", default="")
     parser.add_argument("--output-dir", default="analysis/sensitivity")

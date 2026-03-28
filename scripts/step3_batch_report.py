@@ -36,7 +36,7 @@ from utils.trading_clock import CN_TZ, resolve_end_calendar_day
 from core.wyckoff_engine import fit_ai_candidate_quotas, normalize_hist_from_fetch
 from core.sector_rotation import SECTOR_STATE_LABELS
 
-TRADING_DAYS = 500
+TRADING_DAYS = 320
 GEMINI_MODEL_FALLBACK = ""
 STEP3_REPORT_STYLE = (
     os.getenv("STEP3_REPORT_STYLE", "v3_three_camp").strip().lower()
@@ -989,7 +989,7 @@ def generate_stock_payload(
     exit_reason: str | None = None,
 ) -> str:
     """
-    第五步：将 500 天 OHLCV 浓缩为发给 AI 的高密度文本。
+    第五步：将 320 个交易日 OHLCV 浓缩为发给 AI 的高密度文本。
     1. 大背景（MA50 / MA200 / 乖离率 / 市值 / 成交额）
     1.5 板块状态（轮动水温 + 证据）
     2. 近 15 日量价切片（放量比 + 涨跌幅 + 振幅 + 收盘位置）
