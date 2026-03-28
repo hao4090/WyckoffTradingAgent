@@ -161,6 +161,16 @@ def _strip_code_blocks_for_ui(text: str) -> str:
         "",
         cleaned,
     )
+    cleaned = re.sub(
+        r"(?im)^\s*接下来[，,\s].*?python\s*代码[：:]\s*$\n?",
+        "",
+        cleaned,
+    )
+    cleaned = re.sub(
+        r"(?im)^\s*请运行以下\s*python\s*代码[：:]\s*$\n?",
+        "",
+        cleaned,
+    )
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
     return cleaned
 
