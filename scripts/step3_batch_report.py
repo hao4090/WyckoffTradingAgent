@@ -1581,6 +1581,19 @@ def run(
         benchmark_lines.append(
             f"recent3_cum_pct={benchmark_context.get('recent3_cum_pct')}"
         )
+        if benchmark_context.get("main_vol_ratio_5_20") is not None:
+            benchmark_lines.append(
+                f"main_vol_ratio_5_20={benchmark_context.get('main_vol_ratio_5_20'):.3f}, "
+                f"main_volume_state={benchmark_context.get('main_volume_state')}"
+            )
+        market_pv_summary = str(benchmark_context.get("market_pv_summary", "") or "").strip()
+        market_pv_outlook = str(benchmark_context.get("market_pv_outlook", "") or "").strip()
+        if market_pv_summary or market_pv_outlook:
+            benchmark_lines.append("[大盘量价推演 / Price-Volume Outlook]")
+            if market_pv_summary:
+                benchmark_lines.append(market_pv_summary)
+            if market_pv_outlook:
+                benchmark_lines.append(market_pv_outlook)
         if breadth_ctx:
             benchmark_lines.append(
                 f"breadth_pct={breadth_ctx.get('ratio_pct')}, "
