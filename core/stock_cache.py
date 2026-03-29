@@ -201,7 +201,6 @@ def upsert_cache_data(
     payload["date"] = payload["date"].astype(str)
     payload["symbol"] = symbol
     payload["adjust"] = adjust
-    payload["source"] = "cache"
     payload["updated_at"] = datetime.utcnow().isoformat()
     records = payload.to_dict(orient="records")
 
