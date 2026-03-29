@@ -36,4 +36,4 @@ jobs:
 
       - name: Run maintenance
         run: |
-          python -u scripts/stock_hist_cache_maintenance.py --ttl-days 365
+          python -u scripts/stock_hist_cache_maintenance.py --ttl-days 730
