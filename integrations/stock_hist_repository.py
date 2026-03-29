@@ -82,9 +82,8 @@ def _fetch_gap(symbol: str, start_date: date, end_date: date, adjust: AdjustType
         end=end_date,
         adjust=adjust,
     )
-    source = str(df.attrs.get("source", "") or "").strip().lower() or "unknown"
     norm = normalize_hist_df(df)
-    return norm, source
+    return norm, "cache"
 
 
 def get_stock_hist(
@@ -128,7 +127,6 @@ def get_stock_hist(
 
     gaps = _compute_gap_ranges(start_d, end_d, meta)
     fetched_frames: list[pd.DataFrame] = []
-    fetched_sources: list[str] = []
     did_fetch = False
 
     for gap_start, gap_end in gaps:
@@ -137,9 +135,8 @@ def get_stock_hist(
             f"[stock_repo] cache_miss symbol={symbol} adjust={cache_adjust} "
             f"range={gap_start}..{gap_end} context={context}"
         )
-        frame, src = _fetch_gap(symbol, gap_start, gap_end, adjust)
+        frame, _ = _fetch_gap(symbol, gap_start, gap_end, adjust)
         fetched_frames.append(frame)
-        fetched_sources.append(src)
 
     merged = _merge_norm_frames(
         [cached_norm] + fetched_frames if cached_norm is not None else fetched_frames
@@ -149,24 +146,17 @@ def get_stock_hist(
         # 缓存无可用数据且补拉失败时，按原行为抛错
         # （fetch_stock_hist_from_source 内部会提供详细数据源失败信息）
         did_fetch = True
-        frame, src = _fetch_gap(symbol, start_d, end_d, adjust)
+        frame, _ = _fetch_gap(symbol, start_d, end_d, adjust)
         merged = frame
-        fetched_sources.append(src)
 
     result_norm = _slice_df_by_date(merged, start_d, end_d)
     if result_norm.empty:
         # 防御性兜底：强制拉取完整窗口
         did_fetch = True
-        frame, src = _fetch_gap(symbol, start_d, end_d, adjust)
+        frame, _ = _fetch_gap(symbol, start_d, end_d, adjust)
         result_norm = _slice_df_by_date(frame, start_d, end_d)
         merged = _merge_norm_frames([merged, frame])
-        fetched_sources.append(src)
-
-    chosen_source = (
-        (fetched_sources[-1] if fetched_sources else "")
-        or (meta.source if meta else "")
-        or "cache"
-    )
+    chosen_source = "cache"
 
     # 有缺口补拉或首次拉取时回写缓存；纯命中时不重复写
     if did_fetch or meta is None:

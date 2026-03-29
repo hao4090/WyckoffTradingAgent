@@ -127,7 +127,7 @@ def get_cache_meta(symbol: str, adjust: str, *, context: str = "auto") -> Option
 
     last_resp = (
         supabase.table(TABLE_STOCK_HIST_CACHE)
-        .select("date,source,updated_at")
+        .select("date,updated_at")
         .eq("symbol", symbol)
         .eq("adjust", adjust)
         .order("date", desc=True)
@@ -144,7 +144,7 @@ def get_cache_meta(symbol: str, adjust: str, *, context: str = "auto") -> Option
     return CacheMeta(
         symbol=symbol,
         adjust=adjust,
-        source=str(last_row.get("source", "") or "cache"),
+        source="cache",
         start_date=_parse_iso_date(first_row["date"]),
         end_date=_parse_iso_date(last_row["date"]),
         updated_at=updated_at,
@@ -201,7 +201,7 @@ def upsert_cache_data(
     payload["date"] = payload["date"].astype(str)
     payload["symbol"] = symbol
     payload["adjust"] = adjust
-    payload["source"] = source
+    payload["source"] = "cache"
     payload["updated_at"] = datetime.utcnow().isoformat()
     records = payload.to_dict(orient="records")
 
