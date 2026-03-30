@@ -513,6 +513,10 @@ def _analyze_benchmark_and_tune_cfg(
     recent3_cum = None
     main_today_pct = None
     main_prev_pct = None
+    main_vol_ma5 = None
+    main_vol_ma20 = None
+    main_vol_ratio_5_20 = None
+    main_volume_state = "未知"
     small_close = None
     small_recent3_list: list[float] = []
     small_recent3_cum = None
@@ -523,6 +527,7 @@ def _analyze_benchmark_and_tune_cfg(
         b = bench_df.sort_values("date").copy()
         b["close"] = pd.to_numeric(b["close"], errors="coerce")
         b["pct_chg"] = pd.to_numeric(b["pct_chg"], errors="coerce")
+        b["volume"] = pd.to_numeric(b.get("volume"), errors="coerce")
         if len(b) >= 60:
             close = float(b["close"].iloc[-1])
             ma50 = float(b["close"].rolling(50).mean().iloc[-1])
@@ -537,6 +542,18 @@ def _analyze_benchmark_and_tune_cfg(
                 main_today_pct = float(recent3_list[-1])
                 if len(recent3_list) >= 2:
                     main_prev_pct = float(recent3_list[-2])
+            vol = b["volume"].dropna()
+            if len(vol) >= 20:
+                main_vol_ma20 = float(vol.tail(20).mean())
+                main_vol_ma5 = float(vol.tail(5).mean())
+                if main_vol_ma20 > 0:
+                    main_vol_ratio_5_20 = float(main_vol_ma5 / main_vol_ma20)
+                    if main_vol_ratio_5_20 >= 1.15:
+                        main_volume_state = "放量"
+                    elif main_vol_ratio_5_20 <= 0.85:
+                        main_volume_state = "缩量"
+                    else:
+                        main_volume_state = "平量"
 
     if smallcap_df is not None and not smallcap_df.empty:
         s = smallcap_df.sort_values("date").copy()
@@ -695,6 +712,49 @@ def _analyze_benchmark_and_tune_cfg(
         cfg.rps_fast_min = min(cfg.rps_fast_min, 70.0)
         cfg.rps_slow_min = min(cfg.rps_slow_min, 60.0)
 
+    price_zone = "结构待确认"
+    if close is not None and ma50 is not None and ma200 is not None:
+        if close > ma50 > ma200:
+            price_zone = "多头上方"
+        elif close < ma50 < ma200:
+            price_zone = "空头下方"
+        elif close >= ma50 and close <= ma200:
+            price_zone = "反抽修复区"
+        elif close < ma50 and close >= ma200:
+            price_zone = "高位回撤区"
+        else:
+            price_zone = "震荡博弈区"
+    ratio_text = (
+        f"{main_vol_ratio_5_20:.2f}x"
+        if main_vol_ratio_5_20 is not None
+        else "未知"
+    )
+    market_pv_summary = (
+        f"沪深300近5日均量/20日均量={ratio_text}（{main_volume_state}），"
+        f"当前位于{price_zone}。"
+    )
+    if regime == "RISK_ON":
+        market_pv_outlook = (
+            "次日推演：若量能维持在20日均量0.95x上方且不破MA50，"
+            "偏强震荡延续概率更高；若放量跌破MA50，需转入防守。"
+        )
+    elif regime == "PANIC_REPAIR":
+        market_pv_outlook = (
+            "次日推演：修复阶段以确认强度为先，若放量站稳MA50可继续修复；"
+            "若缩量冲高回落，按反抽处理。"
+        )
+    elif regime == "NEUTRAL":
+        market_pv_outlook = (
+            "次日推演：中性震荡为主，等待“放量突破近高”或“放量跌破MA50”后再确认方向。"
+        )
+    elif regime in {"RISK_OFF", "CRASH"}:
+        market_pv_outlook = (
+            "次日推演：防守优先，若出现放量下压并失守MA50，继续收缩风险敞口；"
+            "仅在缩量止跌后再评估试探。"
+        )
+    else:
+        market_pv_outlook = "次日推演：结构信息不足，先观察量能与MA50得失再定方向。"
+
     context.update(
         {
             "regime": regime,
@@ -705,6 +765,12 @@ def _analyze_benchmark_and_tune_cfg(
             "recent3_pct": recent3_list,
             "recent3_cum_pct": recent3_cum,
             "main_today_pct": main_today_pct,
+            "main_vol_ma5": main_vol_ma5,
+            "main_vol_ma20": main_vol_ma20,
+            "main_vol_ratio_5_20": main_vol_ratio_5_20,
+            "main_volume_state": main_volume_state,
+            "market_pv_summary": market_pv_summary,
+            "market_pv_outlook": market_pv_outlook,
             "smallcap_close": small_close,
             "smallcap_recent3_pct": small_recent3_list,
             "smallcap_recent3_cum_pct": small_recent3_cum,
@@ -1454,11 +1520,17 @@ def run(
 
     if use_legacy_card and use_legacy_selection:
         bench_line = "未知"
+        pv_line = "暂无大盘量价推演"
         if benchmark_context:
             bench_line = (
                 f"{benchmark_context.get('regime')} | close={benchmark_context.get('close')} "
                 f"ma50={benchmark_context.get('ma50')} ma200={benchmark_context.get('ma200')} "
                 f"3d={benchmark_context.get('recent3_pct')} cum3={benchmark_context.get('recent3_cum_pct')}"
+            )
+            pv_line = str(
+                benchmark_context.get("market_pv_outlook")
+                or benchmark_context.get("market_pv_summary")
+                or pv_line
             )
 
         lines = [
@@ -1469,6 +1541,7 @@ def run(
             ),
             f"**漏斗概览**: {metrics['total_symbols']}只 → L1:{metrics['layer1']} → L2:{metrics['layer2']} → L3:{metrics['layer3']} → 命中:{metrics['total_hits']}",
             f"**大盘水温**: {bench_line}",
+            f"**大盘量价推演**: {pv_line}",
             f"**候选分层**: 命中股票{unique_hit_count} -> AI输入全量{len(selected_for_ai)}",
             f"**Top 行业**: {', '.join(metrics['top_sectors']) if metrics['top_sectors'] else '无'}",
             "",
@@ -1641,6 +1714,7 @@ def run(
     )
 
     bench_line = "未知"
+    pv_line = "暂无大盘量价推演"
     if benchmark_context:
         breadth = benchmark_context.get("breadth", {}) or {}
         breadth_text = (
@@ -1668,6 +1742,11 @@ def run(
             f"{smallcap_text}"
             f"{breadth_text}{repair_text}"
         )
+        pv_line = str(
+            benchmark_context.get("market_pv_outlook")
+            or benchmark_context.get("market_pv_summary")
+            or pv_line
+        )
 
     data_quality_line = (
         f"成功拉取 {metrics['fetch_ok']} 只"
@@ -1693,6 +1772,7 @@ def run(
             f"= **{metrics['total_symbols']}**（共{metrics['pool_batches']}批）"
         ),
         f"- **大盘水温**：{bench_line}",
+        f"- **大盘量价推演**：{pv_line}",
         f"- **Top 行业**：{', '.join(metrics['top_sectors']) if metrics['top_sectors'] else '无'}",
         f"- **板块轮动温度计**：{sector_rotation.get('headline', '无')}",
         f"- **数据质量**：{data_quality_line}",
