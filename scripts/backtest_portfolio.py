@@ -26,8 +26,6 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 from scripts.backtest_runner import (
     _calc_max_drawdown_pct,
     _calc_sharpe_ratio,

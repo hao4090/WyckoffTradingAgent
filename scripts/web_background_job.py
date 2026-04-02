@@ -10,8 +10,6 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 
 def _sanitize(obj: Any) -> Any:
     if obj is None or isinstance(obj, (str, int, float, bool)):

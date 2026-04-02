@@ -25,8 +25,6 @@ from concurrent.futures import (
 from datetime import date, datetime
 from pathlib import Path
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 import pandas as pd
 
 from integrations.fetch_a_share_csv import (

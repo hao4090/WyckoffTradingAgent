@@ -12,8 +12,6 @@ import sys
 import time
 from datetime import date, datetime
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 import pandas as pd
 
 from integrations.ai_prompts import WYCKOFF_FUNNEL_SYSTEM_PROMPT

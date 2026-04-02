@@ -15,8 +15,6 @@ import sys
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 from integrations.supabase_recommendation import refresh_tracking_prices_with_tushare_unadjusted
 
 TZ = ZoneInfo("Asia/Shanghai")

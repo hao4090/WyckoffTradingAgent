@@ -26,8 +26,6 @@ from pathlib import Path
 
 import pandas as pd
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 from core.wyckoff_engine import (
     FunnelConfig,
     normalize_hist_from_fetch,

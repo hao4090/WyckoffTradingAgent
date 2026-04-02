@@ -24,9 +24,6 @@ import os
 from dataclasses import asdict
 from datetime import date, datetime
 
-# 确保项目根目录在 sys.path 中
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-
 from integrations.fetch_a_share_csv import _fetch_hist, _resolve_trading_window
 from integrations.data_source import fetch_index_hist
 from core.wyckoff_engine import normalize_hist_from_fetch, FunnelConfig

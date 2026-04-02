@@ -1,9 +1,6 @@
 # -*- coding: utf-8 -*-
 """AI 分析页：单股本地，批量后台。"""
 import os
-import sys
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import pandas as pd
 import streamlit as st
