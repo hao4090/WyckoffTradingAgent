@@ -23,7 +23,7 @@ from integrations.fetch_a_share_csv import (
     _stock_name_from_code,
 )
 from utils import extract_symbols_from_text, safe_filename_part, stock_sector_em
-from core.download_history import add_download_history
+from integrations.download_history import add_download_history
 from app.auth_component import logout
 from app.layout import is_data_source_failure_message, setup_page, show_user_error
 from app.ui_helpers import show_page_loading, inject_custom_css

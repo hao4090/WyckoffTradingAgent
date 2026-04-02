@@ -14,7 +14,7 @@ from app.background_jobs import (
 )
 from app.layout import setup_page
 from app.navigation import show_right_nav
-from core.single_stock_logic import render_single_stock_page
+from app.single_stock_logic import render_single_stock_page
 from integrations.llm_client import (
     DEFAULT_GEMINI_MODEL,
     GEMINI_MODELS,

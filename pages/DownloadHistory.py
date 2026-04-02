@@ -1,7 +1,7 @@
 import streamlit as st
 
 from app.layout import setup_page
-from core.download_history import get_download_history, load_download_history_artifact
+from integrations.download_history import get_download_history, load_download_history_artifact
 from app.navigation import show_right_nav
 
 
