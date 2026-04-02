@@ -1,10 +1,11 @@
 import json
 import os
 import streamlit as st
-from supabase import create_client, Client
+from supabase import Client
 from postgrest.exceptions import APIError
 from core.constants import TABLE_USER_SETTINGS
 from integrations.llm_client import DEFAULT_GEMINI_MODEL, OPENAI_COMPATIBLE_BASE_URLS
+from integrations.supabase_base import create_anon_client
 
 CUSTOM_PROVIDER_KEYS = ("zhipu", "minimax", "qwen", "kimi", "volcengine")
 
@@ -74,27 +75,9 @@ def reset_user_settings_state() -> None:
 
 
 def _get_supabase_client_base() -> Client:
-    # 优先尝试从 os.getenv 读取（本地 .env 文件）
-    # 其次尝试从 st.secrets 读取（Streamlit Cloud 部署环境）
-    url = os.getenv("SUPABASE_URL")
     # ⚠️  此处必须填 anon key（公开权限），不得填 service_role key。
     # 若误填 service_role key，未登录用户将绕过 RLS，可读写所有用户数据。
-    key = os.getenv("SUPABASE_KEY")
-
-    if not url or not key:
-        # 如果 os.getenv 没取到，再试 st.secrets
-        try:
-            url = st.secrets["SUPABASE_URL"]
-            key = st.secrets["SUPABASE_KEY"]
-        except (FileNotFoundError, KeyError):
-            pass
-
-    if not url or not key:
-        raise ValueError(
-            "Missing Supabase credentials. Please set SUPABASE_URL and SUPABASE_KEY in .env or secrets."
-        )
-
-    return create_client(url, key)
+    return create_anon_client()
 
 
 def _apply_user_session(supabase: Client) -> None:

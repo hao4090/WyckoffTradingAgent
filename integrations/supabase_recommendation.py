@@ -11,23 +11,10 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 import pandas as pd
-from supabase import Client, create_client
+from supabase import Client
 from core.constants import TABLE_RECOMMENDATION_TRACKING
-
-def _get_supabase_admin_client() -> Client:
-    url = (os.getenv("SUPABASE_URL") or "").strip()
-    key = (
-        (os.getenv("SUPABASE_SERVICE_ROLE_KEY") or "").strip() 
-        or (os.getenv("SUPABASE_KEY") or "").strip()
-    )
-    if not url or not key:
-        raise ValueError("SUPABASE_URL/SUPABASE_SERVICE_ROLE_KEY 未配置")
-    return create_client(url, key)
-
-def is_supabase_configured() -> bool:
-    url = (os.getenv("SUPABASE_URL") or "").strip()
-    key = (os.getenv("SUPABASE_SERVICE_ROLE_KEY") or "").strip() or (os.getenv("SUPABASE_KEY") or "").strip()
-    return bool(url and key)
+from integrations.supabase_base import create_admin_client as _get_supabase_admin_client
+from integrations.supabase_base import is_admin_configured as is_supabase_configured
 
 
 def _parse_recommend_date(raw_value: Any) -> date | None:
