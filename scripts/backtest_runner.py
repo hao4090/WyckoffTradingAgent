@@ -44,13 +44,13 @@ from scripts.wyckoff_funnel import (
     _rank_l3_candidates,
 )
 
-DEFAULT_HOLD_DAYS = 15
-DEFAULT_EXIT_MODE = "close_only"
-DEFAULT_STOP_LOSS_PCT = -9.0
-DEFAULT_TAKE_PROFIT_PCT = 0.0
+DEFAULT_HOLD_DAYS = 30  # 网格优化：30天夏普2.493 > 25天1.967 > 20天1.413
+DEFAULT_EXIT_MODE = "sltp"
+DEFAULT_STOP_LOSS_PCT = -7.0   # 网格优化最佳：SL7/TP18（夏普1.928 > SL6/TP15的1.679 > SL8/TP20的1.466）
+DEFAULT_TAKE_PROFIT_PCT = 18.0
 DEFAULT_USE_CURRENT_META = False
-DEFAULT_BUY_FRICTION_PCT = float(os.getenv("BACKTEST_BUY_FRICTION_PCT", "0.2"))
-DEFAULT_SELL_FRICTION_PCT = float(os.getenv("BACKTEST_SELL_FRICTION_PCT", "0.2"))
+DEFAULT_BUY_FRICTION_PCT = float(os.getenv("BACKTEST_BUY_FRICTION_PCT", "0.5"))
+DEFAULT_SELL_FRICTION_PCT = float(os.getenv("BACKTEST_SELL_FRICTION_PCT", "0.5"))
 FUNNEL_AI_SELECTION_MODE = (
     os.getenv("FUNNEL_AI_SELECTION_MODE", "legacy_full_hits").strip().lower()
 )
@@ -360,6 +360,22 @@ def _close_on_or_after(df: pd.DataFrame, d: date) -> tuple[float | None, date | 
     return float(v.iloc[0]), hit_date
 
 
+def _open_on_or_after(df: pd.DataFrame, d: date) -> tuple[float | None, date | None]:
+    """取目标日期（含）之后首个交易日的开盘价，用于模拟次日开盘买入。"""
+    row = df[df["date"] >= d].head(1)
+    if row.empty:
+        return None, None
+    if "open" in row.columns:
+        v = pd.to_numeric(row["open"], errors="coerce").dropna()
+        if not v.empty:
+            return float(v.iloc[0]), row.iloc[0]["date"]
+    # fallback: 没有 open 列时用 close
+    v = pd.to_numeric(row["close"], errors="coerce").dropna()
+    if v.empty:
+        return None, None
+    return float(v.iloc[0]), row.iloc[0]["date"]
+
+
 def _close_on_or_before(
     df: pd.DataFrame,
     d: date,
@@ -513,8 +529,8 @@ def run_backtest(
     trade_dates = [d for d in bench_df["date"].tolist() if start_dt <= d <= end_dt]
     print(f"[backtest] DEBUG: start={start_dt}, end={end_dt}, bench_min={bench_df['date'].min()}, bench_max={bench_df['date'].max()}")
     print(f"[backtest] DEBUG: trade_dates count={len(trade_dates)}")
-    if len(trade_dates) <= hold_days:
-        raise RuntimeError(f"回测区间交易日过少({len(trade_dates)})，无法计算 forward return (hold_days={hold_days})")
+    if len(trade_dates) <= hold_days + 1:
+        raise RuntimeError(f"回测区间交易日过少({len(trade_dates)})，无法计算 forward return (hold_days={hold_days}，需至少 {hold_days + 2} 个交易日)")
 
     if use_current_meta:
         market_cap_map = fetch_market_cap_map()
@@ -539,10 +555,11 @@ def run_backtest(
     eval_days = 0
     ohlc_lookup_cache: dict[str, dict[date, tuple[float, float, float, float]]] = {}
 
-    max_idx = len(trade_dates) - hold_days
+    max_idx = len(trade_dates) - hold_days - 1  # -1: 信号次日才能入场，需多预留一天
     for idx in range(max_idx):
         signal_date = trade_dates[idx]
-        exit_anchor_date = trade_dates[idx + hold_days]
+        entry_target_date = trade_dates[idx + 1]      # 信号日收盘后才能看到信号，次日开盘才能买入
+        exit_anchor_date = trade_dates[idx + 1 + hold_days]  # 从实际入场日起计算持有天数
 
         # 各票截止到 signal_date 的切片（滚动窗口）
         day_df_map: dict[str, pd.DataFrame] = {}
@@ -564,7 +581,7 @@ def run_backtest(
         # 回测与实盘同构：按“当日”市场状态动态调参，避免静态 cfg 导致口径漂移。
         day_cfg = replace(base_cfg)
         day_breadth = _calc_market_breadth_for_regime(day_df_map)
-        _tune_cfg_by_regime(
+        bench_context = _tune_cfg_by_regime(
             bench_slice,
             None,
             day_cfg,
@@ -581,8 +598,8 @@ def run_backtest(
             sector_map=sector_map,
             cfg=day_cfg,
         )
-        
-        regime = day_breadth.get("regime", "NEUTRAL")
+
+        regime = bench_context.get("regime", "NEUTRAL") if bench_context else "NEUTRAL"
         selected_for_ai, p_score_map, track_map = _select_ai_input_codes(
             result=result,
             day_df_map=day_df_map,
@@ -603,18 +620,31 @@ def run_backtest(
             full_df = all_df_map.get(code)
             if full_df is None or full_df.empty:
                 continue
-            entry_close = _close_on_date(full_df, signal_date)
-            if entry_close is None or entry_close <= 0:
+            # 核心修正：实盘中信号出现在收盘后，最早只能在次日开盘买入
+            # 停牌股可能延后成交，必须用 actual_entry_date 计算持有窗口
+            entry_close, actual_entry_date = _open_on_or_after(full_df, entry_target_date)
+            if entry_close is None or entry_close <= 0 or actual_entry_date is None:
                 continue
+
+            # 根据实际成交日推算退出锚点和市场窗口（停牌股的实际入场日可能晚于 entry_target_date）
+            try:
+                actual_entry_idx = trade_dates.index(actual_entry_date)
+            except ValueError:
+                # actual_entry_date 不在基准交易日列表中（极端情况：个股复牌日不在大盘交易日内）
+                actual_entry_idx = idx + 1  # fallback 到原始逻辑
+            actual_exit_idx = actual_entry_idx + hold_days
+            if actual_exit_idx >= len(trade_dates):
+                continue  # 剩余交易日不足以覆盖完整持有期
+            actual_exit_anchor = trade_dates[actual_exit_idx]
 
             if exit_mode == "close_only":
                 # 兼容旧口径：持有 N 个市场交易日后按 anchor 日（或其后首个可得日）收盘离场。
-                exit_close, exit_date = _close_on_or_after(full_df, exit_anchor_date)
+                exit_close, exit_date = _close_on_or_after(full_df, actual_exit_anchor)
             else:
-                # sltp 口径：仅在 (signal_date, exit_anchor_date] 的市场交易日窗口内检查触发。
+                # sltp 口径：仅在实际入场日到退出锚点日的市场交易日窗口内检查触发。
                 exit_close = None
                 exit_date = None
-                market_window = trade_dates[idx + 1 : idx + hold_days + 1]
+                market_window = trade_dates[actual_entry_idx : actual_exit_idx + 1]
                 day_ohlc = ohlc_lookup_cache.get(code)
                 if day_ohlc is None:
                     day_ohlc = _build_daily_ohlc_lookup(full_df)
@@ -665,7 +695,7 @@ def run_backtest(
                     # 未触发则按窗口最后一天(含)及之前最近可得收盘离场，不延长持仓天数。
                     exit_close, exit_date = _close_on_or_before(
                         full_df,
-                        exit_anchor_date,
+                        actual_exit_anchor,
                         lower_exclusive=signal_date,
                     )
 
@@ -737,8 +767,8 @@ def run_backtest(
                 "var95_ret_pct": var95_ret_pct,
                 "cvar95_ret_pct": cvar95_ret_pct,
                 "max_consecutive_losses": _calc_max_consecutive_losses(ret),
-                "sharpe_ratio": _calc_sharpe_ratio(ret),
-                "calmar_ratio": _calc_calmar_ratio(ret),
+                "sharpe_ratio": _calc_sharpe_ratio(ret, hold_days=hold_days),
+                "calmar_ratio": _calc_calmar_ratio(ret, hold_days=hold_days),
                 "stratified": _calc_stratified_stats(trades_df),
             }
         )
@@ -811,11 +841,13 @@ def _calc_max_consecutive_losses(ret: pd.Series) -> int:
 def _calc_sharpe_ratio(
     ret: pd.Series,
     risk_free_annual: float = 2.0,
-    periods_per_year: float = 250.0,
+    periods_per_year: float | None = None,
+    hold_days: int = DEFAULT_HOLD_DAYS,
 ) -> float | None:
     """
     年化夏普比 = (年化收益 - 无风险利率) / 年化波动率。
     ret: 每笔交易收益率(%)序列。
+    periods_per_year: 每年可执行的交易轮次。默认根据 hold_days 推算 (250 / hold_days)。
     """
     s = pd.to_numeric(ret, errors="coerce").dropna()
     if len(s) < 3:
@@ -824,6 +856,8 @@ def _calc_sharpe_ratio(
     std_pct = float(s.std(ddof=1))
     if std_pct <= 0:
         return None
+    if periods_per_year is None:
+        periods_per_year = 250.0 / max(hold_days, 1)
     ann_ret = mean_pct * periods_per_year / 100.0
     ann_std = std_pct * (periods_per_year ** 0.5) / 100.0
     rf = risk_free_annual / 100.0
@@ -832,7 +866,8 @@ def _calc_sharpe_ratio(
 
 def _calc_calmar_ratio(
     ret: pd.Series,
-    periods_per_year: float = 250.0,
+    periods_per_year: float | None = None,
+    hold_days: int = DEFAULT_HOLD_DAYS,
 ) -> float | None:
     """卡玛比 = 年化收益 / abs(最大回撤)。"""
     s = pd.to_numeric(ret, errors="coerce").dropna()
@@ -841,6 +876,8 @@ def _calc_calmar_ratio(
     mdd = _calc_max_drawdown_pct(s)
     if mdd is None or mdd >= 0:
         return None
+    if periods_per_year is None:
+        periods_per_year = 250.0 / max(hold_days, 1)
     mean_pct = float(s.mean())
     ann_ret_pct = mean_pct * periods_per_year
     return float(ann_ret_pct / abs(mdd))
@@ -939,7 +976,8 @@ def _build_summary_md(summary: dict) -> str:
     )
     notes = [
         "- 该回测仅使用日线数据（qfq），不含盘口逐笔成交与涨跌停成交约束。",
-        "- 已纳入双边交易摩擦成本（买入/卖出），用于近似滑点 + 佣金 + 税费影响。",
+        "- 入场口径：信号日收盘后出信号，次日开盘价买入（消除前视偏差）。",
+        "- 已纳入双边交易摩擦成本（买入/卖出各0.5%），用于近似滑点 + 佣金 + 税费影响。",
         "- ⚠️ 仍存在幸存者偏差：股票池来自当前在市样本，未包含历史退市股票。",
     ]
     if use_current_meta:

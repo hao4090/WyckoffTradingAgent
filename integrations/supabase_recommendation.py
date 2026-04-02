@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import os
 from bisect import bisect_right
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -195,7 +195,7 @@ def upsert_recommendations(recommend_date: int, symbols_info: list[dict[str, Any
                 "recommend_count": new_cnt,
                 "funnel_score": score_val,
                 "is_ai_recommended": False,
-                "updated_at": datetime.utcnow().isoformat()
+                "updated_at": datetime.now(timezone.utc).isoformat()
             })
         
         if payload:
@@ -237,7 +237,7 @@ def mark_ai_recommendations(recommend_date: int, ai_codes: list[str]) -> bool:
         return False
     try:
         client = _get_supabase_admin_client()
-        now_iso = datetime.utcnow().isoformat()
+        now_iso = datetime.now(timezone.utc).isoformat()
         # 先全量置 false，再对白名单置 true，避免前一次残留。
         client.table(TABLE_RECOMMENDATION_TRACKING).update(
             {"is_ai_recommended": False, "updated_at": now_iso}
@@ -387,7 +387,7 @@ def sync_all_tracking_prices(
                 rec_date = _parse_recommend_date(record.get("recommend_date"))
                 update_payload = {
                     "current_price": new_current_price,
-                    "updated_at": datetime.utcnow().isoformat(),
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
                 }
                 if initial_price > 0:
                     change_pct = (new_current_price - initial_price) / initial_price * 100.0
@@ -461,7 +461,7 @@ def correct_tracking_initial_prices() -> int:
             client.table(TABLE_RECOMMENDATION_TRACKING).update({
                 "initial_price": initial_from_hist,
                 "change_pct": change_pct,
-                "updated_at": datetime.utcnow().isoformat(),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
             }).eq("id", record["id"]).execute()
             updated += 1
         return updated
@@ -623,7 +623,7 @@ def refresh_tracking_prices_with_tushare_unadjusted() -> dict[str, Any]:
                     "initial_price": round(initial_close, 4),
                     "current_price": round(current_close, 4),
                     "change_pct": change_pct,
-                    "updated_at": datetime.utcnow().isoformat(),
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
                 }
             )
 

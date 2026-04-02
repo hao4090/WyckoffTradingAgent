@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 import os
 import re
 from typing import Any
@@ -346,7 +346,7 @@ def save_ai_trade_orders(
                     "reason": str(o.get("reason", "") or ""),
                     "tape_condition": str(o.get("tape_condition", "") or ""),
                     "invalidate_condition": str(o.get("invalidate_condition", "") or ""),
-                    "created_at": datetime.utcnow().isoformat(),
+                    "created_at": datetime.now(timezone.utc).isoformat(),
                 }
             )
         client.table(TABLE_TRADE_ORDERS).insert(payload).execute()
@@ -408,7 +408,7 @@ def upsert_daily_nav(
             "free_cash": float(free_cash),
             "positions_value": float(positions_value),
             "total_equity": float(total_equity),
-            "updated_at": datetime.utcnow().isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
         }
         client.table(TABLE_DAILY_NAV).upsert(
             payload,

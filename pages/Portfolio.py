@@ -297,7 +297,7 @@ def _load_user_live(portfolio_id: str) -> tuple[dict[str, Any], list[dict[str, A
                 "name": "Real Portfolio",
                 "free_cash": 0.0,
                 "total_equity": None,
-                "updated_at": datetime.utcnow().isoformat(),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
             },
             on_conflict="portfolio_id",
         ).execute()
@@ -399,7 +399,7 @@ def _save_user_live(
             "cost_price": cost_price,
             "buy_dt": buy_dt,
             "strategy": strategy,
-            "updated_at": datetime.utcnow().isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
         }
 
     if errors:
@@ -420,7 +420,7 @@ def _save_user_live(
                 "name": "Real Portfolio",
                 "free_cash": float(free_cash),
                 "total_equity": computed_total_equity,
-                "updated_at": datetime.utcnow().isoformat(),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
             },
             on_conflict="portfolio_id",
         ).execute()

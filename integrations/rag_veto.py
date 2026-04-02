@@ -12,7 +12,7 @@ import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import requests
@@ -244,7 +244,7 @@ def _tavily_search(query: str, max_results: int = RAG_MAX_RESULTS) -> list[dict[
     if not api_key:
         return []
     url = "https://api.tavily.com/search"
-    after = (datetime.utcnow() - timedelta(days=max(RAG_NEWS_LOOKBACK_DAYS, 1))).date().isoformat()
+    after = (datetime.now(timezone.utc) - timedelta(days=max(RAG_NEWS_LOOKBACK_DAYS, 1))).date().isoformat()
     payload = {
         "api_key": api_key,
         "query": query,

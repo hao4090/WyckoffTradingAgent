@@ -8,7 +8,7 @@ Supabase 最新交易日市场信号读写
 """
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 import os
 from typing import Any
 
@@ -440,7 +440,7 @@ def upsert_market_signal_daily(trade_date: date | str, patch: dict[str, Any]) ->
             patch.get("source_jobs") if isinstance(patch, dict) else None,
         )
         merged.update(compose_market_banner(merged))
-        merged["updated_at"] = datetime.utcnow().isoformat()
+        merged["updated_at"] = datetime.now(timezone.utc).isoformat()
         try:
             client.table(TABLE_MARKET_SIGNAL_DAILY).upsert(
                 _normalize_row_for_upsert(merged),

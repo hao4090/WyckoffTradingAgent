@@ -14,9 +14,11 @@ concurrency:
 jobs:
   run:
     runs-on: ubuntu-latest
+    timeout-minutes: 360
     env:
       PYTHONUNBUFFERED: "1"
       FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
+      PREMARKET_VIX_POLL_INTERVAL_SECONDS: "300"
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}

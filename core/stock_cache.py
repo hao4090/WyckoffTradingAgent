@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 import os
 from typing import Optional
 
@@ -140,7 +140,7 @@ def get_cache_meta(symbol: str, adjust: str, *, context: str = "auto") -> Option
     first_row = first_resp.data[0]
     last_row = last_resp.data[0]
     updated_raw = last_row.get("updated_at")
-    updated_at = _parse_iso_datetime(updated_raw) if updated_raw else datetime.utcnow()
+    updated_at = _parse_iso_datetime(updated_raw) if updated_raw else datetime.now(timezone.utc)
     return CacheMeta(
         symbol=symbol,
         adjust=adjust,
@@ -201,7 +201,7 @@ def upsert_cache_data(
     payload["date"] = payload["date"].astype(str)
     payload["symbol"] = symbol
     payload["adjust"] = adjust
-    payload["updated_at"] = datetime.utcnow().isoformat()
+    payload["updated_at"] = datetime.now(timezone.utc).isoformat()
     records = payload.to_dict(orient="records")
 
     try:
@@ -230,7 +230,7 @@ def cleanup_cache(ttl_days: int = 30, *, context: str = "auto") -> None:
     supabase = _get_stock_cache_client(context=context)
     if supabase is None:
         return
-    cutoff = datetime.utcnow() - timedelta(days=ttl_days)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=ttl_days)
     cutoff_iso = cutoff.isoformat()
     try:
         supabase.table(TABLE_STOCK_HIST_CACHE).delete().lt(

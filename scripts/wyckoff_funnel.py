@@ -1296,7 +1296,10 @@ def run_funnel_job(
     l1_passed = layer1_filter(l1_input, name_map, market_cap_map, all_df_map, cfg)
 
     # Layer 2
-    l2_passed, l2_channel_map = layer2_strength_detailed(l1_passed, all_df_map, bench_df, cfg)
+    l2_passed, l2_channel_map = layer2_strength_detailed(
+        l1_passed, all_df_map, bench_df, cfg,
+        rps_universe=l1_input,
+    )
     # 通道标签现在是多标签用 + 拼接，因此用 in 判断包含关系
     l2_momentum = sum(1 for v in l2_channel_map.values() if "主升通道" in v)
     l2_ambush   = sum(1 for v in l2_channel_map.values() if "潜伏通道" in v)

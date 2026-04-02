@@ -1,5 +1,39 @@
 # Changelog
 
+## v2.1.0 (2026-04-02)
+
+**量化引擎深度修复 + 持仓健康诊断 + 全系统 Bug 清理**
+
+本次更新是一次系统级代码审查驱动的大修，修复了多个影响选股正确性和回测可靠性的核心 Bug，并新增了持仓健康诊断能力。
+
+### 核心引擎修复
+- **修复 markup 阶段检测永远失效**：`_detect_markup_entry` 中 `isna().any()` 对 rolling 序列永远为 True，导致主升通道的阶段识别和退出信号从未生效。
+- **修复 Step3 供需摘要全部为零**：`_build_supply_demand_summary` 因 Pandas 索引对齐问题，所有量价统计（放量下跌、缩量回踩、低量测试）注入给 LLM 的数据全是 NaN。
+- **修复 RPS 仅在 L1 子集排名**：RPS 排名现在基于全市场 universe（L1 输入前的 4000+ 股票池），避免在 800 只 L1 子集中排名导致阈值系统性偏宽。
+- **修复 Step3 漏传 4 个关键参数**：`generate_stock_payload` 调用点补传 `track`、`exit_signal`、`exit_price`、`exit_reason`，LLM 现在能看到退出预警和轨道上下文。
+
+### 回测修复
+- **修复 regime 分层统计全错**：回测中 `_calc_market_breadth` 返回值不含 `regime` 键，导致所有交易都被标为 NEUTRAL。现在正确捕获 `_analyze_benchmark_and_tune_cfg` 的返回值。
+- **修复停牌股持有期算短**：`_open_on_or_after` 返回的 `actual_entry_date` 不再被丢弃，持有窗口和退出锚点从实际成交日起算，停牌 3 天复牌的股票不再系统性失真。
+- **修复 Sharpe/Calmar 比率虚高**：年化频率从固定 250 次/年改为 `250 / hold_days`，hold_days=30 时 periods_per_year=8.33，数值不再被人为放大 30 倍。
+
+### 新增：持仓健康诊断
+- **新增 `core/holding_diagnostic.py`**：复用引擎的 L2 通道分类、L4 触发检测、L5 退出信号等能力，对任意持仓做结构化健康诊断（均线结构、Wyckoff 定位、止损距离、量能指标、综合评级）。
+- **Step4 自动注入诊断**：`_process_one_position` 现在会调用 `diagnose_one_stock()` 并将诊断结果注入 LLM 上下文，AI 决策时可以看到每只持仓的完整健康状态。
+- **新增 CLI 工具 `scripts/diagnose_holdings.py`**：支持 `--codes/--costs` 快速诊断和 `--from-portfolio` 从 Supabase 读取实盘持仓，输出 text/markdown/json 三种格式。
+- **修复多标签通道误判**：`_classify_track` 从精确匹配改为子串匹配，`"主升通道+点火破局"` 正确归入 Trend 轨道。
+- **修复单股诊断 RPS=100**：诊断模式下关闭 RPS 过滤（单股 universe 排名无意义），只用均线/RS/量能等绝对指标做通道判断。
+
+### 风控与运维
+- **修复 VIX 轮询无限循环**：`_fetch_vix_until_ready` 新增最大重试次数（默认 12 次），超限降级返回而非永远挂起 CI。
+- **修复 Step4 线程异常崩溃**：`future.result()` 加 `try/except`，单只股票数据异常不再终止整个 Step4 流程。
+- **修复 `datetime.utcnow()` 废弃警告**：全量替换为 `datetime.now(timezone.utc)`，覆盖 6 个文件，兼容 Python 3.12+。
+
+### 参数调优（A/B 回测验证）
+- **LPS 缩量阈值**：`lps_vol_dry_ratio` 0.55 → 0.48（Sharpe 0.831 → 2.325）
+- **止损/止盈**：SL -6% → -7%，TP 15% → 18%（盈亏比 2.57:1，Sharpe 最优点）
+- **持有周期**：15 → 30 交易日（Sharpe 单调递增，Wyckoff 信号需要更长兑现期）
+
 ## v2.0.3 (2026-03-28)
 
 **窗口口径统一到 320 交易日，文案与默认参数全面对齐**
