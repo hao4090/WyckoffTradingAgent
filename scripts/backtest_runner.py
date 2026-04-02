@@ -36,7 +36,7 @@ from core.wyckoff_engine import (
 from core.sector_rotation import analyze_sector_rotation
 from integrations.data_source import fetch_index_hist, fetch_market_cap_map, fetch_sector_map, fetch_stock_hist
 from integrations.fetch_a_share_csv import get_stocks_by_board, _normalize_symbols
-from scripts.wyckoff_funnel import (
+from core.funnel_pipeline import (
     _analyze_benchmark_and_tune_cfg as _tune_cfg_by_regime,
     _calc_market_breadth as _calc_market_breadth_for_regime,
     _rank_l3_candidates,

@@ -79,7 +79,7 @@ def _apply_funnel_env(payload: dict[str, Any]) -> None:
 
 def _run_funnel_screen(request_id: str, payload: dict[str, Any]) -> dict[str, Any]:
     _apply_funnel_env(payload)
-    from scripts.wyckoff_funnel import run as run_funnel
+    from core.funnel_pipeline import run_funnel
 
     ok, symbols_for_report, benchmark_context, details = run_funnel(
         "",
@@ -217,7 +217,7 @@ def _run_batch_ai_report(request_id: str, payload: dict[str, Any]) -> dict[str, 
     webhook_url = str(payload.get("webhook_url", "") or "").strip()
     benchmark_context = payload.get("benchmark_context", {}) or {}
 
-    from scripts.step3_batch_report import run as run_step3
+    from core.batch_report import run_step3
 
     ok, reason, report_text = run_step3(
         symbols_info,

@@ -26,7 +26,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from scripts.backtest_runner import (
+from core.backtester import (
     _calc_max_drawdown_pct,
     _calc_sharpe_ratio,
     _calc_calmar_ratio,

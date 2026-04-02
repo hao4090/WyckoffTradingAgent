@@ -35,7 +35,7 @@ from integrations.supabase_portfolio import (
     update_position_stops,
     upsert_daily_nav,
 )
-from scripts.step3_batch_report import generate_stock_payload
+from core.batch_report import generate_stock_payload
 from utils.trading_clock import CN_TZ, resolve_end_calendar_day
 
 TRADING_DAYS = 320

@@ -198,10 +198,10 @@ def main() -> int:
     # 数据源口径在 integrations/data_source.py 中固定为：
     # tushare 优先（前复权 qfq），失败再回退到其它可用源。
 
-    from scripts.wyckoff_funnel import run as run_step2
-    from scripts.step3_batch_report import (
+    from core.funnel_pipeline import run_funnel as run_step2
+    from core.batch_report import (
         extract_operation_pool_codes,
-        run as run_step3,
+        run_step3,
     )
     from scripts.step4_rebalancer import run as run_step4
 

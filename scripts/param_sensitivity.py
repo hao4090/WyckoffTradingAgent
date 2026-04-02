@@ -25,7 +25,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from scripts.backtest_runner import run_backtest, _parse_date
+from core.backtester import run_backtest, _parse_date
 
 # ── 默认参数空间（可通过环境变量 JSON 覆盖） ──
 
