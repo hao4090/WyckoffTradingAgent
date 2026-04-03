@@ -53,6 +53,17 @@ DEFAULT_TAKE_PROFIT_PCT = 18.0
 DEFAULT_USE_CURRENT_META = False
 DEFAULT_BUY_FRICTION_PCT = float(os.getenv("BACKTEST_BUY_FRICTION_PCT", "0.5"))
 DEFAULT_SELL_FRICTION_PCT = float(os.getenv("BACKTEST_SELL_FRICTION_PCT", "0.5"))
+
+# ── 大盘水温仓位控制 ──
+# 回测数据显示 NEUTRAL 下策略盈利（+1.17%），CRASH/RISK_ON 下亏损严重。
+# 通过 regime 动态调节每日候选上限（相当于仓位控制），减少逆势开仓。
+REGIME_POSITION_RATIO: dict[str, float] = {
+    "NEUTRAL": 1.0,        # 震荡市 → 全仓
+    "RISK_ON": 0.5,        # 热点追涨期反转率高 → 半仓
+    "PANIC_REPAIR": 0.5,   # 恐慌修复 → 半仓试探
+    "RISK_OFF": 0.3,       # 避险 → 仅少量试探
+    "CRASH": 0.0,          # 崩盘 → 不开仓
+}
 FUNNEL_AI_SELECTION_MODE = (
     os.getenv("FUNNEL_AI_SELECTION_MODE", "legacy_full_hits").strip().lower()
 )
@@ -453,6 +464,7 @@ def run_backtest(
     use_current_meta: bool = DEFAULT_USE_CURRENT_META,
     buy_friction_pct: float = DEFAULT_BUY_FRICTION_PCT,
     sell_friction_pct: float = DEFAULT_SELL_FRICTION_PCT,
+    regime_filter: bool = False,
 ) -> tuple[pd.DataFrame, dict]:
     if end_dt <= start_dt:
         raise ValueError("end 必须晚于 start")
@@ -614,6 +626,15 @@ def run_backtest(
 
         ranked_codes = selected_for_ai if int(top_n) <= 0 else selected_for_ai[:top_n]
 
+        # ── 大盘水温仓位控制 ──
+        if regime_filter and ranked_codes:
+            ratio = REGIME_POSITION_RATIO.get(regime, 1.0)
+            if ratio <= 0:
+                continue  # CRASH → 完全不开仓
+            if ratio < 1.0:
+                keep_n = max(1, int(len(ranked_codes) * ratio + 0.5))
+                ranked_codes = ranked_codes[:keep_n]
+
         # Only needed for string names
         name_score_map = _combine_trigger_scores(result.triggers)
 
@@ -754,6 +775,7 @@ def run_backtest(
         "use_current_meta": bool(use_current_meta),
         "buy_friction_pct": float(buy_friction_pct),
         "sell_friction_pct": float(sell_friction_pct),
+        "regime_filter": bool(regime_filter),
     }
     if not trades_df.empty:
         ret = pd.to_numeric(trades_df["ret_pct"], errors="coerce").dropna()
@@ -1013,6 +1035,7 @@ def _build_summary_md(summary: dict) -> str:
             f"- 买入摩擦成本: {_fmt_metric(summary.get('buy_friction_pct'), 3)}%",
             f"- 卖出摩擦成本: {_fmt_metric(summary.get('sell_friction_pct'), 3)}%",
             f"- 元数据口径: {meta_mode}",
+            f"- 大盘水温仓控: {'开启' if summary.get('regime_filter') else '关闭'}",
             f"- 成交样本: {summary.get('trades')}",
             "",
             "## 收益统计",
@@ -1163,6 +1186,12 @@ def main() -> int:
         default=DEFAULT_SELL_FRICTION_PCT,
         help=f"卖出端摩擦成本(%%): 滑点+手续费+税费近似 (default: {DEFAULT_SELL_FRICTION_PCT})",
     )
+    parser.add_argument(
+        "--regime-filter",
+        action="store_true",
+        default=False,
+        help="启用大盘水温仓位控制: CRASH 不开仓, RISK_ON/PANIC_REPAIR 半仓, NEUTRAL 全仓",
+    )
     args = parser.parse_args()
 
     start_dt = _parse_date(args.start)
@@ -1198,6 +1227,7 @@ def main() -> int:
                 use_current_meta=args.use_current_meta,
                 buy_friction_pct=args.buy_friction_pct,
                 sell_friction_pct=args.sell_friction_pct,
+                regime_filter=args.regime_filter,
             )
         except Exception as exc:
             last_error = exc

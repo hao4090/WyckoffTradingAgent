@@ -1,6 +1,9 @@
 name: Backtest Grid
 
 on:
+  schedule:
+    # 每月 1 号和 15 号 UTC 20:00（北京时间次日 04:00）自动回测
+    - cron: "0 20 1,15 * *"
   workflow_dispatch:
     inputs:
       start:
@@ -48,6 +51,14 @@ jobs:
       PYTHONUNBUFFERED: "1"
       TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
       TZ: Asia/Shanghai
+      # schedule 触发时 inputs.* 为空，这里设置默认值做 fallback
+      BT_START: ${{ inputs.start || '2025-09-01' }}
+      BT_END: ${{ inputs.end || '2026-03-03' }}
+      BT_TOP_N: ${{ inputs.top_n || '3' }}
+      BT_BOARD: ${{ inputs.board || 'all' }}
+      BT_SAMPLE_SIZE: ${{ inputs.sample_size || '0' }}
+      BT_TRADING_DAYS: ${{ inputs.trading_days || '500' }}
+      BT_SNAPSHOT_DIR: ${{ inputs.snapshot_dir || '' }}
 
     steps:
       - uses: actions/checkout@v4
@@ -76,22 +87,23 @@ jobs:
           mkdir -p "${OUT_DIR}"
 
           SNAP_ARGS=()
-          if [ -n "${{ inputs.snapshot_dir }}" ]; then
-            SNAP_ARGS+=(--snapshot-dir "${{ inputs.snapshot_dir }}")
+          if [ -n "${BT_SNAPSHOT_DIR}" ]; then
+            SNAP_ARGS+=(--snapshot-dir "${BT_SNAPSHOT_DIR}")
           fi
 
           python -u -m scripts.backtest_runner \
-            --start "${{ inputs.start }}" \
-            --end "${{ inputs.end }}" \
+            --start "${BT_START}" \
+            --end "${BT_END}" \
             --hold-days "${HOLD}" \
-            --top-n "${{ inputs.top_n }}" \
-            --board "${{ inputs.board }}" \
-            --sample-size "${{ inputs.sample_size }}" \
-            --trading-days "${{ inputs.trading_days }}" \
+            --top-n "${BT_TOP_N}" \
+            --board "${BT_BOARD}" \
+            --sample-size "${BT_SAMPLE_SIZE}" \
+            --trading-days "${BT_TRADING_DAYS}" \
             --exit-mode sltp \
             --stop-loss "${STOP}" \
             --take-profit 0 \
             --sltp-priority stop_first \
+            --regime-filter \
             --output-dir "${OUT_DIR}" \
             "${SNAP_ARGS[@]}" \
             | tee "${OUT_DIR}/run.log"
@@ -104,3 +116,114 @@ jobs:
           path: ${{ env.OUT_DIR }}/*
           retention-days: 7
           if-no-files-found: warn
+
+  # ── 汇总通知 ──
+  notify:
+    runs-on: ubuntu-latest
+    needs: grid
+    if: always()
+    env:
+      FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+          pattern: backtest-grid-*
+
+      - name: Aggregate and notify
+        shell: bash
+        run: |
+          python3 -c "
+          import os, glob, json, urllib.request
+
+          webhook = os.environ.get('FEISHU_WEBHOOK_URL', '').strip()
+          if not webhook:
+              print('FEISHU_WEBHOOK_URL 未配置，跳过通知')
+              exit(0)
+
+          # 收集所有 summary 文件
+          summaries = sorted(glob.glob('artifacts/**/summary_*.md', recursive=True))
+          run_url = '${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}'
+
+          lines = ['**Backtest Grid 回测完成**', '']
+          lines.append(f'**Run**: {run_url}')
+          lines.append(f'**Matrix**: hold_days=[5,6,7,8] × stop_loss=[-6,-7,-8,-9]')
+          lines.append('')
+
+          if not summaries:
+              lines.append('⚠️ 未找到回测结果文件')
+          else:
+              lines.append(f'共 {len(summaries)} 个单元完成')
+              lines.append('')
+              # 提取关键指标
+              for sf in summaries:
+                  name = os.path.basename(os.path.dirname(sf))
+                  with open(sf, 'r') as f:
+                      content = f.read()
+                  # 提取胜率和平均收益
+                  win_line = [l for l in content.split('\n') if '胜率' in l]
+                  avg_line = [l for l in content.split('\n') if '平均收益' in l]
+                  sharpe_line = [l for l in content.split('\n') if '夏普' in l]
+                  win = win_line[0].split(':')[-1].strip() if win_line else 'N/A'
+                  avg = avg_line[0].split(':')[-1].strip() if avg_line else 'N/A'
+                  sharpe = sharpe_line[0].split(':')[-1].strip() if sharpe_line else 'N/A'
+                  tag = name.replace('backtest-grid-', '').replace(f'-${{ github.run_number }}', '')
+                  lines.append(f'**{tag}**: 胜率{win} 均收{avg} 夏普{sharpe}')
+
+          # 截断避免超长
+          content = '\n'.join(lines)[:2800]
+
+          payload = {
+              'msg_type': 'interactive',
+              'card': {
+                  'header': {
+                      'title': {'tag': 'plain_text', 'content': '📊 Backtest Grid 回测结果'},
+                      'template': 'blue',
+                  },
+                  'elements': [
+                      {'tag': 'div', 'text': {'tag': 'lark_md', 'content': content}},
+                  ],
+              },
+          }
+          data = json.dumps(payload).encode('utf-8')
+          req = urllib.request.Request(webhook, data=data, headers={'Content-Type': 'application/json'})
+          try:
+              resp = urllib.request.urlopen(req, timeout=15)
+              print(f'飞书通知发送成功: {resp.status}')
+          except Exception as e:
+              print(f'飞书通知发送失败: {e}')
+          "
+
+      - name: Notify on failure
+        if: failure()
+        run: |
+          python3 -c "
+          import os, urllib.request, json
+          url = os.environ.get('FEISHU_WEBHOOK_URL', '')
+          if not url:
+              print('FEISHU_WEBHOOK_URL 未配置，跳过失败通知')
+              exit(0)
+          run_url = '${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}'
+          content = '**Backtest Grid 回测失败**\n**Run**: ' + run_url
+          payload = {
+              'msg_type': 'interactive',
+              'card': {
+                  'header': {'title': {'tag': 'plain_text', 'content': '❌ Backtest Grid 失败'}, 'template': 'red'},
+                  'elements': [{'tag': 'div', 'text': {'tag': 'lark_md', 'content': content}}],
+              },
+          }
+          data = json.dumps(payload).encode('utf-8')
+          req = urllib.request.Request(url, data=data, headers={'Content-Type': 'application/json'})
+          try:
+              urllib.request.urlopen(req, timeout=15)
+          except Exception as e:
+              print(f'通知失败: {e}')
+          "
