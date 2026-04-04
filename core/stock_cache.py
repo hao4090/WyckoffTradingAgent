@@ -1,15 +1,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 import os
 from typing import Optional
 
 import pandas as pd
 from postgrest.exceptions import APIError
-from supabase import Client, create_client
+from supabase import Client
 
 from core.constants import TABLE_STOCK_HIST_CACHE
+from integrations.supabase_base import create_admin_client as _create_admin_client
 
 _ADMIN_CLIENT: Client | None = None
 _STOCK_HIST_RETENTION_DAYS = 730
@@ -68,16 +69,8 @@ def _get_admin_supabase_client() -> Client | None:
     global _ADMIN_CLIENT
     if _ADMIN_CLIENT is not None:
         return _ADMIN_CLIENT
-    url = str(os.getenv("SUPABASE_URL", "") or "").strip()
-    key = str(
-        os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
-        or os.getenv("SUPABASE_KEY", "")
-        or ""
-    ).strip()
-    if not url or not key:
-        return None
     try:
-        _ADMIN_CLIENT = create_client(url, key)
+        _ADMIN_CLIENT = _create_admin_client()
     except Exception:
         _ADMIN_CLIENT = None
     return _ADMIN_CLIENT
@@ -141,7 +134,7 @@ def get_cache_meta(symbol: str, adjust: str, *, context: str = "auto") -> Option
     first_row = first_resp.data[0]
     last_row = last_resp.data[0]
     updated_raw = last_row.get("updated_at")
-    updated_at = _parse_iso_datetime(updated_raw) if updated_raw else datetime.utcnow()
+    updated_at = _parse_iso_datetime(updated_raw) if updated_raw else datetime.now(timezone.utc)
     return CacheMeta(
         symbol=symbol,
         adjust=adjust,
@@ -202,7 +195,7 @@ def upsert_cache_data(
     payload["date"] = payload["date"].astype(str)
     payload["symbol"] = symbol
     payload["adjust"] = adjust
-    payload["updated_at"] = datetime.utcnow().isoformat()
+    payload["updated_at"] = datetime.now(timezone.utc).isoformat()
     records = payload.to_dict(orient="records")
 
     try:
@@ -258,7 +251,8 @@ def cleanup_cache(ttl_days: int = _STOCK_HIST_RETENTION_DAYS, *, context: str = 
     supabase = _get_stock_cache_client(context=context)
     if supabase is None:
         return
-    cutoff_date = (datetime.utcnow().date() - timedelta(days=max(ttl_days, 1))).isoformat()
+    cutoff = datetime.now(timezone.utc) - timedelta(days=ttl_days)
+    cutoff_iso = cutoff.isoformat()
     try:
         supabase.table(TABLE_STOCK_HIST_CACHE).delete().lt(
             "date", cutoff_date

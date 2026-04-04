@@ -18,11 +18,17 @@ from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# Ensure project root is on sys.path for direct script invocation
+if __name__ == "__main__" or not __package__:
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from integrations.fetch_a_share_csv import _resolve_trading_window
-from integrations.llm_client import OPENAI_COMPATIBLE_BASE_URLS
+from integrations.llm_client import DEFAULT_GEMINI_MODEL, OPENAI_COMPATIBLE_BASE_URLS
 from integrations.supabase_market_signal import upsert_market_signal_daily
+from integrations.supabase_recommendation import (
+    mark_ai_recommendations,
+    upsert_recommendations,
+)
 from utils.trading_clock import resolve_end_calendar_day
 
 TZ = ZoneInfo("Asia/Shanghai")
@@ -159,7 +165,7 @@ def main() -> int:
     provider = os.getenv("DEFAULT_LLM_PROVIDER", "gemini").strip().lower() or "gemini"
     api_key = (os.getenv(f"{provider.upper()}_API_KEY") or os.getenv("GEMINI_API_KEY") or "").strip()
     model_env_key = f"{provider.upper()}_MODEL"
-    model = (os.getenv(model_env_key) or os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite-preview")).strip() or "gemini-3.1-flash-lite-preview"
+    model = (os.getenv(model_env_key) or os.getenv("GEMINI_MODEL", DEFAULT_GEMINI_MODEL)).strip() or DEFAULT_GEMINI_MODEL
     base_url_env_key = f"{provider.upper()}_BASE_URL"
     llm_base_url = (
         os.getenv(base_url_env_key)
@@ -196,10 +202,10 @@ def main() -> int:
     # 数据源口径在 integrations/data_source.py 中固定为：
     # tushare 优先（前复权 qfq），失败再回退到其它可用源。
 
-    from scripts.wyckoff_funnel import run as run_step2
-    from scripts.step3_batch_report import (
+    from core.funnel_pipeline import run_funnel as run_step2
+    from core.batch_report import (
         extract_operation_pool_codes,
-        run as run_step3,
+        run_step3,
     )
     from scripts.step4_rebalancer import run as run_step4
 
@@ -208,6 +214,7 @@ def main() -> int:
     symbols_info: list[dict] = []
     benchmark_context: dict = {}
     step3_report_text = ""
+    recommend_trade_date_int: int | None = None
 
     _log("开始定时任务", logs_path)
 
@@ -233,6 +240,18 @@ def main() -> int:
         has_blocking_failure = True
     elif benchmark_context:
         _persist_benchmark_context(benchmark_context, logs_path)
+
+    # 推荐跟踪写库（按 recommend_date=最近交易日）
+    if step2_ok and symbols_info:
+        try:
+            recommend_trade_date_int = int(_latest_trade_date_str().replace("-", ""))
+            rec_ok = upsert_recommendations(recommend_trade_date_int, symbols_info)
+            _log(
+                f"推荐记录入库: ok={rec_ok}, count={len(symbols_info)}, date={recommend_trade_date_int}",
+                logs_path,
+            )
+        except Exception as e:
+            _log(f"推荐记录入库失败: {e}", logs_path)
 
     # 阶段 2：批量研报（可降级：失败不影响 Funnel 成功）
     step3_ok = True
@@ -286,6 +305,19 @@ def main() -> int:
             f"阶段 2 批量研报: 起跳板代码={len(step3_springboard_codes)} ({preview_codes})",
             logs_path,
         )
+        if recommend_trade_date_int is not None:
+            try:
+                ai_mark_ok = mark_ai_recommendations(
+                    recommend_date=recommend_trade_date_int,
+                    ai_codes=step3_springboard_codes,
+                )
+                _log(
+                    "推荐记录AI标记: "
+                    f"ok={ai_mark_ok}, date={recommend_trade_date_int}, ai_count={len(step3_springboard_codes)}",
+                    logs_path,
+                )
+            except Exception as e:
+                _log(f"推荐记录AI标记失败: {e}", logs_path)
     else:
         summary.append({"step": "批量研报", "ok": True, "err": None, "elapsed_s": 0, "output": "skipped (no symbols)"})
         _log("阶段 2 批量研报: 跳过（无筛选结果）", logs_path)

@@ -1,6 +1,9 @@
 name: Backtest Grid
 
 on:
+  schedule:
+    # 每月 1 号和 15 号 UTC 20:00（北京时间次日 04:00）自动回测
+    - cron: "0 20 1,15 * *"
   workflow_dispatch:
     inputs:
       start:
@@ -27,18 +30,191 @@ on:
         description: "回看交易日数"
         required: true
         default: "500"
-      snapshot_dir:
-        description: "可选：本地快照目录（留空则在线取数）"
-        required: false
-        default: ""
 
 concurrency:
   group: backtest-grid-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  # schedule 触发时 inputs.* 为空，这里统一设置默认值做 fallback
+  BT_START: ${{ inputs.start || '2025-09-01' }}
+  BT_END: ${{ inputs.end || '2026-03-03' }}
+  BT_TOP_N: ${{ inputs.top_n || '3' }}
+  BT_BOARD: ${{ inputs.board || 'all' }}
+  BT_SAMPLE_SIZE: ${{ inputs.sample_size || '0' }}
+  BT_TRADING_DAYS: ${{ inputs.trading_days || '500' }}
+
 jobs:
+  # ────────────────────────────────────────────────
+  # Phase 1: 单 job 拉取全量数据，导出快照 artifact
+  # 解决 tushare IP 限制（最多2个）和频率限制（500次/分钟）
+  # ────────────────────────────────────────────────
+  fetch:
+    runs-on: ubuntu-latest
+    env:
+      PYTHONUNBUFFERED: "1"
+      TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
+      TZ: Asia/Shanghai
+      FUNNEL_EXPORT_FULL_FETCH: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -e .
+
+      - name: Fetch data snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+          # 用 backtest_runner 的一个轻量调用拉取全量数据并导出快照
+          # --hold-days 1 + --top-n 0 => 只做数据拉取，不真正回测
+          # 但 backtest_runner 没有 export 功能，所以我们用 wyckoff_funnel 做一次 dry-run
+          # 来获得快照。更直接的方式：写一个小脚本只做数据拉取。
+          python -u -c "
+          import os, sys, time, json
+          sys.path.insert(0, '.')
+
+          from datetime import date, timedelta, datetime
+          from pathlib import Path
+          from concurrent.futures import ThreadPoolExecutor, as_completed
+          from threading import Semaphore
+
+          import pandas as pd
+
+          from integrations.data_source import fetch_index_hist, fetch_stock_hist
+          from integrations.fetch_a_share_csv import get_stocks_by_board
+          from core.wyckoff_engine import normalize_hist_from_fetch
+
+          start_s = '${BT_START}'.replace('-', '')
+          end_s = '${BT_END}'.replace('-', '')
+          board = '${BT_BOARD}'
+          sample_size = int('${BT_SAMPLE_SIZE}')
+          trading_days = int('${BT_TRADING_DAYS}')
+
+          end_dt = datetime.strptime(end_s, '%Y%m%d').date()
+          prefetch_start = (end_dt - timedelta(days=int(trading_days * 1.6))).strftime('%Y%m%d')
+
+          print(f'[snapshot] 数据区间: {prefetch_start} -> {end_s}')
+
+          symbols = get_stocks_by_board(board)
+          if sample_size > 0 and sample_size < len(symbols):
+              import random; random.seed(42)
+              symbols = random.sample(symbols, sample_size)
+          print(f'[snapshot] 股票池: {len(symbols)} symbols')
+
+          # ---- 速率控制：tushare 500次/分钟，留 20% 余量 → 400次/分钟 ----
+          RATE_LIMIT = 400
+          _call_times = []
+
+          def rate_limited_fetch(sym):
+              # 简单滑动窗口限流
+              now = time.monotonic()
+              while True:
+                  _call_times[:] = [t for t in _call_times if now - t < 60]
+                  if len(_call_times) < RATE_LIMIT:
+                      break
+                  sleep_for = 60 - (now - _call_times[0]) + 0.1
+                  time.sleep(max(0.05, sleep_for))
+                  now = time.monotonic()
+              _call_times.append(time.monotonic())
+
+              try:
+                  raw = fetch_stock_hist(sym, prefetch_start, end_s, adjust='qfq')
+                  if raw is not None and not raw.empty:
+                      df = normalize_hist_from_fetch(raw)
+                      df['symbol'] = sym
+                      return sym, df, None
+              except Exception as e:
+                  return sym, None, str(e)
+              return sym, None, 'empty'
+
+          # ---- 主拉取（2 线程 + 限流 + 1 轮重试） ----
+          all_frames = []
+          ok = 0
+          fail = 0
+          failed_syms = []
+
+          def batch_fetch(sym_list, label=''):
+              nonlocal ok, fail
+              local_fails = []
+              with ThreadPoolExecutor(max_workers=2) as ex:
+                  futs = {ex.submit(rate_limited_fetch, s): s for s in sym_list}
+                  done = 0
+                  for ft in as_completed(futs):
+                      done += 1
+                      sym, df, err = ft.result()
+                      if df is not None:
+                          all_frames.append(df)
+                          ok += 1
+                      else:
+                          fail += 1
+                          local_fails.append(sym)
+                      if done % 500 == 0 or done == len(futs):
+                          print(f'[snapshot{label}] {done}/{len(futs)} (ok={ok}, fail={fail})')
+              return local_fails
+
+          # 第一轮
+          round1_fails = batch_fetch(symbols, ' round1')
+          print(f'[snapshot] 第一轮完成: ok={ok}, fail={fail}')
+
+          # 重试失败的（等 30 秒让限流窗口过去）
+          if round1_fails:
+              print(f'[snapshot] 重试 {len(round1_fails)} 只失败股票...')
+              time.sleep(30)
+              fail = fail - len(round1_fails)  # 重置计数
+              batch_fetch(round1_fails, ' retry')
+              print(f'[snapshot] 重试完成: ok={ok}, fail={fail}')
+
+          # 基准指数
+          bench_main = fetch_index_hist('000001', prefetch_start, end_s)
+
+          # 导出快照
+          snap_dir = Path('snapshot_data')
+          snap_dir.mkdir(exist_ok=True)
+
+          if not all_frames:
+              print('[snapshot] 严重错误: 没有成功拉取任何股票数据!')
+              sys.exit(1)
+
+          if ok < len(symbols) * 0.1:
+              print(f'[snapshot] 严重错误: 成功率仅 {ok}/{len(symbols)} ({100*ok/len(symbols):.1f}%)，低于 10% 阈值')
+              sys.exit(1)
+
+          full_df = pd.concat(all_frames, ignore_index=True)
+          full_df.to_csv(snap_dir / 'hist_full.csv.gz', index=False, compression='gzip')
+          print(f'[snapshot] hist_full.csv.gz: {len(full_df)} rows')
+
+          if bench_main is not None and not bench_main.empty:
+              bench_main.to_csv(snap_dir / 'benchmark_main.csv', index=False)
+              print(f'[snapshot] benchmark_main.csv: {len(bench_main)} rows')
+
+          meta = {'symbols': len(symbols), 'ok': ok, 'fail': fail, 'start': prefetch_start, 'end': end_s}
+          (snap_dir / 'metadata.json').write_text(json.dumps(meta))
+          print(f'[snapshot] Done! 成功率: {ok}/{len(symbols)} ({100*ok/len(symbols):.1f}%)')
+          "
+
+      - name: Upload snapshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: backtest-snapshot
+          path: snapshot_data/*
+          retention-days: 3
+
+  # ────────────────────────────────────────────────
+  # Phase 2: 16 个并行 job 读快照做回测（无需网络拉取）
+  # ────────────────────────────────────────────────
   grid:
     runs-on: ubuntu-latest
+    needs: fetch
     strategy:
       fail-fast: false
       matrix:
@@ -62,6 +238,13 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+          pip install -e .
+
+      - name: Download snapshot
+        uses: actions/download-artifact@v4
+        with:
+          name: backtest-snapshot
+          path: snapshot_data/
 
       - name: Run grid backtest cell
         shell: bash
@@ -74,25 +257,21 @@ jobs:
           echo "OUT_DIR=${OUT_DIR}" >> "${GITHUB_ENV}"
           mkdir -p "${OUT_DIR}"
 
-          SNAP_ARGS=()
-          if [ -n "${{ inputs.snapshot_dir }}" ]; then
-            SNAP_ARGS+=(--snapshot-dir "${{ inputs.snapshot_dir }}")
-          fi
-
           python -u -m scripts.backtest_runner \
-            --start "${{ inputs.start }}" \
-            --end "${{ inputs.end }}" \
+            --start "${BT_START}" \
+            --end "${BT_END}" \
             --hold-days "${HOLD}" \
-            --top-n "${{ inputs.top_n }}" \
-            --board "${{ inputs.board }}" \
-            --sample-size "${{ inputs.sample_size }}" \
-            --trading-days "${{ inputs.trading_days }}" \
+            --top-n "${BT_TOP_N}" \
+            --board "${BT_BOARD}" \
+            --sample-size "${BT_SAMPLE_SIZE}" \
+            --trading-days "${BT_TRADING_DAYS}" \
             --exit-mode sltp \
             --stop-loss "${STOP}" \
             --take-profit 0 \
             --sltp-priority stop_first \
+            --regime-filter \
+            --snapshot-dir snapshot_data \
             --output-dir "${OUT_DIR}" \
-            "${SNAP_ARGS[@]}" \
             | tee "${OUT_DIR}/run.log"
 
       - name: Upload artifacts
@@ -103,3 +282,112 @@ jobs:
           path: ${{ env.OUT_DIR }}/*
           retention-days: 7
           if-no-files-found: warn
+
+  # ────────────────────────────────────────────────
+  # Phase 3: 汇总 + 飞书通知
+  # ────────────────────────────────────────────────
+  notify:
+    runs-on: ubuntu-latest
+    needs: grid
+    if: always()
+    env:
+      FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+          pattern: backtest-grid-*
+
+      - name: Aggregate and notify
+        shell: bash
+        run: |
+          python3 -c "
+          import os, glob, json, urllib.request
+
+          webhook = os.environ.get('FEISHU_WEBHOOK_URL', '').strip()
+          if not webhook:
+              print('FEISHU_WEBHOOK_URL 未配置，跳过通知')
+              exit(0)
+
+          summaries = sorted(glob.glob('artifacts/**/summary_*.md', recursive=True))
+          run_url = '${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}'
+
+          lines = ['**Backtest Grid 回测完成**', '']
+          lines.append(f'**Run**: {run_url}')
+          lines.append(f'**Matrix**: hold_days=[5,6,7,8] × stop_loss=[-6,-7,-8,-9]')
+          lines.append('')
+
+          if not summaries:
+              lines.append('⚠️ 未找到回测结果文件')
+          else:
+              lines.append(f'共 {len(summaries)} 个单元完成')
+              lines.append('')
+              for sf in summaries:
+                  name = os.path.basename(os.path.dirname(sf))
+                  with open(sf, 'r') as f:
+                      content = f.read()
+                  win_line = [l for l in content.split('\n') if '胜率' in l]
+                  avg_line = [l for l in content.split('\n') if '平均收益' in l]
+                  sharpe_line = [l for l in content.split('\n') if '夏普' in l]
+                  win = win_line[0].split(':')[-1].strip() if win_line else 'N/A'
+                  avg = avg_line[0].split(':')[-1].strip() if avg_line else 'N/A'
+                  sharpe = sharpe_line[0].split(':')[-1].strip() if sharpe_line else 'N/A'
+                  tag = name.replace('backtest-grid-', '').replace(f'-\${{ github.run_number }}', '')
+                  lines.append(f'**{tag}**: 胜率{win} 均收{avg} 夏普{sharpe}')
+
+          content = '\n'.join(lines)[:2800]
+
+          payload = {
+              'msg_type': 'interactive',
+              'card': {
+                  'header': {
+                      'title': {'tag': 'plain_text', 'content': '📊 Backtest Grid 回测结果'},
+                      'template': 'blue',
+                  },
+                  'elements': [
+                      {'tag': 'div', 'text': {'tag': 'lark_md', 'content': content}},
+                  ],
+              },
+          }
+          data = json.dumps(payload).encode('utf-8')
+          req = urllib.request.Request(webhook, data=data, headers={'Content-Type': 'application/json'})
+          try:
+              resp = urllib.request.urlopen(req, timeout=15)
+              print(f'飞书通知发送成功: {resp.status}')
+          except Exception as e:
+              print(f'飞书通知发送失败: {e}')
+          "
+
+      - name: Notify on failure
+        if: failure()
+        run: |
+          python3 -c "
+          import os, urllib.request, json
+          url = os.environ.get('FEISHU_WEBHOOK_URL', '')
+          if not url:
+              print('FEISHU_WEBHOOK_URL 未配置，跳过失败通知')
+              exit(0)
+          run_url = '${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}'
+          content = '**Backtest Grid 回测失败**\n**Run**: ' + run_url
+          payload = {
+              'msg_type': 'interactive',
+              'card': {
+                  'header': {'title': {'tag': 'plain_text', 'content': '❌ Backtest Grid 失败'}, 'template': 'red'},
+                  'elements': [{'tag': 'div', 'text': {'tag': 'lark_md', 'content': content}}],
+              },
+          }
+          data = json.dumps(payload).encode('utf-8')
+          req = urllib.request.Request(url, data=data, headers={'Content-Type': 'application/json'})
+          try:
+              urllib.request.urlopen(req, timeout=15)
+          except Exception as e:
+              print(f'通知失败: {e}')
+          "

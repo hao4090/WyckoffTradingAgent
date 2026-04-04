@@ -25,10 +25,12 @@ from concurrent.futures import (
 from datetime import date, datetime
 from pathlib import Path
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 import pandas as pd
 
+
+# Ensure project root is on sys.path for direct script invocation
+if __name__ == "__main__" or not __package__:
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from integrations.fetch_a_share_csv import (
     _resolve_trading_window,
     get_stocks_by_board,
@@ -513,6 +515,10 @@ def _analyze_benchmark_and_tune_cfg(
     recent3_cum = None
     main_today_pct = None
     main_prev_pct = None
+    main_vol_ma5 = None
+    main_vol_ma20 = None
+    main_vol_ratio_5_20 = None
+    main_volume_state = "未知"
     small_close = None
     small_recent3_list: list[float] = []
     small_recent3_cum = None
@@ -523,6 +529,7 @@ def _analyze_benchmark_and_tune_cfg(
         b = bench_df.sort_values("date").copy()
         b["close"] = pd.to_numeric(b["close"], errors="coerce")
         b["pct_chg"] = pd.to_numeric(b["pct_chg"], errors="coerce")
+        b["volume"] = pd.to_numeric(b.get("volume"), errors="coerce")
         if len(b) >= 60:
             close = float(b["close"].iloc[-1])
             ma50 = float(b["close"].rolling(50).mean().iloc[-1])
@@ -537,6 +544,18 @@ def _analyze_benchmark_and_tune_cfg(
                 main_today_pct = float(recent3_list[-1])
                 if len(recent3_list) >= 2:
                     main_prev_pct = float(recent3_list[-2])
+            vol = b["volume"].dropna()
+            if len(vol) >= 20:
+                main_vol_ma20 = float(vol.tail(20).mean())
+                main_vol_ma5 = float(vol.tail(5).mean())
+                if main_vol_ma20 > 0:
+                    main_vol_ratio_5_20 = float(main_vol_ma5 / main_vol_ma20)
+                    if main_vol_ratio_5_20 >= 1.15:
+                        main_volume_state = "放量"
+                    elif main_vol_ratio_5_20 <= 0.85:
+                        main_volume_state = "缩量"
+                    else:
+                        main_volume_state = "平量"
 
     if smallcap_df is not None and not smallcap_df.empty:
         s = smallcap_df.sort_values("date").copy()
@@ -695,6 +714,49 @@ def _analyze_benchmark_and_tune_cfg(
         cfg.rps_fast_min = min(cfg.rps_fast_min, 70.0)
         cfg.rps_slow_min = min(cfg.rps_slow_min, 60.0)
 
+    price_zone = "结构待确认"
+    if close is not None and ma50 is not None and ma200 is not None:
+        if close > ma50 > ma200:
+            price_zone = "多头上方"
+        elif close < ma50 < ma200:
+            price_zone = "空头下方"
+        elif close >= ma50 and close <= ma200:
+            price_zone = "反抽修复区"
+        elif close < ma50 and close >= ma200:
+            price_zone = "高位回撤区"
+        else:
+            price_zone = "震荡博弈区"
+    ratio_text = (
+        f"{main_vol_ratio_5_20:.2f}x"
+        if main_vol_ratio_5_20 is not None
+        else "未知"
+    )
+    market_pv_summary = (
+        f"沪深300近5日均量/20日均量={ratio_text}（{main_volume_state}），"
+        f"当前位于{price_zone}。"
+    )
+    if regime == "RISK_ON":
+        market_pv_outlook = (
+            "次日推演：若量能维持在20日均量0.95x上方且不破MA50，"
+            "偏强震荡延续概率更高；若放量跌破MA50，需转入防守。"
+        )
+    elif regime == "PANIC_REPAIR":
+        market_pv_outlook = (
+            "次日推演：修复阶段以确认强度为先，若放量站稳MA50可继续修复；"
+            "若缩量冲高回落，按反抽处理。"
+        )
+    elif regime == "NEUTRAL":
+        market_pv_outlook = (
+            "次日推演：中性震荡为主，等待“放量突破近高”或“放量跌破MA50”后再确认方向。"
+        )
+    elif regime in {"RISK_OFF", "CRASH"}:
+        market_pv_outlook = (
+            "次日推演：防守优先，若出现放量下压并失守MA50，继续收缩风险敞口；"
+            "仅在缩量止跌后再评估试探。"
+        )
+    else:
+        market_pv_outlook = "次日推演：结构信息不足，先观察量能与MA50得失再定方向。"
+
     context.update(
         {
             "regime": regime,
@@ -705,6 +767,12 @@ def _analyze_benchmark_and_tune_cfg(
             "recent3_pct": recent3_list,
             "recent3_cum_pct": recent3_cum,
             "main_today_pct": main_today_pct,
+            "main_vol_ma5": main_vol_ma5,
+            "main_vol_ma20": main_vol_ma20,
+            "main_vol_ratio_5_20": main_vol_ratio_5_20,
+            "main_volume_state": main_volume_state,
+            "market_pv_summary": market_pv_summary,
+            "market_pv_outlook": market_pv_outlook,
             "smallcap_close": small_close,
             "smallcap_recent3_pct": small_recent3_list,
             "smallcap_recent3_cum_pct": small_recent3_cum,
@@ -952,6 +1020,7 @@ def _rank_l3_candidates(
         sector_state = str((rotation_map.get(industry, {}) or {}).get("state", "") or "")
         ret20 = None
         ret5 = None
+        ret3 = None
         min_vol_ratio_5d = None
         if df is not None and not df.empty:
             s = df.sort_values("date")
@@ -959,6 +1028,7 @@ def _rank_l3_candidates(
             volume = pd.to_numeric(s.get("volume"), errors="coerce")
             ret20 = _calc_close_return_pct(close, 20)
             ret5 = _calc_close_return_pct(close, 5)
+            ret3 = _calc_close_return_pct(close, 3)
             vol_ma20 = volume.rolling(20).mean()
             vol_ratio = volume / vol_ma20.replace(0, pd.NA)
             min_vol_ratio_5d = pd.to_numeric(vol_ratio.tail(5), errors="coerce").min()
@@ -969,6 +1039,7 @@ def _rank_l3_candidates(
                 "industry": industry,
                 "ret20": ret20,
                 "ret5": ret5,
+                "ret3": ret3,
                 "min_vol_ratio_5d": min_vol_ratio_5d,
                 "trigger_score": float(trigger_score_map.get(code, 0.0)),
                 "l2_channel": l2_channel,
@@ -977,7 +1048,7 @@ def _rank_l3_candidates(
         )
 
     rank_df = pd.DataFrame(rows)
-    for col, fill_default in (("ret20", 0.0), ("ret5", 0.0), ("min_vol_ratio_5d", 1.0)):
+    for col, fill_default in (("ret20", 0.0), ("ret5", 0.0), ("ret3", 0.0), ("min_vol_ratio_5d", 1.0)):
         rank_df[col] = pd.to_numeric(rank_df[col], errors="coerce")
         if rank_df[col].notna().any():
             rank_df[col] = rank_df[col].fillna(float(rank_df[col].median()))
@@ -986,6 +1057,7 @@ def _rank_l3_candidates(
 
     rank_df["q20"] = rank_df["ret20"].rank(pct=True, ascending=True, method="average")
     rank_df["q5"] = rank_df["ret5"].rank(pct=True, ascending=True, method="average")
+    rank_df["q3"] = rank_df["ret3"].rank(pct=True, ascending=True, method="average")
     rank_df["dry_q"] = rank_df["min_vol_ratio_5d"].rank(
         pct=True, ascending=False, method="average"
     )
@@ -999,15 +1071,19 @@ def _rank_l3_candidates(
         )
 
     hot_sector_set = set(top_sectors or [])
-    rank_df["hot_bonus"] = rank_df["industry"].isin(hot_sector_set).astype(float) * 0.05
+    # 板块快速轮动期 hot_bonus 降低：Top3 板块次日有 49% 概率反转
+    rank_df["hot_bonus"] = rank_df["industry"].isin(hot_sector_set).astype(float) * 0.02
     rank_df["sector_bonus"] = rank_df["sector_state"].map(
         lambda x: float(SECTOR_STATE_SCORE_BONUS.get(str(x), 0.0))
     )
+    # 权重重新分配：降低滞后动量(q20)权重，提升 Wyckoff 触发(trigger_q)权重，
+    # 加入 3 日短期动量(q3) 适配板块快速轮动。
     rank_df["watch_score"] = (
-        0.40 * rank_df["q20"]
-        + 0.25 * rank_df["q5"]
+        0.25 * rank_df["q20"]
+        + 0.20 * rank_df["q5"]
+        + 0.05 * rank_df["q3"]
         + 0.20 * rank_df["dry_q"]
-        + 0.15 * rank_df["trigger_q"]
+        + 0.30 * rank_df["trigger_q"]
         + rank_df["hot_bonus"]
         + rank_df["sector_bonus"]
     )
@@ -1230,7 +1306,10 @@ def run_funnel_job(
     l1_passed = layer1_filter(l1_input, name_map, market_cap_map, all_df_map, cfg)
 
     # Layer 2
-    l2_passed, l2_channel_map = layer2_strength_detailed(l1_passed, all_df_map, bench_df, cfg)
+    l2_passed, l2_channel_map = layer2_strength_detailed(
+        l1_passed, all_df_map, bench_df, cfg,
+        rps_universe=l1_input,
+    )
     # 通道标签现在是多标签用 + 拼接，因此用 in 判断包含关系
     l2_momentum = sum(1 for v in l2_channel_map.values() if "主升通道" in v)
     l2_ambush   = sum(1 for v in l2_channel_map.values() if "潜伏通道" in v)
@@ -1454,11 +1533,17 @@ def run(
 
     if use_legacy_card and use_legacy_selection:
         bench_line = "未知"
+        pv_line = "暂无大盘量价推演"
         if benchmark_context:
             bench_line = (
                 f"{benchmark_context.get('regime')} | close={benchmark_context.get('close')} "
                 f"ma50={benchmark_context.get('ma50')} ma200={benchmark_context.get('ma200')} "
                 f"3d={benchmark_context.get('recent3_pct')} cum3={benchmark_context.get('recent3_cum_pct')}"
+            )
+            pv_line = str(
+                benchmark_context.get("market_pv_outlook")
+                or benchmark_context.get("market_pv_summary")
+                or pv_line
             )
 
         lines = [
@@ -1469,6 +1554,7 @@ def run(
             ),
             f"**漏斗概览**: {metrics['total_symbols']}只 → L1:{metrics['layer1']} → L2:{metrics['layer2']} → L3:{metrics['layer3']} → 命中:{metrics['total_hits']}",
             f"**大盘水温**: {bench_line}",
+            f"**大盘量价推演**: {pv_line}",
             f"**候选分层**: 命中股票{unique_hit_count} -> AI输入全量{len(selected_for_ai)}",
             f"**Top 行业**: {', '.join(metrics['top_sectors']) if metrics['top_sectors'] else '无'}",
             "",
@@ -1641,6 +1727,7 @@ def run(
     )
 
     bench_line = "未知"
+    pv_line = "暂无大盘量价推演"
     if benchmark_context:
         breadth = benchmark_context.get("breadth", {}) or {}
         breadth_text = (
@@ -1668,6 +1755,11 @@ def run(
             f"{smallcap_text}"
             f"{breadth_text}{repair_text}"
         )
+        pv_line = str(
+            benchmark_context.get("market_pv_outlook")
+            or benchmark_context.get("market_pv_summary")
+            or pv_line
+        )
 
     data_quality_line = (
         f"成功拉取 {metrics['fetch_ok']} 只"
@@ -1693,6 +1785,7 @@ def run(
             f"= **{metrics['total_symbols']}**（共{metrics['pool_batches']}批）"
         ),
         f"- **大盘水温**：{bench_line}",
+        f"- **大盘量价推演**：{pv_line}",
         f"- **Top 行业**：{', '.join(metrics['top_sectors']) if metrics['top_sectors'] else '无'}",
         f"- **板块轮动温度计**：{sector_rotation.get('headline', '无')}",
         f"- **数据质量**：{data_quality_line}",

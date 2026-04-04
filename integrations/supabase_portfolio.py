@@ -9,38 +9,20 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 import os
 import re
 from typing import Any
 
-from supabase import Client, create_client
+from supabase import Client
 from core.constants import TABLE_USER_SETTINGS
+from integrations.supabase_base import create_admin_client as _get_supabase_admin_client
+from integrations.supabase_base import is_admin_configured as is_supabase_configured
 
 TABLE_PORTFOLIOS = "portfolios"
 TABLE_PORTFOLIO_POSITIONS = "portfolio_positions"
 TABLE_TRADE_ORDERS = "trade_orders"
 TABLE_DAILY_NAV = "daily_nav"
-
-
-def _get_supabase_admin_client() -> Client:
-    url = (os.getenv("SUPABASE_URL") or "").strip()
-    key = (
-        (os.getenv("SUPABASE_SERVICE_ROLE_KEY") or "").strip()
-        or (os.getenv("SUPABASE_KEY") or "").strip()
-    )
-    if not url or not key:
-        raise ValueError("SUPABASE_URL/SUPABASE_SERVICE_ROLE_KEY 未配置")
-    return create_client(url, key)
-
-
-def is_supabase_configured() -> bool:
-    url = (os.getenv("SUPABASE_URL") or "").strip()
-    key = (
-        (os.getenv("SUPABASE_SERVICE_ROLE_KEY") or "").strip()
-        or (os.getenv("SUPABASE_KEY") or "").strip()
-    )
-    return bool(url and key)
 
 
 def load_user_settings_admin(user_id: str) -> dict[str, Any] | None:
@@ -346,7 +328,7 @@ def save_ai_trade_orders(
                     "reason": str(o.get("reason", "") or ""),
                     "tape_condition": str(o.get("tape_condition", "") or ""),
                     "invalidate_condition": str(o.get("invalidate_condition", "") or ""),
-                    "created_at": datetime.utcnow().isoformat(),
+                    "created_at": datetime.now(timezone.utc).isoformat(),
                 }
             )
         client.table(TABLE_TRADE_ORDERS).insert(payload).execute()
@@ -408,7 +390,7 @@ def upsert_daily_nav(
             "free_cash": float(free_cash),
             "positions_value": float(positions_value),
             "total_equity": float(total_equity),
-            "updated_at": datetime.utcnow().isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
         }
         client.table(TABLE_DAILY_NAV).upsert(
             payload,

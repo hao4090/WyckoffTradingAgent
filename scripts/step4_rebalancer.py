@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import sys
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -19,8 +20,13 @@ from uuid import uuid4
 
 import pandas as pd
 
-from core.wyckoff_engine import normalize_hist_from_fetch
-from integrations.ai_prompts import PRIVATE_PM_DECISION_JSON_PROMPT
+
+# Ensure project root is on sys.path for direct script invocation
+if __name__ == "__main__" or not __package__:
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from core.wyckoff_engine import normalize_hist_from_fetch, FunnelConfig
+from core.holding_diagnostic import diagnose_one_stock, format_diagnostic_for_llm
+from core.prompts import PRIVATE_PM_DECISION_JSON_PROMPT
 from integrations.fetch_a_share_csv import _fetch_hist, _resolve_trading_window
 from integrations.llm_client import call_llm
 from integrations.data_source import fetch_stock_spot_snapshot
@@ -34,7 +40,7 @@ from integrations.supabase_portfolio import (
     update_position_stops,
     upsert_daily_nav,
 )
-from scripts.step3_batch_report import generate_stock_payload
+from core.batch_report import generate_stock_payload
 from utils.trading_clock import CN_TZ, resolve_end_calendar_day
 
 TRADING_DAYS = 320
@@ -1236,13 +1242,34 @@ def _process_one_position(
             f"- 买入日期: {pos.buy_dt or '-'}\n"
             f"- 原始策略: {pos.strategy or '-'}\n"
         )
-        payload = generate_stock_payload(
-            stock_code=pos.code,
-            stock_name=pos.name,
-            wyckoff_tag=pos.strategy or "持仓",
-            df=df_qfq,
-        )
-        return (meta + "\n" + payload, failure_msg, live_val, latest_close, atr14, hold_trade_days)
+        # 持仓健康诊断：复用 Wyckoff 引擎检测 L2 通道、退出信号、阶段等
+        try:
+            diag = diagnose_one_stock(
+                code=pos.code, name=pos.name, cost=pos.cost,
+                df=df_qfq, bench_df=None, cfg=FunnelConfig(),
+            )
+            diag_text = f"- {format_diagnostic_for_llm(diag)}\n"
+            # 将诊断结果传入 payload 生成，让 AI 看到退出预警
+            payload = generate_stock_payload(
+                stock_code=pos.code,
+                stock_name=pos.name,
+                wyckoff_tag=pos.strategy or "持仓",
+                df=df_qfq,
+                track=diag.track if diag.track != "Unknown" else None,
+                stage=diag.accum_stage,
+                exit_signal=diag.exit_signal,
+                exit_price=diag.exit_price,
+                exit_reason=diag.exit_reason,
+            )
+        except Exception:
+            diag_text = ""
+            payload = generate_stock_payload(
+                stock_code=pos.code,
+                stock_name=pos.name,
+                wyckoff_tag=pos.strategy or "持仓",
+                df=df_qfq,
+            )
+        return (meta + diag_text + "\n" + payload, failure_msg, live_val, latest_close, atr14, hold_trade_days)
     except Exception as e:
         latest_close = _fetch_latest_real_close(pos.code, window)
         if latest_close is not None:
@@ -1275,7 +1302,12 @@ def _format_position_payload(
         futures = {executor.submit(_process_one_position, pos, window): pos for pos in positions}
         for future in as_completed(futures):
             pos = futures[future]
-            meta_block, fail_msg, val, close, atr, _ = future.result()
+            try:
+                meta_block, fail_msg, val, close, atr, _ = future.result()
+            except Exception as e:
+                failures.append(f"{pos.code} {pos.name}: 数据处理异常 {e}")
+                print(f"[step4] ⚠ 持仓 {pos.code} 处理异常: {e}")
+                continue
             if fail_msg:
                 failures.append(fail_msg)
             if meta_block:

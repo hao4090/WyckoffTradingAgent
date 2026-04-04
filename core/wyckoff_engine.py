@@ -158,19 +158,19 @@ class FunnelConfig:
     # Spring 动态振幅
     spring_tr_atr_window: int = 20           # 计算 ATR 的历史窗口
     spring_tr_atr_max_multiple: float = 4.0  # 区间最大允许振幅为 ATR_pct 的 N 倍(替代固定的30%)
-    spring_vol_expand_ratio: float = 1.3     # 收回时的成交量 / 下探时的成交量 > 此值
+    spring_vol_expand_ratio: float = 1.15    # 收回时的成交量 / 下探时的成交量 > 此值（原 1.3 过严）
 
     # Layer 4 - LPS
     lps_lookback: int = 3
     lps_ma: int = 20
     lps_ma_tolerance: float = 0.02
-    lps_vol_dry_ratio: float = 0.4  # 收紧至 40%：极度缩量的最后回踩测试
+    lps_vol_dry_ratio: float = 0.48  # A/B 验证：0.48 夏普 2.325 >> 0.55 夏普 0.831
     lps_vol_ref_window: int = 60
 
     # Layer 4 - Effort vs Result
     enable_evr_trigger: bool = True
     evr_lookback: int = 3
-    evr_vol_ratio: float = 1.6
+    evr_vol_ratio: float = 1.3
     evr_min_turnover: float = 1.0  # 保守过滤：剔除死水微量放大，不对大票一刀切
     evr_vol_window: int = 20
     evr_max_drop: float = 2.0
@@ -202,7 +202,7 @@ class FunnelConfig:
 
     # Exit 策略（Layer 5）
     enable_exit_signals: bool = True
-    exit_stop_loss_pct: float = -8.0          # 初始底线防守：跌破建仓底部的幅度（%）
+    exit_stop_loss_pct: float = -7.0          # 网格优化最佳：-7%/+18%（夏普2.493），-6%偏紧，-8%偏松
     exit_trailing_active_pct: float = 15.0    # 利润激活线：从底部上涨超过此比例，激活移动跟踪止损
     exit_trailing_drawdown_pct: float = -10.0 # 利润保护线：高位跟踪回撤止损幅度（%）
 
@@ -278,12 +278,14 @@ def resolve_ai_candidate_policy(
         if override_total_cap < 0
         else max(int(override_total_cap), 0)
     )
-    risk_on_trend = max(int(os.getenv("FUNNEL_AI_RISK_ON_TREND", "4")), 0)
-    risk_on_accum = max(int(os.getenv("FUNNEL_AI_RISK_ON_ACCUM", "8")), 0)
-    risk_off_trend = max(int(os.getenv("FUNNEL_AI_RISK_OFF_TREND", "1")), 0)
-    risk_off_accum = max(int(os.getenv("FUNNEL_AI_RISK_OFF_ACCUM", "5")), 0)
-    neutral_trend = max(int(os.getenv("FUNNEL_AI_NEUTRAL_TREND", "3")), 0)
-    neutral_accum = max(int(os.getenv("FUNNEL_AI_NEUTRAL_ACCUM", "7")), 0)
+    # 配额重平衡：原版严重偏向 Accum 左侧（4/8, 3/7, 1/5），导致大量底部横盘股拉低胜率。
+    # 现改为 Trend 优先：右侧已确认趋势的股票胜率远高于左侧潜伏。
+    risk_on_trend = max(int(os.getenv("FUNNEL_AI_RISK_ON_TREND", "7")), 0)
+    risk_on_accum = max(int(os.getenv("FUNNEL_AI_RISK_ON_ACCUM", "5")), 0)
+    risk_off_trend = max(int(os.getenv("FUNNEL_AI_RISK_OFF_TREND", "2")), 0)
+    risk_off_accum = max(int(os.getenv("FUNNEL_AI_RISK_OFF_ACCUM", "3")), 0)
+    neutral_trend = max(int(os.getenv("FUNNEL_AI_NEUTRAL_TREND", "5")), 0)
+    neutral_accum = max(int(os.getenv("FUNNEL_AI_NEUTRAL_ACCUM", "5")), 0)
     max_trend_l3_fill = max(int(os.getenv("FUNNEL_AI_MAX_TREND_L3_FILL", "0")), 0)
     max_accum_l3_fill = max(int(os.getenv("FUNNEL_AI_MAX_ACCUM_L3_FILL", "0")), 0)
 
@@ -375,6 +377,8 @@ def layer2_strength_detailed(
     df_map: dict[str, pd.DataFrame],
     bench_df: pd.DataFrame | None,
     cfg: FunnelConfig,
+    *,
+    rps_universe: list[str] | None = None,
 ) -> tuple[list[str], dict[str, str]]:
     """
     Layer2 双通道：
@@ -435,12 +439,14 @@ def layer2_strength_detailed(
             bench_dropping = bench_cum * 100 <= cfg.bench_drop_threshold
 
     # 截面强弱：RPS50 / RPS120（欧奈尔思路）
+    # 使用全市场 universe 排名（如有），避免仅在 L1 子集内排名导致 RPS 偏高
     rps_fast_map: dict[str, float] = {}
     rps_slow_map: dict[str, float] = {}
     rps_filter_active = False
-    if cfg.enable_rps_filter and symbols:
+    _rps_pool = rps_universe if rps_universe else symbols
+    if cfg.enable_rps_filter and _rps_pool:
         rows: list[tuple[str, float, float]] = []
-        for sym in symbols:
+        for sym in _rps_pool:
             df = df_map.get(sym)
             if df is None or df.empty:
                 continue
@@ -808,10 +814,11 @@ def layer3_sector_resonance(
         if sector:
             base_counts[sector] = base_counts.get(sector, 0) + 1
 
-    # 个股强度：20日收益(70%) + 5日收益(30%) 的截面百分位分数
+    # 个股强度：20日收益(40%) + 5日收益(30%) + 3日收益(30%) 的截面百分位分数
+    # 加入 3 日动量以适配 A 股板块快速轮动（"一日游"）特征。
     strength_map: dict[str, float] = {}
     if df_map:
-        rows: list[tuple[str, float, float]] = []
+        rows: list[tuple[str, float, float, float]] = []
         for sym in symbols:
             df = df_map.get(sym)
             if df is None or df.empty:
@@ -822,12 +829,14 @@ def layer3_sector_resonance(
                 continue
             ret20 = (float(close.iloc[-1]) - float(close.iloc[-21])) / float(close.iloc[-21]) * 100.0
             ret5 = (float(close.iloc[-1]) - float(close.iloc[-6])) / float(close.iloc[-6]) * 100.0 if len(close) > 5 else ret20
-            rows.append((sym, ret20, ret5))
+            ret3 = (float(close.iloc[-1]) - float(close.iloc[-4])) / float(close.iloc[-4]) * 100.0 if len(close) > 3 else ret5
+            rows.append((sym, ret20, ret5, ret3))
         if rows:
-            st_df = pd.DataFrame(rows, columns=["sym", "ret20", "ret5"])
+            st_df = pd.DataFrame(rows, columns=["sym", "ret20", "ret5", "ret3"])
             st_df["q20"] = st_df["ret20"].rank(pct=True, ascending=True, method="average")
             st_df["q5"] = st_df["ret5"].rank(pct=True, ascending=True, method="average")
-            st_df["strength"] = 0.7 * st_df["q20"] + 0.3 * st_df["q5"]
+            st_df["q3"] = st_df["ret3"].rank(pct=True, ascending=True, method="average")
+            st_df["strength"] = 0.4 * st_df["q20"] + 0.3 * st_df["q5"] + 0.3 * st_df["q3"]
             strength_map = st_df.set_index("sym")["strength"].astype(float).to_dict()
 
     ranked = sorted(counts.items(), key=lambda x: -x[1])
@@ -898,9 +907,30 @@ def layer3_sector_resonance(
         keep_sectors_sorted[:top_n] if top_n > 0 else keep_sectors_sorted
     )
 
-    # L3 仅提供行业共振标签与 Top 行业，不在此层做个股硬剔除。
-    # 真正的优先级收口交给后续打分与配额逻辑统一处理。
-    return list(symbols), top_sectors
+    # L3 板块共振过滤：保留 Top 行业内的股票 + 强势个股通配。
+    # 三级放行机制：核心热门板块直通 → 次优板块需个股强度 ≥60% → 强势个股(Top20%)无视板块。
+    # 门槛已放宽以适配 A 股板块快速轮动特征，减少好股票因板块切换被误杀。
+    top_sector_set = set(top_sectors)
+    keep_sector_set = set(keep_sectors_sorted)
+    filtered: list[str] = []
+    for sym in symbols:
+        sector = sector_map.get(sym, "")
+        sym_strength = strength_map.get(sym, 0.0)
+        if sector in top_sector_set:
+            # 核心热门板块：直接保留
+            filtered.append(sym)
+        elif sector in keep_sector_set and sym_strength >= 0.60:
+            # 次优板块 + 个股强度 60%+：有条件保留
+            filtered.append(sym)
+        elif sym_strength >= 0.80:
+            # 强势个股通配：无论板块，个股强度 Top 20% 可绕过
+            filtered.append(sym)
+
+    # 安全兜底：避免极端行情下池子被清空
+    if len(filtered) < 3:
+        filtered = list(symbols)
+
+    return filtered, top_sectors
 
 
 
@@ -1262,7 +1292,7 @@ def _detect_markup_entry(df: pd.DataFrame, cfg: FunnelConfig) -> float | None:
     ma_long = close.rolling(cfg.ma_long).mean()
 
     if (
-        ma_short.isna().any() or ma_long.isna().any()
+        pd.isna(ma_short.iloc[-1]) or pd.isna(ma_long.iloc[-1])
         or ma_short.iloc[-1] <= ma_long.iloc[-1]
     ):
         return None
@@ -1611,7 +1641,10 @@ def run_funnel(
     }
 
     l1 = layer1_filter(all_symbols, name_map, market_cap_map, prepared_df_map, cfg)
-    l2, channel_map = layer2_strength_detailed(l1, prepared_df_map, bench_df, cfg)
+    l2, channel_map = layer2_strength_detailed(
+        l1, prepared_df_map, bench_df, cfg,
+        rps_universe=list(prepared_df_map.keys()),
+    )
     l3, top_sectors = layer3_sector_resonance(
         l2,
         sector_map,

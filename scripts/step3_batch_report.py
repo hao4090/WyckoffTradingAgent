@@ -12,11 +12,13 @@ import sys
 import time
 from datetime import date, datetime
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 import pandas as pd
 
-from integrations.ai_prompts import WYCKOFF_FUNNEL_SYSTEM_PROMPT
+
+# Ensure project root is on sys.path for direct script invocation
+if __name__ == "__main__" or not __package__:
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from core.prompts import WYCKOFF_FUNNEL_SYSTEM_PROMPT
 from integrations.fetch_a_share_csv import _resolve_trading_window, _fetch_hist
 from integrations.llm_client import call_llm
 from integrations.rag_veto import (
@@ -810,15 +812,13 @@ def _build_supply_demand_summary(df: pd.DataFrame) -> str:
     if df_s.empty:
         return ""
 
-    recent = df_s.tail(RECENT_DAYS).copy()
     close = pd.to_numeric(df_s.get("close"), errors="coerce")
-    high = pd.to_numeric(df_s.get("high"), errors="coerce")
-    low = pd.to_numeric(df_s.get("low"), errors="coerce")
     volume = pd.to_numeric(df_s.get("volume"), errors="coerce")
     vol_ma20 = volume.rolling(20).mean()
-    recent["pct_chg_calc"] = close.pct_change() * 100
-    recent["vol_ratio"] = volume / vol_ma20.replace(0, pd.NA)
-    recent = recent.tail(RECENT_DAYS).copy()
+    # 先在完整 df 上计算指标，再切片——避免 pandas 索引对齐导致全 NaN
+    df_s["pct_chg_calc"] = close.pct_change() * 100
+    df_s["vol_ratio"] = volume / vol_ma20.replace(0, pd.NA)
+    recent = df_s.tail(RECENT_DAYS).copy()
 
     pct = pd.to_numeric(recent.get("pct_chg_calc"), errors="coerce")
     vol_ratio = pd.to_numeric(recent.get("vol_ratio"), errors="coerce")
@@ -1084,6 +1084,13 @@ def generate_stock_payload(
         header += f"  [板块状态] {state_text}\n"
     if sector_note:
         header += f"  [板块证据] {str(sector_note).strip()}\n"
+    if exit_signal:
+        exit_parts = [f"信号: {exit_signal}"]
+        if exit_price is not None:
+            exit_parts.append(f"触发价: {exit_price:.2f}")
+        if exit_reason:
+            exit_parts.append(f"原因: {exit_reason}")
+        header += f"  [退出预警] {', '.join(exit_parts)}\n"
 
     supply_summary = _build_supply_demand_summary(df)
 
@@ -1543,6 +1550,10 @@ def run(
             if isinstance(policy_val, str) and str(policy_val).strip()
             else None
         )
+        _exit_sig = str(row.get("exit_signal", "")).strip() or None
+        _exit_price_raw = pd.to_numeric(row.get("exit_price"), errors="coerce")
+        _exit_price = float(_exit_price_raw) if pd.notna(_exit_price_raw) else None
+        _exit_reason = str(row.get("exit_reason", "")).strip() or None
         payload = generate_stock_payload(
             stock_code=code,
             stock_name=str(row.get("name", code)),
@@ -1552,10 +1563,14 @@ def run(
             market_cap_yi=pd.to_numeric(row.get("market_cap_yi"), errors="coerce"),
             avg_amount_20_yi=pd.to_numeric(row.get("avg_amount_20_yi"), errors="coerce"),
             policy_tag=policy_text,
+            track=track_key,
             stage=str(row.get("stage", "")).strip() or None,
             sector_state=str(row.get("sector_state", "")).strip() or None,
             sector_state_code=str(row.get("sector_state_code", "")).strip() or None,
             sector_note=str(row.get("sector_note", "")).strip() or None,
+            exit_signal=_exit_sig,
+            exit_price=_exit_price,
+            exit_reason=_exit_reason,
         )
         payloads_by_track.setdefault(track_key, []).append(payload)
         df_by_track[track_key] = pd.concat(
@@ -1581,6 +1596,19 @@ def run(
         benchmark_lines.append(
             f"recent3_cum_pct={benchmark_context.get('recent3_cum_pct')}"
         )
+        if benchmark_context.get("main_vol_ratio_5_20") is not None:
+            benchmark_lines.append(
+                f"main_vol_ratio_5_20={benchmark_context.get('main_vol_ratio_5_20'):.3f}, "
+                f"main_volume_state={benchmark_context.get('main_volume_state')}"
+            )
+        market_pv_summary = str(benchmark_context.get("market_pv_summary", "") or "").strip()
+        market_pv_outlook = str(benchmark_context.get("market_pv_outlook", "") or "").strip()
+        if market_pv_summary or market_pv_outlook:
+            benchmark_lines.append("[大盘量价推演 / Price-Volume Outlook]")
+            if market_pv_summary:
+                benchmark_lines.append(market_pv_summary)
+            if market_pv_outlook:
+                benchmark_lines.append(market_pv_outlook)
         if breadth_ctx:
             benchmark_lines.append(
                 f"breadth_pct={breadth_ctx.get('ratio_pct')}, "

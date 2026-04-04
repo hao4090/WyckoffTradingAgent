@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-盘前风控任务（周一到周五 07:55, Asia/Shanghai）：
+盘前风控任务（周一到周五 07:00, Asia/Shanghai）：
 - 富时 A50（akshare）
 - VIX（优先 Stooq，失败回退 Yahoo）
 
@@ -13,14 +13,17 @@ import csv
 import json
 import os
 import sys
+import time
 from datetime import date, datetime, timedelta
 from io import StringIO
 from zoneinfo import ZoneInfo
 
 import requests
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# Ensure project root is on sys.path for direct script invocation
+if __name__ == "__main__" or not __package__:
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from integrations.supabase_market_signal import upsert_market_signal_daily
 from utils.feishu import send_feishu_notification
 
@@ -32,6 +35,10 @@ RISK_VIX_CRASH_PCT = float(os.getenv("PREMARKET_VIX_CRASH_PCT", "15.0"))
 RISK_VIX_CRASH_CLOSE = float(os.getenv("PREMARKET_VIX_CRASH_CLOSE", "25.0"))
 RISK_VIX_OFF_PCT = float(os.getenv("PREMARKET_VIX_RISK_OFF_PCT", "8.0"))
 PREMARKET_VIX_READY_HOUR_ET = int(os.getenv("PREMARKET_VIX_READY_HOUR_ET", "17"))
+PREMARKET_VIX_POLL_INTERVAL_SECONDS = max(
+    1,
+    int(os.getenv("PREMARKET_VIX_POLL_INTERVAL_SECONDS", "300")),
+)
 
 
 def _build_action_matrix(regime: str) -> list[str]:
@@ -372,6 +379,46 @@ def _fetch_vix() -> dict:
     }
 
 
+PREMARKET_VIX_MAX_ATTEMPTS = max(int(os.getenv("PREMARKET_VIX_MAX_ATTEMPTS", "12")), 1)
+
+
+def _fetch_vix_until_ready(logs_path: str | None = None) -> dict:
+    attempt = 1
+    while attempt <= PREMARKET_VIX_MAX_ATTEMPTS:
+        vix = _fetch_vix()
+        if vix.get("ok"):
+            _log(
+                "VIX可用，结束轮询: "
+                f"attempt={attempt}, source={vix.get('source')}, date={vix.get('date')}",
+                logs_path,
+            )
+            return vix
+
+        _log(
+            "VIX暂不可用，继续轮询: "
+            f"attempt={attempt}/{PREMARKET_VIX_MAX_ATTEMPTS}, "
+            f"retry_in={PREMARKET_VIX_POLL_INTERVAL_SECONDS}s, error={vix.get('error')}",
+            logs_path,
+        )
+        attempt += 1
+        if attempt <= PREMARKET_VIX_MAX_ATTEMPTS:
+            time.sleep(PREMARKET_VIX_POLL_INTERVAL_SECONDS)
+
+    # 超过最大重试次数，返回降级结果而非无限挂起
+    _log(
+        f"VIX轮询超过最大重试次数({PREMARKET_VIX_MAX_ATTEMPTS})，使用降级结果",
+        logs_path,
+    )
+    return {
+        "ok": False,
+        "source": "timeout_fallback",
+        "date": None,
+        "close": None,
+        "pct_chg": None,
+        "error": f"exceeded max attempts ({PREMARKET_VIX_MAX_ATTEMPTS})",
+    }
+
+
 def _judge_regime(a50: dict, vix: dict) -> tuple[str, list[str]]:
     severity_rank = {
         "NORMAL": 0,
@@ -442,7 +489,7 @@ def main() -> int:
 
     _log("盘前风控任务开始", logs_path)
     a50 = _fetch_a50()
-    vix = _fetch_vix()
+    vix = _fetch_vix_until_ready(logs_path)
     regime, reasons = _judge_regime(a50, vix)
 
     _log(f"A50: {json.dumps(a50, ensure_ascii=False)}", logs_path)
