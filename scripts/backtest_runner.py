@@ -204,6 +204,51 @@ def _load_snapshot_benchmark(
     return out if not out.empty else None
 
 
+def _load_snapshot_name_map(snapshot_dir: Path) -> dict[str, str] | None:
+    """从快照加载股票列表 {code: name}，Phase 1 导出。"""
+    p = snapshot_dir / "name_map.json"
+    if not p.exists():
+        return None
+    try:
+        import json
+        data = json.loads(p.read_text(encoding="utf-8"))
+        if isinstance(data, dict) and data:
+            return {str(k): str(v) for k, v in data.items()}
+    except Exception:
+        pass
+    return None
+
+
+def _load_snapshot_sector_map(snapshot_dir: Path) -> dict[str, str] | None:
+    """从快照加载行业映射 {code: industry}，Phase 1 导出。"""
+    p = snapshot_dir / "sector_map.json"
+    if not p.exists():
+        return None
+    try:
+        import json
+        data = json.loads(p.read_text(encoding="utf-8"))
+        if isinstance(data, dict) and data:
+            return {str(k): str(v) for k, v in data.items()}
+    except Exception:
+        pass
+    return None
+
+
+def _load_snapshot_market_cap_map(snapshot_dir: Path) -> dict[str, float] | None:
+    """从快照加载市值映射 {code: total_mv_亿}，Phase 1 导出。"""
+    p = snapshot_dir / "market_cap_map.json"
+    if not p.exists():
+        return None
+    try:
+        import json
+        data = json.loads(p.read_text(encoding="utf-8"))
+        if isinstance(data, dict) and data:
+            return {str(k): float(v) for k, v in data.items() if v is not None}
+    except Exception:
+        pass
+    return None
+
+
 def _apply_funnel_cfg_overrides(cfg: FunnelConfig) -> None:
     """
     与生产漏斗同口径：读取 FUNNEL_CFG_* 环境变量覆盖 FunnelConfig。
@@ -483,10 +528,26 @@ def run_backtest(
     if buy_friction_pct >= 100 or sell_friction_pct >= 100:
         raise ValueError("buy_friction_pct / sell_friction_pct 必须 < 100")
 
-    symbols, name_map = _build_universe(board=board, sample_size=sample_size)
+    # ── 快照模式：优先从快照加载股票列表，避免网络调用 ──
+    snapshot_name_map: dict[str, str] | None = None
+    if snapshot_dir is not None:
+        snapshot_dir = Path(snapshot_dir).resolve()
+        snapshot_name_map = _load_snapshot_name_map(snapshot_dir)
+
+    if snapshot_name_map is not None:
+        # 从快照的 name_map 派生 symbols（零网络调用）
+        name_map = snapshot_name_map
+        all_codes = sorted(name_map.keys())
+        # ST 过滤 + 采样，与 _build_universe 保持同口径
+        symbols = [s for s in _normalize_symbols(all_codes) if "ST" not in name_map.get(s, "").upper()]
+        if sample_size > 0:
+            symbols = symbols[:sample_size]
+        print(f"[backtest] 股票池={len(symbols)} (快照 name_map, board={board}, sample_size={sample_size})")
+    else:
+        symbols, name_map = _build_universe(board=board, sample_size=sample_size)
+        print(f"[backtest] 股票池={len(symbols)} (网络拉取, board={board}, sample_size={sample_size})")
     if not symbols:
         raise RuntimeError("股票池为空")
-    print(f"[backtest] 股票池={len(symbols)} (board={board}, sample_size={sample_size})")
 
     prefetch_start = start_dt - timedelta(days=trading_days * 3)
     prefetch_end = end_dt + timedelta(days=hold_days * 3 + 30)
@@ -498,7 +559,6 @@ def run_backtest(
     snapshot_used = False
 
     if snapshot_dir is not None:
-        snapshot_dir = Path(snapshot_dir).resolve()
         print(f"[backtest] 使用本地快照: {snapshot_dir}")
         all_df_map, snapshot_rows_total = _load_snapshot_hist_map(
             snapshot_dir, symbols_filter=set(symbols)
@@ -547,11 +607,23 @@ def run_backtest(
         raise RuntimeError(f"回测区间交易日过少({len(trade_dates)})，无法计算 forward return (hold_days={hold_days}，需至少 {hold_days + 2} 个交易日)")
 
     if use_current_meta:
-        market_cap_map = fetch_market_cap_map()
-        sector_map = fetch_sector_map()
-        print(
-            "[backtest] ⚠️ 使用当前截面市值/行业映射（会引入 look-ahead bias）"
-        )
+        # 快照优先：从快照加载 sector_map / market_cap_map（Phase 1 已导出）
+        # 仅在快照不存在时 fallback 到网络拉取
+        _snap_sector = _load_snapshot_sector_map(snapshot_dir) if snapshot_dir is not None else None
+        _snap_cap = _load_snapshot_market_cap_map(snapshot_dir) if snapshot_dir is not None else None
+
+        if _snap_sector is not None or _snap_cap is not None:
+            sector_map = _snap_sector or {}
+            market_cap_map = _snap_cap or {}
+            print(
+                f"[backtest] 元数据从快照加载: sector_map={len(sector_map)}, market_cap_map={len(market_cap_map)}"
+            )
+        else:
+            market_cap_map = fetch_market_cap_map()
+            sector_map = fetch_sector_map()
+            print(
+                "[backtest] ⚠️ 使用当前截面市值/行业映射（会引入 look-ahead bias）"
+            )
         if not market_cap_map:
             print("[backtest] ⚠️ 当前市值映射为空，Layer1 市值过滤将被跳过")
     else:

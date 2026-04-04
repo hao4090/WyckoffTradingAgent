@@ -222,6 +222,33 @@ jobs:
               bench_main.to_csv(snap_dir / 'benchmark_main.csv', index=False)
               print(f'[snapshot] benchmark_main.csv: {len(bench_main)} rows')
 
+          # ---- 导出元数据：name_map / sector_map / market_cap_map ----
+          # 让 Phase 2 grid job 完全无需网络调用
+          name_map = {}
+          for item in raw_pool:
+              if isinstance(item, dict):
+                  c = str(item.get('code', '')).strip()
+                  n = str(item.get('name', '')).strip()
+                  if c:
+                      name_map[c] = n
+          (snap_dir / 'name_map.json').write_text(json.dumps(name_map, ensure_ascii=False))
+          print(f'[snapshot] name_map.json: {len(name_map)} entries')
+
+          from integrations.data_source import fetch_sector_map, fetch_market_cap_map
+          try:
+              sm = fetch_sector_map()
+              (snap_dir / 'sector_map.json').write_text(json.dumps(sm, ensure_ascii=False))
+              print(f'[snapshot] sector_map.json: {len(sm)} entries')
+          except Exception as e:
+              print(f'[snapshot] sector_map 拉取失败（不阻塞）: {e}')
+
+          try:
+              cm = fetch_market_cap_map()
+              (snap_dir / 'market_cap_map.json').write_text(json.dumps(cm, ensure_ascii=False))
+              print(f'[snapshot] market_cap_map.json: {len(cm)} entries')
+          except Exception as e:
+              print(f'[snapshot] market_cap_map 拉取失败（不阻塞）: {e}')
+
           meta = {'symbols': len(symbols), 'ok': ok, 'fail': fail, 'start': prefetch_start, 'end': end_s}
           (snap_dir / 'metadata.json').write_text(json.dumps(meta))
           print(f'[snapshot] Done! 成功率: {ok}/{len(symbols)} ({100*ok/len(symbols):.1f}%)')
@@ -295,7 +322,6 @@ jobs:
             --take-profit 0 \
             --sltp-priority stop_first \
             --regime-filter \
-            --no-use-current-meta \
             --snapshot-dir snapshot_data \
             --output-dir "${OUT_DIR}" \
             | tee "${OUT_DIR}/run.log"
