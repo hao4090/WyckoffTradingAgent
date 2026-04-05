@@ -417,6 +417,7 @@ jobs:
                   'calmar': extract(content, '卡玛比'),
               })
 
+          best = None
           if not cells:
               lines = ['⚠️ 未找到回测结果文件']
           else:
