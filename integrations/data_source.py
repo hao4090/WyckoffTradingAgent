@@ -576,8 +576,9 @@ def _fetch_stock_tushare(
     ts_code = _to_ts_code(symbol)
     # 口径固定：优先使用前复权（qfq）。
     adj_val = "qfq"
-    # ts.pro_bar 实际上不支持名为 `proapi` 的底层透传参数，会抛出 TypeError
-    # 它会自动使用我们前面 pro ＝ get_pro() 间接配置好的全局 token。
+    # ts.pro_bar 绕过了 pro 对象，直接使用全局 token，需要显式限流
+    from integrations.tushare_client import _wait_for_rate_limit
+    _wait_for_rate_limit()
     df = ts.pro_bar(ts_code=ts_code, adj=adj_val, start_date=start, end_date=end)
     
     if df is None or df.empty:
