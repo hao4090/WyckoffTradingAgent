@@ -1271,7 +1271,7 @@ def main() -> int:
     parser.add_argument(
         "--snapshot-dir",
         default="",
-        help="本地快照目录（由 wyckoff_funnel 的 FUNNEL_EXPORT_FULL_FETCH 生成）",
+        help="CI 专用：GitHub Actions Phase 1 导出的快照目录（留空则从 Supabase 缓存取数）",
     )
     parser.add_argument(
         "--output-dir",
