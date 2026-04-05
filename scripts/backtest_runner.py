@@ -284,7 +284,7 @@ def _fetch_hist_norm(
     end_dt: date,
 ) -> tuple[str, pd.DataFrame | None, str | None]:
     try:
-        # 优先走 Supabase 缓存（只补拉缺失区间），fallback 到直连数据源
+        # 优先走 Supabase 缓存（cache_only：只读缓存，不回 tushare 补缺口）
         try:
             from integrations.stock_hist_repository import get_stock_hist as _cached
             raw = _cached(
@@ -293,9 +293,12 @@ def _fetch_hist_norm(
                 end_date=end_dt,
                 adjust="qfq",
                 context="background",
+                cache_only=True,
             )
         except Exception:
-            # Supabase 不可用（未配置/网络异常）时 fallback 到直连数据源
+            raw = None
+        # 仅当缓存完全无数据时 fallback 到直连数据源
+        if raw is None or raw.empty:
             raw = fetch_stock_hist(symbol, start_dt, end_dt, adjust="qfq")
         df = normalize_hist_from_fetch(raw)
         if df is None or df.empty:

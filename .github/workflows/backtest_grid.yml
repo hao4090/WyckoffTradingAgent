@@ -110,7 +110,9 @@ jobs:
           trading_days = int('${BT_TRADING_DAYS}')
 
           end_dt = datetime.strptime(end_s, '%Y%m%d').date()
-          prefetch_start = (end_dt - timedelta(days=int(trading_days * 1.6))).strftime('%Y%m%d')
+          start_dt = datetime.strptime(start_s, '%Y%m%d').date()
+          # 回看窗口：从回测起始日再往前 trading_days*2 自然日，确保 MA200 有足够预热
+          prefetch_start = (start_dt - timedelta(days=int(trading_days * 2))).strftime('%Y%m%d')
 
           print(f'[snapshot] 数据区间: {prefetch_start} -> {end_s}')
 
@@ -146,9 +148,17 @@ jobs:
                   time.sleep(max(0.05, sleep_for))
 
               try:
+                  raw = None
+                  # 优先从 Supabase 缓存读取（cache_only=True：只读缓存，不回 tushare 补缺口）
                   try:
-                      raw = get_stock_hist_cached(sym, prefetch_start, end_s, adjust='qfq', context='background')
+                      raw = get_stock_hist_cached(
+                          sym, prefetch_start, end_s,
+                          adjust='qfq', context='background', cache_only=True,
+                      )
                   except Exception:
+                      pass
+                  # 仅当缓存完全无数据时才 fallback 到 tushare
+                  if raw is None or raw.empty:
                       raw = fetch_stock_hist(sym, prefetch_start, end_s, adjust='qfq')
                   if raw is not None and not raw.empty:
                       df = normalize_hist_from_fetch(raw)
