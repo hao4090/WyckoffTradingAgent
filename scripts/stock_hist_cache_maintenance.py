@@ -29,8 +29,8 @@ def main() -> int:
     parser.add_argument(
         "--ttl-days",
         type=int,
-        default=730,
-        help="按 date 清理早于该天数的缓存记录（默认 730）",
+        default=550,
+        help="按 date 清理早于该天数的缓存记录（默认 550）",
     )
     args = parser.parse_args()
 

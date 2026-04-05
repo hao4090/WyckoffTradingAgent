@@ -13,7 +13,7 @@ from core.constants import TABLE_STOCK_HIST_CACHE
 from integrations.supabase_base import create_admin_client as _create_admin_client
 
 _ADMIN_CLIENT: Client | None = None
-_STOCK_HIST_RETENTION_DAYS = 730
+_STOCK_HIST_RETENTION_DAYS = 550
 
 
 def _parse_iso_datetime(value: str) -> datetime:
