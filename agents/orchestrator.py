@@ -39,7 +39,7 @@ class OrchestratorAgent:
       4. StrategyAgent — LLM OMS 决策
       5. NotifierAgent — 汇总通知
 
-    每个 stage 执行后 checkpoint 到 Supabase（Phase 1 先写日志，Phase 2 写 DB）。
+    每个 stage 执行后 checkpoint（当前：仅写日志；TODO: 写 Supabase DB）。
     """
 
     name = "orchestrator"
@@ -141,12 +141,20 @@ class OrchestratorAgent:
             skip_step4=skip_step4,
         )
 
-    def run(self, trigger: dict | None = None) -> AgentResult:
+    def run(
+        self,
+        trigger: dict | None = None,
+        *,
+        on_stage_start: Callable[[str], None] | None = None,
+        on_stage_done: Callable[[dict], None] | None = None,
+    ) -> AgentResult:
         """
         执行完整 pipeline。
 
         Args:
             trigger: 触发信息 dict，如 {"trigger": "cron", "run_id": "..."}
+            on_stage_start: 每个 stage 开始前回调，参数为 agent_name。
+            on_stage_done: 每个 stage 完成后回调，参数为 checkpoint dict。
 
         Returns:
             AgentResult wrapping pipeline 执行结果。
@@ -154,6 +162,20 @@ class OrchestratorAgent:
         trigger = trigger or {}
         run_id = trigger.get("run_id", f"run_{datetime.now(TZ):%Y%m%d_%H%M%S}")
         trigger_type = trigger.get("trigger", "manual")
+
+        def _fire_start(agent_name: str) -> None:
+            if on_stage_start:
+                try:
+                    on_stage_start(agent_name)
+                except Exception:
+                    logger.debug("on_stage_start callback error", exc_info=True)
+
+        def _fire_done(checkpoint: dict) -> None:
+            if on_stage_done:
+                try:
+                    on_stage_done(checkpoint)
+                except Exception:
+                    logger.debug("on_stage_done callback error", exc_info=True)
 
         logger.info("[%s] Pipeline started (trigger=%s)", run_id, trigger_type)
         pipeline_t0 = time.monotonic()
@@ -164,8 +186,11 @@ class OrchestratorAgent:
         # ------------------------------------------------------------------
         # Stage 1: Screener (同时产出 benchmark_context)
         # ------------------------------------------------------------------
+        _fire_start(self.screener.name)
         result = self._run_stage(self.screener, ctx)
-        stages_executed.append(result.to_checkpoint_dict())
+        checkpoint = result.to_checkpoint_dict()
+        stages_executed.append(checkpoint)
+        _fire_done(checkpoint)
         if not result.ok:
             self.notifier.send_failure(result)
             return self._make_pipeline_result(
@@ -176,8 +201,11 @@ class OrchestratorAgent:
         # ------------------------------------------------------------------
         # Stage 2: MarketContext (从 screener 产出的 benchmark_context 转换)
         # ------------------------------------------------------------------
+        _fire_start(self.market_context.name)
         result = self._run_stage(self.market_context, ctx)
-        stages_executed.append(result.to_checkpoint_dict())
+        checkpoint = result.to_checkpoint_dict()
+        stages_executed.append(checkpoint)
+        _fire_done(checkpoint)
         if not result.ok:
             # MarketContext 失败不致命，后续 agent 可容忍
             logger.warning("MarketContextAgent failed, continuing without regime info")
@@ -188,40 +216,57 @@ class OrchestratorAgent:
         # ------------------------------------------------------------------
         screen = ctx.get("screener")
         if screen and screen.ok and screen.payload and screen.payload.candidates:
+            _fire_start(self.analyst.name)
             result = self._run_stage(self.analyst, ctx)
-            stages_executed.append(result.to_checkpoint_dict())
+            checkpoint = result.to_checkpoint_dict()
+            stages_executed.append(checkpoint)
+            _fire_done(checkpoint)
             if not result.ok:
                 logger.warning("WyckoffAnalystAgent failed: %s", result.error)
                 # 不致命：Funnel 结果已推送，研报失败只影响 step4
             ctx["analyst"] = result
         else:
             logger.info("No candidates, skipping analyst")
-            ctx["analyst"] = AgentResult(
+            skip_result = AgentResult(
                 agent_name="analyst",
                 status=PipelineStatus.COMPLETED,
                 payload=None,
             )
+            ctx["analyst"] = skip_result
+            checkpoint = skip_result.to_checkpoint_dict()
+            stages_executed.append(checkpoint)
+            _fire_done(checkpoint)
 
         # ------------------------------------------------------------------
         # Stage 4: Strategist (LLM OMS 决策)
         # ------------------------------------------------------------------
         if not self.skip_step4:
+            _fire_start(self.strategist.name)
             result = self._run_stage(self.strategist, ctx)
-            stages_executed.append(result.to_checkpoint_dict())
+            checkpoint = result.to_checkpoint_dict()
+            stages_executed.append(checkpoint)
+            _fire_done(checkpoint)
             ctx["strategist"] = result
         else:
             logger.info("Step4 skipped (DAILY_JOB_SKIP_STEP4=1)")
-            ctx["strategist"] = AgentResult(
+            skip_result = AgentResult(
                 agent_name="strategist",
                 status=PipelineStatus.COMPLETED,
                 payload=None,
             )
+            ctx["strategist"] = skip_result
+            checkpoint = skip_result.to_checkpoint_dict()
+            stages_executed.append(checkpoint)
+            _fire_done(checkpoint)
 
         # ------------------------------------------------------------------
         # Stage 5: Notifier (汇总)
         # ------------------------------------------------------------------
+        _fire_start(self.notifier.name)
         result = self._run_stage(self.notifier, ctx)
-        stages_executed.append(result.to_checkpoint_dict())
+        checkpoint = result.to_checkpoint_dict()
+        stages_executed.append(checkpoint)
+        _fire_done(checkpoint)
 
         # ------------------------------------------------------------------
         # Pipeline 完成
@@ -233,7 +278,7 @@ class OrchestratorAgent:
         status = PipelineStatus.COMPLETED if all_ok else PipelineStatus.PARTIAL
 
         pipeline_result = self._make_pipeline_result(
-            run_id, status, stages_executed, pipeline_t0,
+            run_id, status, stages_executed, pipeline_t0, ctx,
         )
         logger.info(
             "[%s] Pipeline finished: status=%s elapsed=%dms",
@@ -280,6 +325,7 @@ class OrchestratorAgent:
         status: PipelineStatus,
         stages: list[dict],
         t0: float,
+        ctx: dict | None = None,
     ) -> AgentResult:
         return AgentResult(
             agent_name=self.name,
@@ -287,6 +333,7 @@ class OrchestratorAgent:
             payload={
                 "run_id": run_id,
                 "stages": stages,
+                "ctx": ctx or {},
             },
             duration_ms=int((time.monotonic() - t0) * 1000),
         )

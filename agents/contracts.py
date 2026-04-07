@@ -7,6 +7,8 @@ Agent 间数据契约 — 所有 Agent 的输入输出类型定义。
 """
 from __future__ import annotations
 
+import logging
+import time
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
@@ -211,3 +213,65 @@ class AgentResult:
             "duration_ms": self.duration_ms,
             "retries": self.retries,
         }
+
+
+# ---------------------------------------------------------------------------
+# AgentSkip — _execute 内提前中止（非异常失败，而是逻辑跳过/前置缺失）
+# ---------------------------------------------------------------------------
+
+class AgentSkip(Exception):
+    """Agent 内部主动跳过，carry FAILED 结果。"""
+
+    def __init__(self, error: str, *, status: PipelineStatus = PipelineStatus.FAILED, payload: Any = None):
+        super().__init__(error)
+        self.status = status
+        self.payload = payload
+
+
+# ---------------------------------------------------------------------------
+# BaseAgent — 公共 run() 模板（计时 + try/except + AgentResult 包装）
+# ---------------------------------------------------------------------------
+
+class BaseAgent:
+    """
+    所有 Agent 的基类，提供 ``run()`` 模板方法。
+
+    子类只需实现 ``_execute(context) -> payload``：
+    - 正常返回 payload → ``AgentResult(COMPLETED, payload)``
+    - raise ``AgentSkip(error)`` → ``AgentResult(FAILED/COMPLETED, error=...)``
+    - raise 其他异常 → ``AgentResult(FAILED, error=str(e))``
+    """
+
+    name: str = ""
+
+    def run(self, context: dict) -> AgentResult:
+        logger = logging.getLogger(self.__class__.__name__)
+        t0 = time.monotonic()
+        try:
+            payload = self._execute(context)
+            return AgentResult(
+                agent_name=self.name,
+                status=PipelineStatus.COMPLETED,
+                payload=payload,
+                duration_ms=int((time.monotonic() - t0) * 1000),
+            )
+        except AgentSkip as skip:
+            return AgentResult(
+                agent_name=self.name,
+                status=skip.status,
+                payload=skip.payload,
+                error=str(skip),
+                duration_ms=int((time.monotonic() - t0) * 1000),
+            )
+        except Exception as e:
+            logger.exception("%s failed", self.__class__.__name__)
+            return AgentResult(
+                agent_name=self.name,
+                status=PipelineStatus.FAILED,
+                error=str(e),
+                duration_ms=int((time.monotonic() - t0) * 1000),
+            )
+
+    def _execute(self, context: dict) -> Any:
+        """子类实现：返回 payload，或 raise AgentSkip / 异常。"""
+        raise NotImplementedError

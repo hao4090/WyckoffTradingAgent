@@ -9,6 +9,7 @@ from app.background_jobs import (
     background_jobs_ready_for_current_user,
     load_latest_job_result,
     refresh_background_job_data,
+    render_background_job_status,
     submit_background_job,
     sync_background_job_state,
 )
@@ -19,21 +20,11 @@ from integrations.llm_client import (
     DEFAULT_GEMINI_MODEL,
     GEMINI_MODELS,
     OPENAI_COMPATIBLE_BASE_URLS,
+    PROVIDER_LABELS,
     SUPPORTED_PROVIDERS,
+    get_provider_credentials,
 )
 from utils import extract_symbols_from_text
-
-# 供应商展示名与 session_state 中的 key 后缀对应
-PROVIDER_LABELS = {
-    "gemini": "Gemini",
-    "openai": "OpenAI",
-    "zhipu": "智谱",
-    "minimax": "Minimax",
-    "deepseek": "DeepSeek",
-    "qwen": "Qwen",
-    "kimi": "Kimi",
-    "volcengine": "火山引擎",
-}
 
 AI_ANALYSIS_DEFAULT_FEISHU_WEBHOOK = (
     "https://open.feishu.cn/open-apis/bot/v2/hook/4ef56ec3-fb84-4eb4-b4d9-775ae7de69ff"
@@ -50,29 +41,7 @@ def _resolve_ai_analysis_feishu_webhook() -> str:
     return user_webhook or AI_ANALYSIS_DEFAULT_FEISHU_WEBHOOK
 
 
-def _get_provider_credentials(provider: str) -> tuple[str, str, str]:
-    """根据 provider 从 session_state 取 api_key、model、base_url（OpenAI 兼容）。"""
-    key_suffix = provider.lower()
-    env_prefix = key_suffix.upper()
-    api_key = (
-        (st.session_state.get(f"{key_suffix}_api_key") or "").strip()
-        or str(os.getenv(f"{env_prefix}_API_KEY", "") or "").strip()
-    )
-    model = (
-        (st.session_state.get(f"{key_suffix}_model") or "").strip()
-        or str(os.getenv(f"{env_prefix}_MODEL", "") or "").strip()
-    )
-    base_url = ""
-    if provider in OPENAI_COMPATIBLE_BASE_URLS:
-        base_url = (
-            st.session_state.get(f"{key_suffix}_base_url")
-            or os.getenv(f"{env_prefix}_BASE_URL")
-            or OPENAI_COMPATIBLE_BASE_URLS.get(provider, "")
-            or ""
-        ).strip()
-    if not model and provider == "gemini":
-        model = st.session_state.get("gemini_model") or DEFAULT_GEMINI_MODEL
-    return (api_key, model or "", base_url)
+_get_provider_credentials = get_provider_credentials
 
 
 def _render_single_stock_page_compat(
@@ -147,37 +116,18 @@ def _load_find_gold_source() -> tuple[list[dict], dict]:
 
 
 def _render_ai_status(state: dict | None) -> dict | None:
-    if not isinstance(state, dict):
-        return None
-    run = state.get("run")
-    result = state.get("result")
-    request_id = str(state.get("request_id", "") or "").strip()
-    if request_id:
-        st.caption(f"请求 ID: `{request_id}`")
-    if run is None:
-        st.info("后台 AI 任务已提交，正在等待 GitHub Actions 创建运行实例。")
-        return result if isinstance(result, dict) else None
-    status = str(getattr(run, "status", "") or "")
-    conclusion = str(getattr(run, "conclusion", "") or "")
-    if status == "completed":
-        if conclusion == "success":
-            st.success("后台 AI 任务已完成。")
-        else:
-            st.error(f"后台 AI 任务结束，但结论为 `{conclusion or '--'}`。")
-    else:
-        st.info(f"后台 AI 任务进行中：`{status}`")
-    html_url = str(getattr(run, "html_url", "") or "").strip()
-    if html_url:
-        st.markdown(f"[打开 GitHub Actions 运行详情]({html_url})")
-    if isinstance(result, dict) and str(result.get("status", "") or "") == "error":
-        st.error(str(result.get("error", "后台 AI 任务失败")))
-    return result if isinstance(result, dict) else None
+    return render_background_job_status(state, noun="AI 任务")
 
 
 content_col = show_right_nav()
 with content_col:
     st.title("🤖 AI 分析")
     st.markdown("单股维持本地分析；批量研报和漏斗联动已经迁到 GitHub Actions 后台。")
+    st.page_link(
+        "pages/Pipeline.py",
+        label="一键运行完整管线（筛选 → 研报 → 策略 → 通知）",
+        icon="🚀",
+    )
 
     analysis_type = st.radio(
         "分析类型",

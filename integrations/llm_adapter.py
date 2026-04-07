@@ -2,13 +2,12 @@
 """
 LiteLLM 适配层 — 为 Agent 层提供统一的 LLM 调用接口。
 
-Phase 1:
+当前：
   - call_llm_via_litellm() 作为 integrations/llm_client.call_llm() 的可选替代
   - 支持现有全部 9 个 provider: Gemini / OpenAI / DeepSeek / Qwen / Kimi / Zhipu / Volcengine / Minimax
   - 内部通过 LiteLLM 自动路由，无需手动切分 Gemini vs OpenAI-compat 逻辑
 
-Phase 2:
-  - 替换 integrations/llm_client.call_llm() 的内部实现
+TODO: 替换 integrations/llm_client.call_llm() 的内部实现
 """
 from __future__ import annotations
 

@@ -23,6 +23,7 @@
 
 | 功能 | 说明 |
 |------|------|
+| 🚀 **智能管线** | 一键运行完整 5 阶段流水线（漏斗筛选 → 大盘环境 → AI 研报 → 持仓策略 → 通知汇总），实时展示每阶段进度，无需手动刷新 |
 | 📊 **每日选股** | 配置 GitHub Actions 后，北京时间周日到周四 18:25 自动跑 Wyckoff Funnel，从主板+创业板筛选候选并推送飞书 |
 | 📘 **策略手册** | 见 `README_STRATEGY.md`（含核心量化金融术语、风控公式及各层筛选指标执行口径） |
 | 🔬 **Wyckoff Funnel** | Web 前台提交参数，GitHub Actions 在后台执行多层漏斗筛选：剥离垃圾 → 六通道强弱甄别 → Markup 识别 → 威科夫狙击 → AI 双轨候选 |
@@ -232,10 +233,10 @@ python -m scripts.backtest_runner \
 - `[step3] 飞书推送失败` / `feishu_failed`
   - 原因：Webhook 无效、限流、网络问题
   - 处理：重新生成飞书机器人 Webhook 并替换 Secret
-- `阶段 3 私人再平衡: 跳过（SUPABASE_USER_ID 未配置/用户持仓缺失）`
+- `Step4 私人再平衡: 跳过（SUPABASE_USER_ID 未配置/用户持仓缺失）`
   - 原因：未配置 `SUPABASE_USER_ID`，或 `USER_LIVE:<user_id>`/`MY_PORTFOLIO_STATE` 都不可用
   - 处理：在 Secrets 配置 `SUPABASE_USER_ID`；优先保证 Supabase 有 `USER_LIVE:<user_id>`，必要时提供 `MY_PORTFOLIO_STATE` 兜底
-- `阶段 3 私人再平衡: 跳过（TG_BOT_TOKEN/TG_CHAT_ID 未配置）`
+- `Step4 私人再平衡: 跳过（TG_BOT_TOKEN/TG_CHAT_ID 未配置）`
   - 原因：Telegram Secret 未配置
   - 处理：配置 `TG_BOT_TOKEN` 和 `TG_CHAT_ID` 后重跑
 - `User location is not supported for the API use`
@@ -275,7 +276,7 @@ Step4 完全由 GitHub Actions Secrets 驱动：读取 `SUPABASE_USER_ID` 定位
 
 ## 🤖 Agent 架构
 
-系统采用多 Agent 协作架构，基于 **OpenAI Agents SDK + LiteLLM** 构建。6 个专职 Agent 分工协作，其中 4 个确定性 Agent 负责数据计算，2 个 LLM Agent 负责需要自然语言判断的深度分析。
+系统采用多 Agent 协作架构，基于 **LiteLLM 统一适配层 + 自研 OrchestratorAgent** 构建。6 个专职 Agent 分工协作，其中 4 个确定性 Agent 负责数据计算，2 个 LLM Agent 负责需要自然语言判断的深度分析。Web 端提供「智能管线」页面可一键运行完整 5 阶段 Pipeline 并实时查看各阶段进度。
 
 ```
                      ┌─────────────────────┐
@@ -362,10 +363,10 @@ Step4 完全由 GitHub Actions Secrets 驱动：读取 `SUPABASE_USER_ID` 定位
 ├── streamlit_app.py        # Web 入口
 ├── app/                    # UI 组件（layout/auth/navigation）
 │   ├── background_jobs.py  # Streamlit 侧后台任务状态管理
+│   ├── pipeline_renderers.py # 智能管线进度 + 结果渲染
 │   └── ...
-├── agents/                 # 🤖 Agent 层（OpenAI Agents SDK + LiteLLM）
-│   ├── contracts.py        # Agent 间数据契约（dataclass）
-│   ├── llm_adapter.py      # LiteLLM 万能 provider 适配
+├── agents/                 # 🤖 Agent 层（LiteLLM + OrchestratorAgent 编排）
+│   ├── contracts.py        # Agent 间数据契约 + BaseAgent 基类
 │   ├── orchestrator.py     # OrchestratorAgent — pipeline 编排
 │   ├── screener.py         # ScreenerAgent — 4 层漏斗筛选
 │   ├── market_context.py   # MarketContextAgent — 大盘 regime
@@ -389,6 +390,7 @@ Step4 完全由 GitHub Actions Secrets 驱动：读取 `SUPABASE_USER_ID` 定位
 │   ├── rag_veto.py         # RAG 防雷模块
 │   └── github_actions.py   # GitHub Actions 触发与结果查询
 ├── pages/                  # Streamlit 页面
+│   ├── Pipeline.py         # 🚀 智能管线（一键 5 阶段 + 实时进度）
 │   ├── AIAnalysis.py       # AI 分析（单股本地，批量后台）
 │   ├── WyckoffScreeners.py # Wyckoff Funnel 后台筛选页
 │   ├── Portfolio.py        # 持仓管理
@@ -405,6 +407,11 @@ Step4 完全由 GitHub Actions Secrets 驱动：读取 `SUPABASE_USER_ID` 定位
 │   ├── web_background_job.py  # Web 后台任务执行入口
 │   ├── premarket_risk_job.py  # 盘前风控预警
 │   └── backtest_runner.py  # 日线轻量回测
+├── tools/                  # 可复用工具函数（Agent / scripts 共享）
+│   ├── data_fetcher.py     # 数据拉取辅助
+│   ├── report_builder.py   # 研报拼装辅助
+│   ├── debug_io.py         # 模型输入落盘（DEBUG_MODEL_IO）
+│   └── ...
 ├── tests/
 │   ├── agents/             # Agent 层测试
 │   └── ...                 # 现有单元测试

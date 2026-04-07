@@ -1,5 +1,32 @@
 # Changelog
 
+## v2.2.0 (2026-04-07)
+
+**Agent Pipeline 架构 + 智能管线页面 + 代码瘦身**
+
+### 新增：Agent Pipeline 一键运行
+- **`pages/Pipeline.py`**：新增「智能管线」页面，一键运行完整 5 阶段 Pipeline（漏斗筛选 → 大盘水温 → AI 研报 → 持仓策略 → 通知汇总），实时展示每阶段运行进度，自动轮询刷新。
+- **`app/pipeline_renderers.py`**：Pipeline 进度面板与完成结果的独立渲染组件。
+- **`app/agent_jobs.py`**：新增 `full_pipeline` 任务类型，支持 OrchestratorAgent 的 stage 级进度回调。
+- **侧边栏**：导航新增「🚀 智能管线」入口。
+
+### 架构改造
+- **OrchestratorAgent**：`run()` 方法支持 `on_stage_start` / `on_stage_done` 回调，pipeline 结果包含完整 `ctx` 上下文。
+- **BaseAgent 基类**：`agents/contracts.py` 新增 `BaseAgent` + `AgentSkip`，5 个 Agent 统一继承，消除 `run()` 中 40+ 行重复的计时 + try/except + AgentResult 包装样板。
+- **LiteLLM 定位修正**：文档中"OpenAI Agents SDK + LiteLLM"修正为"LiteLLM 统一适配层 + 自研 OrchestratorAgent"（项目不依赖 OpenAI Agents SDK）。
+
+### 代码瘦身（~190 行净减，零功能变化）
+- **共享 provider 工具**：`PROVIDER_LABELS` + `get_provider_credentials()` 提取到 `integrations/llm_client.py`，AIAnalysis / Pipeline 页面共用。
+- **共享任务状态渲染**：`render_background_job_status()` 提取到 `app/background_jobs.py`，WyckoffScreeners / AIAnalysis 共用。
+- **统一日期函数**：4 处 `_job_end_calendar_day()` 透传别名删除，直接调用 `resolve_end_calendar_day()`。
+- **统一通知分发**：step3 三处 feishu+wecom+dingtalk 手动 fan-out 改为 `_notify_all()` 闭包。
+- **统一 debug 落盘**：step3 / step4 各自的 `_dump_model_input()` 合并到 `tools/debug_io.py`。
+- **删除零调用存根**：`agents/llm_adapter.py` 已删除（全项目零引用）。
+
+### 文档更新
+- **README**：新增 Pipeline 描述、修正 Agent 架构说明、更新目录结构（+tools/、+Pipeline.py、-llm_adapter.py）、修正陈旧错误消息引用。
+- **.env.example**：补充多厂商 API Key 模板。
+
 ## v2.1.0 (2026-04-02)
 
 **量化引擎深度修复 + 持仓健康诊断 + 全系统 Bug 清理**

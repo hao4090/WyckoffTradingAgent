@@ -2,20 +2,19 @@
 """
 ScreenerAgent — 4 层 Wyckoff 漏斗筛选。
 
-Phase 1: 整体调用 run_funnel()，同时产出 ScreenResult + benchmark_context。
-Phase 2: 拆解为 run_layer1/2/3/4 独立 Tool 调用。
+当前：整体调用 run_funnel()，同时产出 ScreenResult + benchmark_context。
+TODO: 拆解为 run_layer1/2/3/4 独立 Tool 调用。
 """
 from __future__ import annotations
 
 import logging
-import time
 
-from agents.contracts import AgentResult, MarketContext, PipelineStatus, ScreenResult
+from agents.contracts import AgentSkip, BaseAgent, PipelineStatus, ScreenResult
 
 logger = logging.getLogger(__name__)
 
 
-class ScreenerAgent:
+class ScreenerAgent(BaseAgent):
     """
     确定性 Agent：执行 4 层 Wyckoff 漏斗筛选。
 
@@ -31,52 +30,27 @@ class ScreenerAgent:
         self.webhook_url = webhook_url
         self.notify = notify
 
-    def run(self, context: dict) -> AgentResult:
-        """
-        执行漏斗筛选。
+    def _execute(self, context: dict) -> ScreenResult:
+        """执行漏斗筛选。"""
+        from core.funnel_pipeline import run_funnel
 
-        Phase 1: 调用 run_funnel(webhook_url) 获取完整结果。
-        将 benchmark_context 存入 context["_benchmark_context_raw"] 供后续 Agent 使用。
-        """
-        t0 = time.monotonic()
-        try:
-            from core.funnel_pipeline import run_funnel
+        ok, symbols_info, benchmark_context = run_funnel(
+            self.webhook_url,
+            notify=self.notify,
+        )
 
-            ok, symbols_info, benchmark_context = run_funnel(
-                self.webhook_url,
-                notify=self.notify,
-            )
+        # 存储 raw benchmark_context 供 MarketContextAgent 使用
+        context["_benchmark_context_raw"] = benchmark_context
 
-            # 存储 raw benchmark_context 供 MarketContextAgent 使用
-            context["_benchmark_context_raw"] = benchmark_context
+        if not ok:
+            raise AgentSkip("run_funnel returned ok=False")
 
-            if not ok:
-                return AgentResult(
-                    agent_name=self.name,
-                    status=PipelineStatus.FAILED,
-                    error="run_funnel returned ok=False",
-                    duration_ms=int((time.monotonic() - t0) * 1000),
-                )
-
-            screen = ScreenResult.from_legacy(
-                symbols_info=symbols_info,
-                total_scanned=0,  # Phase 2 才有精确统计
-            )
-            logger.info(
-                "ScreenerAgent: %d candidates selected",
-                len(screen.candidates),
-            )
-            return AgentResult(
-                agent_name=self.name,
-                status=PipelineStatus.COMPLETED,
-                payload=screen,
-                duration_ms=int((time.monotonic() - t0) * 1000),
-            )
-        except Exception as e:
-            logger.exception("ScreenerAgent failed")
-            return AgentResult(
-                agent_name=self.name,
-                status=PipelineStatus.FAILED,
-                error=str(e),
-                duration_ms=int((time.monotonic() - t0) * 1000),
-            )
+        screen = ScreenResult.from_legacy(
+            symbols_info=symbols_info,
+            total_scanned=0,  # TODO: 精确统计需拆解为独立 Tool 后实现
+        )
+        logger.info(
+            "ScreenerAgent: %d candidates selected",
+            len(screen.candidates),
+        )
+        return screen

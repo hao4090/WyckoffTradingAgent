@@ -1,13 +1,14 @@
 # -*- coding: utf-8 -*-
 """
-定时任务主入口：Wyckoff Funnel → 批量研报
+定时任务主入口：Wyckoff Funnel（Step2） → 批量研报（Step3） → 私人再平衡（Step4）
 
 配置来源：仅读取环境变量（GitHub Secrets），与 Streamlit 用户配置（Supabase）完全独立。
 环境变量：FEISHU_WEBHOOK_URL, WECOM_WEBHOOK_URL(可选), DINGTALK_WEBHOOK_URL(可选),
 DEFAULT_LLM_PROVIDER(可选，默认 gemini), GEMINI_API_KEY, GEMINI_MODEL,
 OPENAI_API_KEY, OPENAI_MODEL(可选), 以及其它厂商 *_API_KEY/*_MODEL/*_BASE_URL,
 SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY(可选), SUPABASE_USER_ID,
-TG_BOT_TOKEN, TG_CHAT_ID, MY_PORTFOLIO_STATE(可选兜底)
+TG_BOT_TOKEN, TG_CHAT_ID, MY_PORTFOLIO_STATE(可选兜底),
+STEP3_SKIP_LLM(可选), DAILY_JOB_SKIP_STEP4(可选), LOGS_DIR(可选)
 """
 from __future__ import annotations
 
@@ -207,7 +208,7 @@ def main() -> int:
         extract_operation_pool_codes,
         run_step3,
     )
-    from scripts.step4_rebalancer import run as run_step4
+    from core.strategy import run_step4
 
     summary: list[dict] = []
     has_blocking_failure = False
@@ -218,7 +219,7 @@ def main() -> int:
 
     _log("开始定时任务", logs_path)
 
-    # 阶段 1：Wyckoff Funnel
+    # Step2: Wyckoff Funnel
     t0 = datetime.now(TZ)
     step2_ok = False
     step2_err = None
@@ -235,7 +236,7 @@ def main() -> int:
         "elapsed_s": round(elapsed2, 1),
         "output": f"{len(symbols_info)} symbols",
     })
-    _log(f"阶段 1 Wyckoff Funnel: ok={step2_ok}, symbols={len(symbols_info)}, elapsed={elapsed2:.1f}s, err={step2_err}", logs_path)
+    _log(f"Step2 Wyckoff Funnel: ok={step2_ok}, symbols={len(symbols_info)}, elapsed={elapsed2:.1f}s, err={step2_err}", logs_path)
     if step2_err:
         has_blocking_failure = True
     elif benchmark_context:
@@ -253,7 +254,7 @@ def main() -> int:
         except Exception as e:
             _log(f"推荐记录入库失败: {e}", logs_path)
 
-    # 阶段 2：批量研报（可降级：失败不影响 Funnel 成功）
+    # Step3: 批量研报（可降级：失败不影响 Funnel 成功）
     step3_ok = True
     step3_err = None
     step3_springboard_codes: list[str] = []
@@ -290,7 +291,7 @@ def main() -> int:
                 )
             except Exception as e:
                 step3_springboard_codes = []
-                _log(f"阶段 2 批量研报: 起跳板解析失败，已降级为空。err={e}", logs_path)
+                _log(f"Step3 批量研报: 起跳板解析失败，已降级为空。err={e}", logs_path)
         elapsed3 = (datetime.now(TZ) - t0).total_seconds()
         summary.append({
             "step": "批量研报",
@@ -299,10 +300,10 @@ def main() -> int:
             "elapsed_s": round(elapsed3, 1),
             "output": f"{len(symbols_info)} symbols",
         })
-        _log(f"阶段 2 批量研报: ok={step3_ok}, elapsed={elapsed3:.1f}s, err={step3_err}", logs_path)
+        _log(f"Step3 批量研报: ok={step3_ok}, elapsed={elapsed3:.1f}s, err={step3_err}", logs_path)
         preview_codes = ", ".join(step3_springboard_codes[:8]) if step3_springboard_codes else "无"
         _log(
-            f"阶段 2 批量研报: 起跳板代码={len(step3_springboard_codes)} ({preview_codes})",
+            f"Step3 批量研报: 起跳板代码={len(step3_springboard_codes)} ({preview_codes})",
             logs_path,
         )
         if recommend_trade_date_int is not None:
@@ -320,9 +321,9 @@ def main() -> int:
                 _log(f"推荐记录AI标记失败: {e}", logs_path)
     else:
         summary.append({"step": "批量研报", "ok": True, "err": None, "elapsed_s": 0, "output": "skipped (no symbols)"})
-        _log("阶段 2 批量研报: 跳过（无筛选结果）", logs_path)
+        _log("Step3 批量研报: 跳过（无筛选结果）", logs_path)
 
-    # 阶段 3：私人账户再平衡（按 SUPABASE_USER_ID 唯一执行）
+    # Step4: 私人账户再平衡（按 SUPABASE_USER_ID 唯一执行）
     if skip_step4:
         summary.append({
             "step": "私人再平衡",
@@ -331,7 +332,7 @@ def main() -> int:
             "elapsed_s": 0,
             "output": "skipped (DAILY_JOB_SKIP_STEP4=1)",
         })
-        _log("阶段 3 私人再平衡: 跳过（DAILY_JOB_SKIP_STEP4=1）", logs_path)
+        _log("Step4 私人再平衡: 跳过（DAILY_JOB_SKIP_STEP4=1）", logs_path)
         step4_target = None
     else:
         step4_target, step4_target_reason = _load_step4_target()
@@ -343,7 +344,7 @@ def main() -> int:
             "elapsed_s": 0,
             "output": f"skipped ({step4_target_reason})",
         })
-        _log(f"阶段 3 私人再平衡: 跳过（{step4_target_reason}）", logs_path)
+        _log(f"Step4 私人再平衡: 跳过（{step4_target_reason}）", logs_path)
     elif not skip_step4:
         tg_bot_token = os.getenv("TG_BOT_TOKEN", "").strip()
         tg_chat_id = os.getenv("TG_CHAT_ID", "").strip()
@@ -355,7 +356,7 @@ def main() -> int:
                 "elapsed_s": 0,
                 "output": "skipped (TG_BOT_TOKEN/TG_CHAT_ID 未配置)",
             })
-            _log("阶段 3 私人再平衡: 跳过（TG_BOT_TOKEN/TG_CHAT_ID 未配置）", logs_path)
+            _log("Step4 私人再平衡: 跳过（TG_BOT_TOKEN/TG_CHAT_ID 未配置）", logs_path)
             step4_target = None
         if step4_target is None:
             pass
@@ -373,7 +374,7 @@ def main() -> int:
                     if code in allowed_set:
                         step4_candidate_meta.append(item)
             _log(
-                f"阶段 3 私人再平衡: 候选收口为 Step3 起跳板 {len(step4_candidate_meta)} 只",
+                f"Step4 私人再平衡: 候选收口为 Step3 起跳板 {len(step4_candidate_meta)} 只",
                 logs_path,
             )
             step4_ok = True
@@ -406,7 +407,7 @@ def main() -> int:
                 ),
             })
             _log(
-                f"阶段 3 私人再平衡: user={user_id}, portfolio={portfolio_id}, "
+                f"Step4 私人再平衡: user={user_id}, portfolio={portfolio_id}, "
                 f"ok={step4_ok}, reason={step4_reason}, elapsed={elapsed4:.1f}s, err={step4_err}",
                 logs_path,
             )
