@@ -183,8 +183,6 @@ def main() -> int:
 
     # Secret 完整性预检
     missing = []
-    if not webhook:
-        missing.append("FEISHU_WEBHOOK_URL")
     # 仅当需要调用模型时强制要求对应厂商 API Key
     require_api_key = (not step3_skip_llm) or (not skip_step4)
     if require_api_key and not api_key:
@@ -192,6 +190,9 @@ def main() -> int:
     if missing:
         _log(f"配置缺失: {', '.join(missing)}", logs_path)
         return 1
+    # IM 渠道均为可选，未配置时仅跳过推送
+    if not webhook and not wecom_webhook and not dingtalk_webhook:
+        _log("未配置任何 IM 渠道（飞书/企微/钉钉），筛选与研报仍会执行，推送将被跳过", logs_path)
 
     if args.dry_run:
         _log("--dry-run: 配置校验通过，退出", logs_path)

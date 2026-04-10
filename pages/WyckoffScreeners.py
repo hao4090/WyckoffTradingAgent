@@ -208,6 +208,6 @@ with content_col:
     st.divider()
     st.page_link(
         "pages/AIAnalysis.py",
-        label="前往 AI 分析（含完整管线）",
+        label="前往 AI 分析",
         icon="🤖",
     )

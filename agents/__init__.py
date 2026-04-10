@@ -1,7 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-Wyckoff Agent 层 — LiteLLM 统一适配 + 自研 OrchestratorAgent 编排。
+Wyckoff Agent 层 — 基于 Google ADK 的对话式智能投研 Agent。
 
-5 Agent 管线：ScreenerAgent → MarketContextAgent → WyckoffAnalystAgent
-→ StrategyAgent → NotifierAgent，由 OrchestratorAgent 协调执行顺序与重试。
+核心模块：
+- wyckoff_chat_agent.py — ADK LlmAgent 定义（威科夫人格）
+- chat_tools.py — 9 个 FunctionTool（包装引擎能力给对话 Agent）
+- session_manager.py — 会话管理（ADK Runner + InMemorySessionService）
 """

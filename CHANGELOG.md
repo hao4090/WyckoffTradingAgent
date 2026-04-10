@@ -1,34 +1,41 @@
 # Changelog
 
-## v3.0.0 (2026-04-07)
+## v3.0.0 (2026-04-09)
 
-**自研 Agent 架构 + 完整管线 + 代码瘦身**
+**对话即一切：威科夫读盘室上线**
 
-本版本是一次架构级大改造：引入 6 Agent 协作管线（自研 OrchestratorAgent + BaseAgent 基类，不依赖任何第三方 Agent SDK），移除 `openai-agents` 依赖，AI 分析页内置完整管线模式，并完成 ~190 行代码瘦身。
+v3.0 是一次从架构到交互的全面重构。打开首页，你面对的就是威科夫本人——用自然语言告诉他你想看什么，他会自主调用系统的全部能力，给你答案。
 
-### Agent 架构
-- **OrchestratorAgent**：自研 Pipeline 编排器，5 阶段顺序执行（ScreenerAgent → MarketContextAgent → WyckoffAnalystAgent → StrategyAgent → NotifierAgent），支持 `on_stage_start` / `on_stage_done` 回调与 stage 级重试。
-- **BaseAgent 基类**：`agents/contracts.py` 新增 `BaseAgent` + `AgentSkip`，5 个 Agent 统一继承，消除 `run()` 中 40+ 行重复的计时 + try/except + AgentResult 包装样板。
-- **LLM 适配**：通过 LiteLLM 统一适配层对接 Gemini / OpenAI / DeepSeek / 智谱 / Qwen / Kimi / 火山引擎 / Minimax 八家厂商。
-- **移除 `openai-agents` 依赖**：`requirements.txt` 删除 `openai-agents>=0.1.0`（项目代码从未实际使用该 SDK）。
+### 读盘室（首页对话）
 
-### 完整管线（AI 分析页内置）
-- **AI 分析页新增「完整管线」tab**：`AGENT_MODE=1` 时自动出现第 4 个选项「🚀 完整管线 (本地)」，一键运行 5 阶段 Pipeline 并实时展示每阶段进度。
-- **`app/agent_jobs.py`**：新增 `full_pipeline` 任务类型，进程内 daemon thread 执行，stage 级进度回调写入共享存储供 UI 轮询。
-- **`app/pipeline_renderers.py`**：Pipeline 进度面板与完成结果的独立渲染组件。
-- **修复线上崩溃**：Streamlit Cloud 无 `AGENT_MODE` 时不再暴露管线入口，避免向不支持 `full_pipeline` 的 GitHub Actions 发起无效 dispatch。
+- **与威科夫对话**：首页升级为智能对话界面。你可以用自然语言让威科夫搜股票、诊断个股、审判持仓、扫描全市场机会、查看大盘水温、生成研报、下达买卖指令、回顾推荐战绩。
+- **自主多步推理**：比如你说"帮我看看 000001 和 600519 哪个更值得买"，他会自动诊断两只、对比行情、综合推理后给出结论。无需你一步步操作，他自己决定该调什么工具、调几次。
+- **上下文记忆**：同一对话内支持追问。比如先说"帮我看看宁德时代"，再追问"它的均线结构怎么样"，他知道你在说哪只。
+- **流式输出**：回复逐字流入，和主流 AI 工具体验一致。工具调用时实时显示进度状态，推理过程可展开查看。
 
-### 代码瘦身（~190 行净减，零功能变化）
-- **共享 provider 工具**：`PROVIDER_LABELS` + `get_provider_credentials()` 提取到 `integrations/llm_client.py`。
-- **共享任务状态渲染**：`render_background_job_status()` 提取到 `app/background_jobs.py`。
-- **统一日期函数**：4 处 `_job_end_calendar_day()` 透传别名删除，直接调用 `resolve_end_calendar_day()`。
-- **统一通知分发**：step3 三处 feishu+wecom+dingtalk 手动 fan-out 改为 `_notify_all()` 闭包。
-- **统一 debug 落盘**：step3 / step4 各自的 `_dump_model_input()` 合并到 `tools/debug_io.py`。
-- **删除零调用存根**：`agents/llm_adapter.py` 已删除（全项目零引用）。
+### 系统精简
 
-### 文档更新
-- **README**：修正 Agent 架构说明（"OpenAI Agents SDK" → "自研 OrchestratorAgent"）、更新目录结构、修正陈旧错误消息引用。
-- **.env.example**：补充 `DEFAULT_LLM_PROVIDER` + 八家厂商 API Key 模板。
+- **AI 分析页**：仅保留单股"大师模式"深度分析。批量研报统一走读盘室对话触发，不再需要单独操作。
+- **下载历史**：从独立页面改为嵌入数据导出页底部，减少导航层级。
+- **代码大幅瘦身**：删除 12 个不再使用的旧文件，代码结构更干净。
+- **移除多余依赖**：`openai-agents` 依赖已删除。
+
+### 安全加固
+
+- **登出安全**：切换账号后自动重建对话会话，杜绝跨账号数据串用。
+- **用户数据隔离**：用户身份信息通过会话级上下文传递，不再使用进程全局变量，消除多用户并发风险。
+- **漏斗参数校验**：筛选股票池参数增加校验和别名支持，避免传入无效值时静默返回错误结果。
+
+### IM 通知不再强制
+
+- 飞书、企微、钉钉推送渠道全部改为可选。未配置任何 IM 渠道时，筛选和研报仍正常执行，仅跳过消息推送。
+- 最基础运行只需 `GEMINI_API_KEY` + `TUSHARE_TOKEN`。
+
+### 架构说明
+
+- **前台**：基于 Google ADK 构建的智能对话 Agent，LLM 自主理解意图和串联工具。
+- **后台**：GitHub Actions 定时执行的确定性批处理流水线（漏斗筛选 → 大盘水温 → AI 研报 → 持仓策略 → 通知推送），与对话 Agent 并行、互不干扰。
+- **README** 与页面文案全面更新，与新架构对齐。
 
 ## v2.1.0 (2026-04-02)
 

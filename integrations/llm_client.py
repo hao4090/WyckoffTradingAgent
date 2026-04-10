@@ -80,14 +80,12 @@ def get_provider_credentials(provider: str) -> tuple[str, str, str]:
         (st.session_state.get(f"{key_suffix}_model") or "").strip()
         or os.getenv(f"{env_prefix}_MODEL", "").strip()
     )
-    base_url = ""
-    if provider in OPENAI_COMPATIBLE_BASE_URLS:
-        base_url = (
-            st.session_state.get(f"{key_suffix}_base_url")
-            or os.getenv(f"{env_prefix}_BASE_URL")
-            or OPENAI_COMPATIBLE_BASE_URLS.get(provider, "")
-            or ""
-        ).strip()
+    base_url = (
+        (st.session_state.get(f"{key_suffix}_base_url") or "").strip()
+        or os.getenv(f"{env_prefix}_BASE_URL", "").strip()
+    )
+    if not base_url and provider in OPENAI_COMPATIBLE_BASE_URLS:
+        base_url = (OPENAI_COMPATIBLE_BASE_URLS.get(provider, "") or "").strip()
     if not model and provider == "gemini":
         model = st.session_state.get("gemini_model") or DEFAULT_GEMINI_MODEL
     return (api_key, model or "", base_url)
@@ -124,7 +122,7 @@ def call_llm(
         system_prompt: 系统提示词（Alpha 投委会等）。
         user_message: 用户消息（拼装好的 OHLCV 等）。
         images: 可选图片列表（PIL Image 或 bytes），仅部分模型支持。
-        base_url: 仅 OpenAI 兼容时使用，Gemini 忽略。
+        base_url: 可选代理地址，Gemini 和 OpenAI 兼容均支持。
         timeout: 请求超时秒数。
 
     Returns:
@@ -179,6 +177,7 @@ def call_llm(
             images=images,
             timeout=timeout,
             max_output_tokens=max_output_tokens,
+            base_url=(base_url or "").strip(),
         )
     if provider in OPENAI_COMPATIBLE_BASE_URLS:
         base = (base_url or OPENAI_COMPATIBLE_BASE_URLS.get(provider, "") or "").rstrip("/")
@@ -245,12 +244,16 @@ def _call_gemini(
     images: Optional[list],
     timeout: int,
     max_output_tokens: Optional[int],
+    base_url: str = "",
 ) -> str:
     from google import genai
     from google.genai import types
 
-    # 包含 timeout 的 HTTP 参数传入 Client
-    client = genai.Client(api_key=api_key, http_options={"timeout": timeout * 1000})
+    # 包含 timeout（+ 可选代理地址）的 HTTP 参数传入 Client
+    http_opts: dict = {"timeout": timeout * 1000}
+    if base_url:
+        http_opts["base_url"] = base_url.rstrip("/")
+    client = genai.Client(api_key=api_key, http_options=http_opts)
     
     resolved_max_tokens = (
         int(max_output_tokens)

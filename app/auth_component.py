@@ -280,6 +280,9 @@ def logout():
         pass
     clear_tokens_from_storage()
     reset_user_settings_state()
+    # 清理聊天状态，防止跨账号会话串用
+    for key in ("chat_manager", "chat_messages", "_chat_manager_user_id"):
+        st.session_state.pop(key, None)
     st.session_state.user = None
     st.session_state.access_token = None
     st.session_state.refresh_token = None
