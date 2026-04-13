@@ -3,7 +3,7 @@ import html
 import streamlit as st
 
 from app.auth_component import check_auth, login_form
-from core.token_storage import restore_tokens_from_storage
+from core.token_storage import restore_tokens_from_storage, persist_tokens_to_storage
 from integrations.supabase_market_signal import compose_market_banner, load_latest_market_signal_daily
 from integrations.llm_client import DEFAULT_GEMINI_MODEL, OPENAI_COMPATIBLE_BASE_URLS
 
@@ -117,6 +117,17 @@ def init_session_state() -> None:
                     st.rerun()
         except Exception:
             st.session_state["_token_restore_pass"] = 2  # 出错不再重试
+
+    # ── Cookie 同步：确保 session_state 里的 token 写入 Cookie ──
+    # 登录时 persist_tokens_to_storage 通过 st_javascript 写 Cookie，但紧跟着
+    # st.rerun()，JS iframe 来不及执行就被销毁，Cookie 从未实际写入。
+    # 这里在 rerun 后的正常渲染中补写一次：此时没有立即 rerun，JS 能正常执行。
+    # 下次 F5 时 st.context.cookies 就能同步读到 Cookie 了。
+    _acc = st.session_state.get("access_token") or ""
+    _ref = st.session_state.get("refresh_token") or ""
+    if _acc and _ref and not st.session_state.get("_cookies_synced"):
+        persist_tokens_to_storage(_acc, _ref)
+        st.session_state["_cookies_synced"] = True
 
 
 def _inject_base_ui_css() -> None:

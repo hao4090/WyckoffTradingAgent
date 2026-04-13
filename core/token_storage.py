@@ -29,8 +29,8 @@ def _restore_from_cookies() -> tuple[str | None, str | None]:
     try:
         import streamlit as st
         cookies = st.context.cookies
-        access = (cookies.get(_COOKIE_KEY_ACCESS) or "").strip()
-        refresh = (cookies.get(_COOKIE_KEY_REFRESH) or "").strip()
+        access = urllib.parse.unquote(cookies.get(_COOKIE_KEY_ACCESS) or "").strip()
+        refresh = urllib.parse.unquote(cookies.get(_COOKIE_KEY_REFRESH) or "").strip()
         if access and refresh:
             return (access, refresh)
     except Exception:
