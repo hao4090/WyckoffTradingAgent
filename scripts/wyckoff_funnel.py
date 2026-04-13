@@ -1,27 +1,23 @@
 # -*- coding: utf-8 -*-
-# Copyright (c) 2024 youngcan. All Rights Reserved.
+# Copyright (c) 2024-2026 youngcan. All Rights Reserved.
 # 本代码仅供个人学习研究使用，未经授权不得用于商业目的。
 # 商业授权请联系作者支付授权费用。
 
 """
-Wyckoff Funnel 定时任务：4 层漏斗筛选 → 飞书发送
+Wyckoff Funnel 定时任务：5 层漏斗筛选 → 多渠道推送
 
-Layer 1: 剥离垃圾 → Layer 2: 强弱甄别 → Layer 3: 板块共振 → Layer 4: 威科夫狙击
+Layer 1: 剥离垃圾（ST/北交所/科创板/市值/成交额）
+Layer 2: 六通道甄选（主升/潜伏/吸筹/地量/暗中护盘/点火破局）
+Layer 2.5: Markup 加速检测
+Layer 3: 板块共振（行业 Top-N）
+Layer 4: 威科夫狙击（Spring / SOS / LPS / Effort vs Result）
 """
 
 from __future__ import annotations
-from dataclasses import fields as dataclass_fields
 import json
 import os
-import socket
 import sys
 import time
-from concurrent.futures import (
-    ProcessPoolExecutor,
-    ThreadPoolExecutor,
-    TimeoutError as FuturesTimeoutError,
-    as_completed,
-)
 from datetime import date, datetime
 from pathlib import Path
 
@@ -33,8 +29,6 @@ if __name__ == "__main__" or not __package__:
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from integrations.fetch_a_share_csv import (
     _resolve_trading_window,
-    get_stocks_by_board,
-    _normalize_symbols,
 )
 from core.wyckoff_engine import (
     FunnelConfig,
@@ -42,7 +36,6 @@ from core.wyckoff_engine import (
     layer2_strength_detailed,
     layer3_sector_resonance,
     layer4_triggers,
-    normalize_hist_from_fetch,
     detect_markup_stage,
     detect_accum_stage,
     layer5_exit_signals,
@@ -52,24 +45,22 @@ from core.wyckoff_engine import (
 )
 from core.sector_rotation import (
     SECTOR_STATE_LABELS,
-    SECTOR_STATE_SCORE_BONUS,
     analyze_sector_rotation,
 )
 from integrations.data_source import (
     fetch_index_hist,
     fetch_sector_map,
     fetch_market_cap_map,
-    fetch_stock_spot_snapshot,
 )
 from utils.feishu import send_feishu_notification
 from utils.trading_clock import CN_TZ, resolve_end_calendar_day
 
-TRIGGER_LABELS = {
-    "sos": "SOS（量价点火）",
-    "spring": "Spring（终极震仓）",
-    "lps": "LPS（缩量回踩）",
-    "evr": "Effort vs Result（放量不跌）",
-}
+# ── tools/ 层导入 ──
+from tools.candidate_ranker import (
+    TRIGGER_LABELS,
+    rank_l3_candidates as _rank_l3_candidates,
+)
+
 TRADING_DAYS = int(os.getenv("FUNNEL_TRADING_DAYS", "320"))
 MAX_RETRIES = int(os.getenv("FUNNEL_FETCH_RETRIES", "2"))
 RETRY_BASE_DELAY = float(os.getenv("FUNNEL_RETRY_BASE_DELAY", "1.0"))
@@ -83,14 +74,6 @@ EXECUTOR_MODE = os.getenv("FUNNEL_EXECUTOR_MODE", "process").strip().lower()
 if EXECUTOR_MODE not in {"thread", "process"}:
     EXECUTOR_MODE = "process"
 ENFORCE_TARGET_TRADE_DATE = False
-FUNNEL_ENABLE_SPOT_PATCH = os.getenv("FUNNEL_ENABLE_SPOT_PATCH", "1").strip().lower() in {
-    "1",
-    "true",
-    "yes",
-    "on",
-}
-FUNNEL_SPOT_PATCH_RETRIES = int(os.getenv("FUNNEL_SPOT_PATCH_RETRIES", "2"))
-FUNNEL_SPOT_PATCH_SLEEP = float(os.getenv("FUNNEL_SPOT_PATCH_SLEEP", "0.2"))
 BREADTH_MA_WINDOW = int(os.getenv("FUNNEL_BREADTH_MA_WINDOW", "20"))
 BREADTH_RISK_OFF_THRESHOLD = float(os.getenv("FUNNEL_BREADTH_RISK_OFF_PCT", "20.0"))
 BREADTH_RISK_ON_THRESHOLD = float(os.getenv("FUNNEL_BREADTH_RISK_ON_PCT", "60.0"))
@@ -139,721 +122,23 @@ FUNNEL_CARD_STYLE = os.getenv("FUNNEL_CARD_STYLE", "legacy_compact").strip().low
 FUNNEL_EVR_POLICY = os.getenv("FUNNEL_EVR_POLICY", "all_regimes").strip().lower()
 
 
-def _parse_int_env(name: str, default: int) -> int:
-    raw = str(os.getenv(name, "") or "").strip()
-    if not raw:
-        return default
-    try:
-        return int(float(raw))
-    except Exception:
-        return default
+from tools.funnel_config import (    apply_funnel_cfg_overrides as _apply_funnel_cfg_overrides,
+)
 
 
-def _parse_bool(raw: str) -> bool:
-    return raw.strip().lower() in {"1", "true", "yes", "on"}
+from tools.symbol_pool import (    resolve_symbol_pool_from_env as _resolve_symbol_pool_from_env,
+    _stock_name_map,
+)
 
 
-def _apply_funnel_cfg_overrides(cfg: FunnelConfig) -> None:
-    """
-    将 .env 中的 FUNNEL_CFG_* 参数映射到 FunnelConfig。
-    示例：FUNNEL_CFG_MIN_MARKET_CAP_YI=35
-    """
-    for f in dataclass_fields(FunnelConfig):
-        if f.name == "enable_evr_trigger":
-            # EVR 仅由 regime 自动决策，不接受环境变量覆盖。
-            continue
-        key = f"FUNNEL_CFG_{f.name.upper()}"
-        raw = os.getenv(key)
-        if raw is None:
-            continue
-        val = raw.strip()
-        if not val:
-            continue
-        try:
-            current = getattr(cfg, f.name, None)
-            if isinstance(current, bool):
-                parsed = _parse_bool(val)
-            elif isinstance(current, int) and not isinstance(current, bool):
-                parsed = int(float(val))
-            elif isinstance(current, float):
-                parsed = float(val)
-            else:
-                parsed = val
-            setattr(cfg, f.name, parsed)
-        except Exception as e:
-            print(f"[funnel] ⚠️ 忽略非法配置 {key}={raw!r}: {e}")
+from tools.data_fetcher import (    latest_trade_date_from_hist as _latest_trade_date_from_hist,
+    fetch_all_ohlcv,
+)
 
 
-def _normalize_hist(df: pd.DataFrame) -> pd.DataFrame:
-    return normalize_hist_from_fetch(df)
-
-
-def _fetch_hist(symbol: str, window, adjust: str) -> pd.DataFrame:
-    from integrations.fetch_a_share_csv import _fetch_hist as _fh
-
-    df = _fh(symbol=symbol, window=window, adjust=adjust)
-    return _normalize_hist(df)
-
-
-def _stock_name_map() -> dict[str, str]:
-    try:
-        from integrations.fetch_a_share_csv import get_all_stocks
-
-        items = get_all_stocks()
-        return {
-            x.get("code", ""): x.get("name", "") for x in items if isinstance(x, dict)
-        }
-    except Exception:
-        return {}
-
-
-def _fetch_one_with_retry(
-    sym: str, window, max_retries: int = MAX_RETRIES
-) -> tuple[str, pd.DataFrame | None]:
-    """在子进程中执行，单票硬超时 + 重试，避免个别数据源卡死拖慢整批。"""
-    socket.setdefaulttimeout(SOCKET_TIMEOUT)
-    for attempt in range(max_retries):
-        try:
-            df = _run_with_timeout(sym, window, FETCH_TIMEOUT)
-            return (sym, df)
-        except Exception:
-            if attempt < max_retries - 1:
-                delay = RETRY_BASE_DELAY * (attempt + 1)
-                time.sleep(delay)
-    return (sym, None)
-
-
-def _fetch_one_with_retry_thread(
-    sym: str, window, max_retries: int = MAX_RETRIES
-) -> tuple[str, pd.DataFrame | None]:
-    """
-    线程模式：避免 signal，依赖数据源请求超时与重试。
-    """
-    for attempt in range(max_retries):
-        try:
-            df = _fetch_hist(sym, window, "qfq")
-            return (sym, df)
-        except Exception:
-            if attempt < max_retries - 1:
-                delay = RETRY_BASE_DELAY * (attempt + 1)
-                time.sleep(delay)
-    return (sym, None)
-
-
-def _run_with_timeout(sym: str, window, timeout_s: int) -> pd.DataFrame:
-    """
-    在 worker 进程内给单票请求加硬超时（Unix 下用 SIGALRM）。
-    若平台不支持 SIGALRM（例如 Windows），则退化为直接调用。
-    注意：在 Windows / 不支持 SIGALRM 的运行环境里，本函数不会提供单票硬超时，
-    仅依赖外层批次超时(BATCH_TIMEOUT)做兜底。
-    """
-    if timeout_s <= 0:
-        return _fetch_hist(sym, window, "qfq")
-
-    try:
-        import signal
-    except Exception:
-        return _fetch_hist(sym, window, "qfq")
-
-    if not hasattr(signal, "SIGALRM"):
-        return _fetch_hist(sym, window, "qfq")
-
-    def _alarm_handler(signum, frame):  # pragma: no cover - signal handler
-        raise TimeoutError(f"single fetch timeout>{timeout_s}s")
-
-    old = signal.signal(signal.SIGALRM, _alarm_handler)
-    signal.alarm(timeout_s)
-    try:
-        return _fetch_hist(sym, window, "qfq")
-    finally:
-        signal.alarm(0)
-        signal.signal(signal.SIGALRM, old)
-
-
-def _job_end_calendar_day() -> date:
-    """
-    定时任务统一口径：
-    - 北京时间 17:00-23:59 走 T（当天）
-    - 北京时间 00:00-16:59 走 T-1（上一自然日）
-    """
-    return resolve_end_calendar_day()
-
-
-def _resolve_symbol_pool_from_env() -> tuple[list[str], dict[str, str], dict[str, int | str]]:
-    pool_mode = str(os.getenv("FUNNEL_POOL_MODE", "") or "").strip().lower()
-    limit_count = max(_parse_int_env("FUNNEL_POOL_LIMIT_COUNT", 0), 0)
-
-    if pool_mode == "manual":
-        manual_raw = str(os.getenv("FUNNEL_POOL_MANUAL_SYMBOLS", "") or "")
-        all_name_map = _stock_name_map()
-        symbols = _normalize_symbols(
-            [x.strip() for x in manual_raw.replace(";", ",").replace("\n", ",").split(",")]
-        )
-        name_map = {code: all_name_map.get(code, "") for code in symbols}
-        return (
-            symbols,
-            name_map,
-            {
-                "pool_mode": "manual",
-                "pool_main": 0,
-                "pool_chinext": 0,
-                "pool_merged": len(symbols),
-                "pool_st_excluded": 0,
-                "pool_limit": limit_count,
-            },
-        )
-
-    board_name = str(os.getenv("FUNNEL_POOL_BOARD", "") or "").strip().lower()
-    if pool_mode == "board" and board_name in {"main", "chinext", "all"}:
-        if board_name == "all":
-            items = get_stocks_by_board("main") + get_stocks_by_board("chinext")
-        else:
-            items = get_stocks_by_board(board_name)
-        merged_code_to_name: dict[str, str] = {}
-        for item in items:
-            code = str(item.get("code", "")).strip()
-            if not code:
-                continue
-            if code not in merged_code_to_name:
-                merged_code_to_name[code] = str(item.get("name", "")).strip()
-        symbols = _normalize_symbols(list(merged_code_to_name.keys()))
-        if limit_count > 0:
-            symbols = symbols[:limit_count]
-        return (
-            symbols,
-            {code: merged_code_to_name.get(code, "") for code in symbols},
-            {
-                "pool_mode": "board",
-                "pool_main": len(items) if board_name == "main" else len(get_stocks_by_board("main")) if board_name == "all" else 0,
-                "pool_chinext": len(items) if board_name == "chinext" else len(get_stocks_by_board("chinext")) if board_name == "all" else 0,
-                "pool_merged": len(symbols),
-                "pool_st_excluded": 0,
-                "pool_limit": limit_count,
-            },
-        )
-
-    main_items = get_stocks_by_board("main")
-    chinext_items = get_stocks_by_board("chinext")
-    merged_code_to_name: dict[str, str] = {}
-    for item in main_items + chinext_items:
-        code = str(item.get("code", "")).strip()
-        if not code:
-            continue
-        if code not in merged_code_to_name:
-            merged_code_to_name[code] = str(item.get("name", "")).strip()
-    merged_symbols = _normalize_symbols(list(merged_code_to_name.keys()))
-    st_symbols = [
-        sym for sym in merged_symbols if "ST" in merged_code_to_name.get(sym, "").upper()
-    ]
-    st_set = set(st_symbols)
-    all_symbols = [sym for sym in merged_symbols if sym not in st_set]
-    if limit_count > 0:
-        all_symbols = all_symbols[:limit_count]
-    return (
-        all_symbols,
-        {code: merged_code_to_name.get(code, "") for code in all_symbols},
-        {
-            "pool_mode": "default",
-            "pool_main": len(main_items),
-            "pool_chinext": len(chinext_items),
-            "pool_merged": len(merged_symbols),
-            "pool_st_excluded": len(st_symbols),
-            "pool_limit": limit_count,
-        },
-    )
-
-
-def _latest_trade_date_from_hist(df: pd.DataFrame) -> date | None:
-    if df is None or df.empty or "date" not in df.columns:
-        return None
-    s = pd.to_datetime(df["date"], errors="coerce").dropna()
-    if s.empty:
-        return None
-    return s.iloc[-1].date()
-
-
-def _append_spot_bar_if_needed(
-    symbol: str,
-    df: pd.DataFrame,
-    target_trade_date: date,
-) -> tuple[pd.DataFrame, bool]:
-    if not FUNNEL_ENABLE_SPOT_PATCH or df is None or df.empty:
-        return (df, False)
-    latest_trade_date = _latest_trade_date_from_hist(df)
-    if latest_trade_date is None or latest_trade_date >= target_trade_date:
-        return (df, False)
-    if target_trade_date != datetime.now(CN_TZ).date():
-        return (df, False)
-
-    df_s = df.sort_values("date").reset_index(drop=True)
-    last_close_series = pd.to_numeric(df_s.get("close"), errors="coerce").dropna()
-    prev_close = float(last_close_series.iloc[-1]) if not last_close_series.empty else None
-    prev_volume = None
-    prev_amount = None
-    if "volume" in df_s.columns:
-        vol_s = pd.to_numeric(df_s.get("volume"), errors="coerce").dropna()
-        if not vol_s.empty:
-            prev_volume = float(vol_s.iloc[-1])
-    if "amount" in df_s.columns:
-        amt_s = pd.to_numeric(df_s.get("amount"), errors="coerce").dropna()
-        if not amt_s.empty:
-            prev_amount = float(amt_s.iloc[-1])
-
-    for attempt in range(max(FUNNEL_SPOT_PATCH_RETRIES, 1)):
-        snap = fetch_stock_spot_snapshot(symbol, force_refresh=attempt > 0)
-        close_v = None if not snap else snap.get("close")
-        if close_v is None or float(close_v) <= 0:
-            if attempt < max(FUNNEL_SPOT_PATCH_RETRIES, 1) - 1:
-                time.sleep(max(FUNNEL_SPOT_PATCH_SLEEP, 0.0))
-            continue
-
-        close_f = float(close_v)
-        open_f = float(snap.get("open")) if snap and snap.get("open") is not None else close_f
-        high_raw = float(snap.get("high")) if snap and snap.get("high") is not None else close_f
-        low_raw = float(snap.get("low")) if snap and snap.get("low") is not None else close_f
-        high_f = max(high_raw, open_f, close_f)
-        low_f = min(low_raw, open_f, close_f)
-        turnover_ok = bool(float(snap.get("turnover_unit_ok", 0.0))) if snap else False
-        if turnover_ok:
-            volume_f = float(snap.get("volume")) if snap.get("volume") is not None else 0.0
-            amount_f = float(snap.get("amount")) if snap.get("amount") is not None else 0.0
-        else:
-            # 单位不可信时仅补价格，量额沿用上一交易日，避免把量能信号污染为 0。
-            volume_f = float(prev_volume) if prev_volume is not None else float("nan")
-            amount_f = float(prev_amount) if prev_amount is not None else float("nan")
-        pct_f = float(snap.get("pct_chg")) if snap and snap.get("pct_chg") is not None else None
-        if pct_f is None and prev_close and prev_close > 0:
-            pct_f = (close_f - prev_close) / prev_close * 100.0
-
-        new_row = {
-            "date": target_trade_date.isoformat(),
-            "open": open_f,
-            "high": high_f,
-            "low": low_f,
-            "close": close_f,
-            "volume": volume_f,
-            "amount": amount_f,
-            "pct_chg": pct_f if pct_f is not None else 0.0,
-        }
-        patched = pd.concat([df_s, pd.DataFrame([new_row])], ignore_index=True)
-        patched = patched.sort_values("date").reset_index(drop=True)
-        return (patched, True)
-    return (df, False)
-
-
-def _terminate_executor_processes(ex: ProcessPoolExecutor, batch_no: int) -> None:
-    """
-    批次超时时，主动终止仍存活的子进程，避免 wait=False 仅“逻辑结束”但进程继续跑。
-    这里使用私有属性是出于稳定性权衡：该任务更看重硬超时止损。
-    """
-    procs = getattr(ex, "_processes", {}) or {}
-    killed = 0
-    for proc in procs.values():
-        try:
-            if proc.is_alive():
-                proc.terminate()
-                proc.join(timeout=1)
-                if proc.is_alive():
-                    proc.kill()
-                    proc.join(timeout=1)
-                killed += 1
-        except Exception as e:
-            print(f"[funnel] 批次#{batch_no} 终止子进程异常: {e}")
-    if killed:
-        print(f"[funnel] 批次#{batch_no} 已强制终止 {killed} 个卡住子进程")
-
-
-def _analyze_benchmark_and_tune_cfg(
-    bench_df: pd.DataFrame | None,
-    smallcap_df: pd.DataFrame | None,
-    cfg: FunnelConfig,
-    breadth: dict | None = None,
-) -> dict:
-    """
-    Step 0：大盘总闸
-    - 输出宏观水温（RISK_ON / NEUTRAL / RISK_OFF）
-    - 在 RISK_OFF 时动态收紧个股过滤阈值
-    """
-    context = {
-        "regime": "UNKNOWN",
-        "main_code": "000001",
-        "close": None,
-        "ma50": None,
-        "ma200": None,
-        "ma50_slope_5d": None,
-        "recent3_pct": [],
-        "recent3_cum_pct": None,
-        "smallcap_code": SMALLCAP_BENCH_CODE,
-        "smallcap_close": None,
-        "smallcap_recent3_pct": [],
-        "smallcap_recent3_cum_pct": None,
-        "smallcap_today_pct": None,
-        "panic_triggered": False,
-        "panic_reasons": [],
-        "repair_triggered": False,
-        "repair_reasons": [],
-        "tuned": {
-            "min_avg_amount_wan": cfg.min_avg_amount_wan,
-            "rs_min_long": cfg.rs_min_long,
-            "rs_min_short": cfg.rs_min_short,
-            "rps_fast_min": cfg.rps_fast_min,
-            "rps_slow_min": cfg.rps_slow_min,
-        },
-        "breadth": {
-            "ratio_pct": None,
-            "prev_ratio_pct": None,
-            "delta_pct": None,
-            "sample_size": 0,
-            "ma_window": BREADTH_MA_WINDOW,
-        },
-    }
-    close = None
-    ma50 = None
-    ma200 = None
-    ma50_slope_5d = None
-    recent3_list: list[float] = []
-    recent3_cum = None
-    main_today_pct = None
-    main_prev_pct = None
-    main_vol_ma5 = None
-    main_vol_ma20 = None
-    main_vol_ratio_5_20 = None
-    main_volume_state = "未知"
-    small_close = None
-    small_recent3_list: list[float] = []
-    small_recent3_cum = None
-    small_today_pct = None
-    small_prev_pct = None
-
-    if bench_df is not None and not bench_df.empty:
-        b = bench_df.sort_values("date").copy()
-        b["close"] = pd.to_numeric(b["close"], errors="coerce")
-        b["pct_chg"] = pd.to_numeric(b["pct_chg"], errors="coerce")
-        b["volume"] = pd.to_numeric(b.get("volume"), errors="coerce")
-        if len(b) >= 60:
-            close = float(b["close"].iloc[-1])
-            ma50 = float(b["close"].rolling(50).mean().iloc[-1])
-            ma200 = float(b["close"].rolling(200).mean().iloc[-1])
-            ma50_prev = b["close"].rolling(50).mean().shift(5).iloc[-1]
-            ma50_slope_5d = None if pd.isna(ma50_prev) else float(ma50 - ma50_prev)
-            recent3 = b["pct_chg"].dropna().tail(3)
-            recent3_list = [float(x) for x in recent3.tolist()]
-            if not recent3.empty:
-                recent3_cum = float(((recent3 / 100.0 + 1.0).prod() - 1.0) * 100.0)
-            if recent3_list:
-                main_today_pct = float(recent3_list[-1])
-                if len(recent3_list) >= 2:
-                    main_prev_pct = float(recent3_list[-2])
-            vol = b["volume"].dropna()
-            if len(vol) >= 20:
-                main_vol_ma20 = float(vol.tail(20).mean())
-                main_vol_ma5 = float(vol.tail(5).mean())
-                if main_vol_ma20 > 0:
-                    main_vol_ratio_5_20 = float(main_vol_ma5 / main_vol_ma20)
-                    if main_vol_ratio_5_20 >= 1.15:
-                        main_volume_state = "放量"
-                    elif main_vol_ratio_5_20 <= 0.85:
-                        main_volume_state = "缩量"
-                    else:
-                        main_volume_state = "平量"
-
-    if smallcap_df is not None and not smallcap_df.empty:
-        s = smallcap_df.sort_values("date").copy()
-        s["close"] = pd.to_numeric(s["close"], errors="coerce")
-        s["pct_chg"] = pd.to_numeric(s["pct_chg"], errors="coerce")
-        if len(s) >= 10:
-            small_close = float(s["close"].iloc[-1])
-            s_recent3 = s["pct_chg"].dropna().tail(3)
-            small_recent3_list = [float(x) for x in s_recent3.tolist()]
-            if not s_recent3.empty:
-                small_recent3_cum = float(
-                    ((s_recent3 / 100.0 + 1.0).prod() - 1.0) * 100.0
-                )
-            if small_recent3_list:
-                small_today_pct = float(small_recent3_list[-1])
-                if len(small_recent3_list) >= 2:
-                    small_prev_pct = float(small_recent3_list[-2])
-
-    regime = "NEUTRAL"
-    if (
-        ma200 is not None
-        and ma50 is not None
-        and ma50_slope_5d is not None
-        and recent3_cum is not None
-        and close is not None
-    ):
-        risk_off = (
-            (close < ma200)
-            and (ma50 < ma200)
-            and (ma50_slope_5d < 0)
-            and (recent3_cum <= -2.0)
-        )
-        risk_on = (
-            (close > ma50 > ma200) and (ma50_slope_5d > 0) and (recent3_cum >= 0.0)
-        )
-        if risk_off:
-            regime = "RISK_OFF"
-        elif risk_on:
-            regime = "RISK_ON"
-
-    breadth_ratio = None
-    breadth_prev = None
-    breadth_delta = None
-    breadth_sample = 0
-    if breadth:
-        breadth_ratio = breadth.get("ratio_pct")
-        breadth_prev = breadth.get("prev_ratio_pct")
-        breadth_delta = breadth.get("delta_pct")
-        breadth_sample = int(breadth.get("sample_size") or 0)
-    if breadth_ratio is not None:
-        if float(breadth_ratio) <= BREADTH_RISK_OFF_THRESHOLD:
-            regime = "RISK_OFF"
-        elif float(breadth_ratio) >= BREADTH_RISK_ON_THRESHOLD:
-            if breadth_delta is None or float(breadth_delta) >= BREADTH_RISK_ON_MIN_DELTA:
-                regime = "RISK_ON"
-
-        # 强力悬崖检测 (Breadth Cliff Drop): 赚了指数不赚钱，暗流涌动的隐性雪崩
-        if breadth_delta is not None and float(breadth_delta) <= BREADTH_CLIFF_DROP_PCT:
-            regime = "RISK_OFF"
-
-    panic_reasons: list[str] = []
-    if main_today_pct is not None and float(main_today_pct) <= float(CRASH_MAIN_DAY_DROP_PCT):
-        panic_reasons.append(
-            f"main_day_drop={main_today_pct:.2f}%<=阈值{CRASH_MAIN_DAY_DROP_PCT:.2f}%"
-        )
-    if small_today_pct is not None and float(small_today_pct) <= float(CRASH_SMALL_DAY_DROP_PCT):
-        panic_reasons.append(
-            f"smallcap_day_drop={small_today_pct:.2f}%<=阈值{CRASH_SMALL_DAY_DROP_PCT:.2f}%"
-        )
-    if breadth_ratio is not None and float(breadth_ratio) <= float(CRASH_BREADTH_RATIO_PCT):
-        panic_reasons.append(
-            f"breadth_ratio={float(breadth_ratio):.2f}%<=阈值{CRASH_BREADTH_RATIO_PCT:.2f}%"
-        )
-    if breadth_delta is not None and float(breadth_delta) <= float(CRASH_BREADTH_DELTA_PCT):
-        panic_reasons.append(
-            f"breadth_delta={float(breadth_delta):.2f}%<=阈值{CRASH_BREADTH_DELTA_PCT:.2f}%"
-        )
-    repair_reasons: list[str] = []
-    if panic_reasons:
-        regime = "CRASH"
-    elif PANIC_REPAIR_ENABLE:
-        # 改进逻辑：支持连续反弹（前 1-2 天是 CRASH，最近 1-2 天反弹）
-        prev_panic = (
-            (main_prev_pct is not None and float(main_prev_pct) <= float(CRASH_MAIN_DAY_DROP_PCT))
-            or (
-                small_prev_pct is not None
-                and float(small_prev_pct) <= float(CRASH_SMALL_DAY_DROP_PCT)
-            )
-        )
-        rebound_ok = (
-            (main_today_pct is not None and float(main_today_pct) >= float(PANIC_REPAIR_MAIN_REBOUND_PCT))
-            or (
-                small_today_pct is not None
-                and float(small_today_pct) >= float(PANIC_REPAIR_SMALL_REBOUND_PCT)
-            )
-        )
-        # 连续反弹：最近 2 日都反弹
-        continuous_rebound = False
-        if main_today_pct is not None and main_prev_pct is not None:
-            continuous_rebound = (
-                float(main_today_pct) >= float(PANIC_REPAIR_MAIN_REBOUND_PCT) * 0.5
-                and float(main_prev_pct) >= float(PANIC_REPAIR_MAIN_REBOUND_PCT) * 0.5
-            )
-        
-        if (prev_panic and rebound_ok) or continuous_rebound:
-            regime = "PANIC_REPAIR"
-            repair_reasons = [
-                f"prev_panic(main_prev={main_prev_pct}, small_prev={small_prev_pct})",
-                f"rebound_ok(main_today={main_today_pct}, small_today={small_today_pct})",
-            ]
-
-    # EVR 开关策略：
-    # - all_regimes(默认): 各市场水温都开启，保持信号连续性
-    # - cold_only: 仅在 RISK_OFF/CRASH 开启
-    # - respect_cfg: 使用 FunnelConfig 当前值
-    # - off: 全关闭
-    evr_policy = FUNNEL_EVR_POLICY
-    if evr_policy in {"cold_only", "risk_off", "risk_off_crash"}:
-        cfg.enable_evr_trigger = regime in {"RISK_OFF", "CRASH"}
-    elif evr_policy in {"off", "disabled", "disable", "0", "false", "no"}:
-        cfg.enable_evr_trigger = False
-    elif evr_policy in {"respect_cfg", "cfg", "config"}:
-        cfg.enable_evr_trigger = bool(cfg.enable_evr_trigger)
-    else:
-        cfg.enable_evr_trigger = True
-
-    # 动态调参：风险越冷，过滤越严
-    if regime == "CRASH":
-        cfg.min_avg_amount_wan = max(cfg.min_avg_amount_wan, CRASH_MIN_AVG_AMOUNT_WAN)
-        cfg.rs_min_long = max(cfg.rs_min_long, 4.0)
-        cfg.rs_min_short = max(cfg.rs_min_short, 1.0)
-        cfg.rps_fast_min = max(cfg.rps_fast_min, 80.0)  # 改为 80.0（从 90.0）
-        cfg.rps_slow_min = max(cfg.rps_slow_min, 75.0)  # 改为 75.0（从 85.0）
-    elif regime == "PANIC_REPAIR":
-        cfg.min_avg_amount_wan = max(cfg.min_avg_amount_wan, PANIC_REPAIR_MIN_AVG_AMOUNT_WAN)
-        cfg.rs_min_long = max(cfg.rs_min_long, 1.0)
-        cfg.rs_min_short = max(cfg.rs_min_short, 0.2)
-        cfg.rps_fast_min = max(cfg.rps_fast_min, 75.0)
-        cfg.rps_slow_min = max(cfg.rps_slow_min, 65.0)
-    elif regime == "RISK_OFF":
-        cfg.min_avg_amount_wan = max(cfg.min_avg_amount_wan, RISK_OFF_MIN_AVG_AMOUNT_WAN)
-        cfg.rs_min_long = max(cfg.rs_min_long, 2.0)
-        cfg.rs_min_short = max(cfg.rs_min_short, 0.5)
-        cfg.rps_fast_min = max(cfg.rps_fast_min, 80.0)
-        cfg.rps_slow_min = max(cfg.rps_slow_min, 75.0)
-        if recent3_cum is not None and recent3_cum <= -4.0:
-            cfg.min_avg_amount_wan = max(
-                cfg.min_avg_amount_wan,
-                RISK_OFF_DEEP_MIN_AVG_AMOUNT_WAN,
-            )
-            cfg.rs_min_long = max(cfg.rs_min_long, 4.0)
-            cfg.rs_min_short = max(cfg.rs_min_short, 1.0)
-    elif regime == "RISK_ON":
-        cfg.rs_min_long = max(cfg.rs_min_long, 0.0)
-        cfg.rs_min_short = max(cfg.rs_min_short, 0.0)
-        cfg.rps_fast_min = min(cfg.rps_fast_min, 70.0)
-        cfg.rps_slow_min = min(cfg.rps_slow_min, 60.0)
-
-    price_zone = "结构待确认"
-    if close is not None and ma50 is not None and ma200 is not None:
-        if close > ma50 > ma200:
-            price_zone = "多头上方"
-        elif close < ma50 < ma200:
-            price_zone = "空头下方"
-        elif close >= ma50 and close <= ma200:
-            price_zone = "反抽修复区"
-        elif close < ma50 and close >= ma200:
-            price_zone = "高位回撤区"
-        else:
-            price_zone = "震荡博弈区"
-    ratio_text = (
-        f"{main_vol_ratio_5_20:.2f}x"
-        if main_vol_ratio_5_20 is not None
-        else "未知"
-    )
-    market_pv_summary = (
-        f"沪深300近5日均量/20日均量={ratio_text}（{main_volume_state}），"
-        f"当前位于{price_zone}。"
-    )
-    if regime == "RISK_ON":
-        market_pv_outlook = (
-            "次日推演：若量能维持在20日均量0.95x上方且不破MA50，"
-            "偏强震荡延续概率更高；若放量跌破MA50，需转入防守。"
-        )
-    elif regime == "PANIC_REPAIR":
-        market_pv_outlook = (
-            "次日推演：修复阶段以确认强度为先，若放量站稳MA50可继续修复；"
-            "若缩量冲高回落，按反抽处理。"
-        )
-    elif regime == "NEUTRAL":
-        market_pv_outlook = (
-            "次日推演：中性震荡为主，等待“放量突破近高”或“放量跌破MA50”后再确认方向。"
-        )
-    elif regime in {"RISK_OFF", "CRASH"}:
-        market_pv_outlook = (
-            "次日推演：防守优先，若出现放量下压并失守MA50，继续收缩风险敞口；"
-            "仅在缩量止跌后再评估试探。"
-        )
-    else:
-        market_pv_outlook = "次日推演：结构信息不足，先观察量能与MA50得失再定方向。"
-
-    context.update(
-        {
-            "regime": regime,
-            "close": close,
-            "ma50": ma50,
-            "ma200": ma200,
-            "ma50_slope_5d": ma50_slope_5d,
-            "recent3_pct": recent3_list,
-            "recent3_cum_pct": recent3_cum,
-            "main_today_pct": main_today_pct,
-            "main_vol_ma5": main_vol_ma5,
-            "main_vol_ma20": main_vol_ma20,
-            "main_vol_ratio_5_20": main_vol_ratio_5_20,
-            "main_volume_state": main_volume_state,
-            "market_pv_summary": market_pv_summary,
-            "market_pv_outlook": market_pv_outlook,
-            "smallcap_close": small_close,
-            "smallcap_recent3_pct": small_recent3_list,
-            "smallcap_recent3_cum_pct": small_recent3_cum,
-            "smallcap_today_pct": small_today_pct,
-            "panic_triggered": bool(panic_reasons),
-            "panic_reasons": panic_reasons,
-            "repair_triggered": bool(repair_reasons),
-            "repair_reasons": repair_reasons,
-            "tuned": {
-                "min_avg_amount_wan": cfg.min_avg_amount_wan,
-                "rs_min_long": cfg.rs_min_long,
-                "rs_min_short": cfg.rs_min_short,
-                "rps_fast_min": cfg.rps_fast_min,
-                "rps_slow_min": cfg.rps_slow_min,
-                "enable_evr_trigger": bool(cfg.enable_evr_trigger),
-            },
-            "breadth": {
-                "ratio_pct": breadth_ratio,
-                "prev_ratio_pct": breadth_prev,
-                "delta_pct": breadth_delta,
-                "sample_size": breadth_sample,
-                "ma_window": BREADTH_MA_WINDOW,
-            },
-        }
-    )
-    return context
-
-
-def _calc_market_breadth(
-    df_map: dict[str, pd.DataFrame],
-    ma_window: int = BREADTH_MA_WINDOW,
-) -> dict:
-    """
-    全市场广度：
-    breadth = 收盘价站上 MA20 的股票占比（%）。
-    额外给出前一日广度与日变化，用于识别扩散/收敛。
-    """
-    valid_now = 0
-    valid_prev = 0
-    above_now = 0
-    above_prev = 0
-    w = max(int(ma_window), 2)
-    for df in df_map.values():
-        if df is None or df.empty:
-            continue
-        s = df
-        if "date" in s.columns:
-            try:
-                if not s["date"].is_monotonic_increasing:
-                    s = s.sort_values("date")
-            except Exception:
-                s = s.sort_values("date")
-
-        close = pd.to_numeric(s.get("close"), errors="coerce").dropna().tail(w + 1)
-        if len(close) < (w + 1):
-            continue
-
-        c_now = float(close.iloc[-1])
-        ma_now = float(close.iloc[1:].mean())
-        c_prev = float(close.iloc[-2])
-        ma_prev = float(close.iloc[:-1].mean())
-
-        valid_now += 1
-        if c_now >= ma_now:
-            above_now += 1
-
-        valid_prev += 1
-        if c_prev >= ma_prev:
-            above_prev += 1
-
-    ratio_now = (above_now / valid_now * 100.0) if valid_now > 0 else None
-    ratio_prev = (above_prev / valid_prev * 100.0) if valid_prev > 0 else None
-    delta = None
-    if ratio_now is not None and ratio_prev is not None:
-        delta = ratio_now - ratio_prev
-    return {
-        "ratio_pct": ratio_now,
-        "prev_ratio_pct": ratio_prev,
-        "delta_pct": delta,
-        "sample_size": valid_now,
-    }
+from tools.market_regime import (    analyze_benchmark_and_tune_cfg as _analyze_benchmark_and_tune_cfg,
+    calc_market_breadth as _calc_market_breadth,
+)
 
 
 def _dump_full_fetch_snapshot(
@@ -978,124 +263,6 @@ def _dump_full_fetch_snapshot(
         return None
 
 
-def _calc_close_return_pct(close_series: pd.Series, lookback: int) -> float | None:
-    s = pd.to_numeric(close_series, errors="coerce").dropna()
-    lb = max(int(lookback), 1)
-    if len(s) <= lb:
-        return None
-    start = float(s.iloc[-lb - 1])
-    end = float(s.iloc[-1])
-    if start <= 0:
-        return None
-    return (end - start) / start * 100.0
-
-
-def _rank_l3_candidates(
-    l3_symbols: list[str],
-    df_map: dict[str, pd.DataFrame],
-    sector_map: dict[str, str],
-    triggers: dict[str, list[tuple[str, float]]],
-    top_sectors: list[str],
-    l2_channel_map: dict[str, str] | None = None,
-    sector_rotation_map: dict[str, dict] | None = None,
-) -> tuple[list[str], dict[str, float]]:
-    """
-    对 L3 股票做统一优先级排序，仅用于 AI 输入队列。
-    """
-    if not l3_symbols:
-        return ([], {})
-
-    trigger_score_map: dict[str, float] = {}
-    for key in TRIGGER_LABELS.keys():
-        for code, score in triggers.get(key, []):
-            trigger_score_map[code] = max(trigger_score_map.get(code, 0.0), float(score))
-
-    rows: list[dict] = []
-    channel_map = l2_channel_map or {}
-    rotation_map = sector_rotation_map or {}
-    for code in l3_symbols:
-        df = df_map.get(code)
-        industry = str(sector_map.get(code, "") or "未知行业")
-        l2_channel = str(channel_map.get(code, "") or "未标注通道")
-        sector_state = str((rotation_map.get(industry, {}) or {}).get("state", "") or "")
-        ret20 = None
-        ret5 = None
-        ret3 = None
-        min_vol_ratio_5d = None
-        if df is not None and not df.empty:
-            s = df.sort_values("date")
-            close = pd.to_numeric(s.get("close"), errors="coerce")
-            volume = pd.to_numeric(s.get("volume"), errors="coerce")
-            ret20 = _calc_close_return_pct(close, 20)
-            ret5 = _calc_close_return_pct(close, 5)
-            ret3 = _calc_close_return_pct(close, 3)
-            vol_ma20 = volume.rolling(20).mean()
-            vol_ratio = volume / vol_ma20.replace(0, pd.NA)
-            min_vol_ratio_5d = pd.to_numeric(vol_ratio.tail(5), errors="coerce").min()
-
-        rows.append(
-            {
-                "code": code,
-                "industry": industry,
-                "ret20": ret20,
-                "ret5": ret5,
-                "ret3": ret3,
-                "min_vol_ratio_5d": min_vol_ratio_5d,
-                "trigger_score": float(trigger_score_map.get(code, 0.0)),
-                "l2_channel": l2_channel,
-                "sector_state": sector_state,
-            }
-        )
-
-    rank_df = pd.DataFrame(rows)
-    for col, fill_default in (("ret20", 0.0), ("ret5", 0.0), ("ret3", 0.0), ("min_vol_ratio_5d", 1.0)):
-        rank_df[col] = pd.to_numeric(rank_df[col], errors="coerce")
-        if rank_df[col].notna().any():
-            rank_df[col] = rank_df[col].fillna(float(rank_df[col].median()))
-        else:
-            rank_df[col] = rank_df[col].fillna(fill_default)
-
-    rank_df["q20"] = rank_df["ret20"].rank(pct=True, ascending=True, method="average")
-    rank_df["q5"] = rank_df["ret5"].rank(pct=True, ascending=True, method="average")
-    rank_df["q3"] = rank_df["ret3"].rank(pct=True, ascending=True, method="average")
-    rank_df["dry_q"] = rank_df["min_vol_ratio_5d"].rank(
-        pct=True, ascending=False, method="average"
-    )
-    if rank_df["trigger_score"].nunique(dropna=False) > 1:
-        rank_df["trigger_q"] = rank_df["trigger_score"].rank(
-            pct=True, ascending=True, method="average"
-        )
-    else:
-        rank_df["trigger_q"] = rank_df["trigger_score"].apply(
-            lambda x: 1.0 if float(x) > 0 else 0.0
-        )
-
-    hot_sector_set = set(top_sectors or [])
-    # 板块快速轮动期 hot_bonus 降低：Top3 板块次日有 49% 概率反转
-    rank_df["hot_bonus"] = rank_df["industry"].isin(hot_sector_set).astype(float) * 0.02
-    rank_df["sector_bonus"] = rank_df["sector_state"].map(
-        lambda x: float(SECTOR_STATE_SCORE_BONUS.get(str(x), 0.0))
-    )
-    # 权重重新分配：降低滞后动量(q20)权重，提升 Wyckoff 触发(trigger_q)权重，
-    # 加入 3 日短期动量(q3) 适配板块快速轮动。
-    rank_df["watch_score"] = (
-        0.25 * rank_df["q20"]
-        + 0.20 * rank_df["q5"]
-        + 0.05 * rank_df["q3"]
-        + 0.20 * rank_df["dry_q"]
-        + 0.30 * rank_df["trigger_q"]
-        + rank_df["hot_bonus"]
-        + rank_df["sector_bonus"]
-    )
-
-    rank_df = rank_df.sort_values("watch_score", ascending=False).reset_index(drop=True)
-    ranked_symbols = rank_df["code"].astype(str).tolist()
-    score_map = {
-        str(r["code"]): float(r["watch_score"])
-        for _, r in rank_df.iterrows()
-    }
-    return (ranked_symbols, score_map)
-
 
 def run_funnel_job(
     include_debug_context: bool = False,
@@ -1104,7 +271,7 @@ def run_funnel_job(
     cfg = FunnelConfig(trading_days=TRADING_DAYS)
     _apply_funnel_cfg_overrides(cfg)
     window = _resolve_trading_window(
-        end_calendar_day=_job_end_calendar_day(),
+        end_calendar_day=resolve_end_calendar_day(),
         trading_days=TRADING_DAYS,
     )
     start_s = window.start_trade_date.strftime("%Y%m%d")
@@ -1150,129 +317,22 @@ def run_funnel_job(
         print(f"[funnel] 小盘基准加载成功: {SMALLCAP_BENCH_CODE}")
     except Exception as e:
         print(f"[funnel] 小盘基准加载失败 {SMALLCAP_BENCH_CODE}: {e}")
-    # 并发拉取日线（只负责取数，不负责计算）
-    all_df_map: dict[str, pd.DataFrame] = {}
-    fetch_ok = 0
-    fetch_fail = 0
-    fetch_date_mismatch = 0
-    fetch_spot_patched = 0
-
-    print(
-        f"[funnel] 开始拉取 {len(all_symbols)} 只股票日线 "
-        f"(executor={EXECUTOR_MODE}, batch_size={BATCH_SIZE}, max_workers={MAX_WORKERS}, batch_timeout={BATCH_TIMEOUT}s, "
-        f"fetch_timeout={FETCH_TIMEOUT}s, retries={MAX_RETRIES})"
+    # 并发拉取日线（委托 tools/data_fetcher）
+    all_df_map, fetch_stats = fetch_all_ohlcv(
+        symbols=all_symbols,
+        window=window,
+        enforce_target_trade_date=ENFORCE_TARGET_TRADE_DATE,
+        batch_size=BATCH_SIZE,
+        max_workers=MAX_WORKERS,
+        batch_timeout=BATCH_TIMEOUT,
+        batch_sleep=BATCH_SLEEP,
+        executor_mode=EXECUTOR_MODE,
     )
-    total_fetch_started = time.monotonic()
-    for i in range(0, len(all_symbols), BATCH_SIZE):
-        batch_no = i // BATCH_SIZE + 1
-        batch = all_symbols[i : i + BATCH_SIZE]
-        batch_ok = 0
-        batch_fail = 0
-        batch_started = time.monotonic()
-        print(f"[funnel] 批次#{batch_no}/{total_batches} 启动，股票数={len(batch)}")
-
-        use_process = EXECUTOR_MODE == "process"
-        ex = (
-            ProcessPoolExecutor(max_workers=MAX_WORKERS)
-            if use_process
-            else ThreadPoolExecutor(max_workers=MAX_WORKERS)
-        )
-        fetch_fn = (
-            _fetch_one_with_retry if use_process else _fetch_one_with_retry_thread
-        )
-        futures = {ex.submit(fetch_fn, s, window): s for s in batch}
-        try:
-            for f in as_completed(futures, timeout=BATCH_TIMEOUT):
-                sym = futures[f]
-                try:
-                    _, df = f.result()
-                except Exception as e:
-                    print(f"[funnel] 批次#{batch_no} 拉取失败 {sym}: {e}")
-                    batch_fail += 1
-                    fetch_fail += 1
-                    continue
-                if df is not None:
-                    if ENFORCE_TARGET_TRADE_DATE:
-                        latest_trade_date = _latest_trade_date_from_hist(df)
-                        if latest_trade_date != window.end_trade_date:
-                            df, patched = _append_spot_bar_if_needed(
-                                sym,
-                                df,
-                                window.end_trade_date,
-                            )
-                            if patched:
-                                latest_trade_date = _latest_trade_date_from_hist(df)
-                                fetch_spot_patched += 1
-                            batch_fail += 1
-                            if latest_trade_date != window.end_trade_date:
-                                fetch_fail += 1
-                                fetch_date_mismatch += 1
-                                print(
-                                    f"[funnel] 批次#{batch_no} 跳过 {sym}: "
-                                    f"latest_trade_date={latest_trade_date}, "
-                                    f"target_trade_date={window.end_trade_date}"
-                                )
-                                continue
-                            batch_fail -= 1
-                    batch_ok += 1
-                    fetch_ok += 1
-                    all_df_map[sym] = df
-                else:
-                    batch_fail += 1
-                    fetch_fail += 1
-        except FuturesTimeoutError:
-            pending_symbols = [futures[ft] for ft in futures if not ft.done()]
-            timed_out = len(pending_symbols)
-            batch_fail += timed_out
-            fetch_fail += timed_out
-            print(
-                f"[funnel] 批次#{batch_no} 超时({BATCH_TIMEOUT}s)，"
-                f"已完成={batch_ok + batch_fail - timed_out}/{len(batch)}，"
-                f"未完成={timed_out}，将跳过剩余任务"
-            )
-            if pending_symbols:
-                preview = ", ".join(pending_symbols[:10])
-                suffix = "..." if len(pending_symbols) > 10 else ""
-                print(f"[funnel] 批次#{batch_no} 超时股票: {preview}{suffix}")
-            if use_process:
-                _terminate_executor_processes(ex, batch_no)
-        finally:
-            for ft in futures:
-                ft.cancel()
-            ex.shutdown(wait=False, cancel_futures=True)
-
-        batch_elapsed = time.monotonic() - batch_started
-        batch_qps = (batch_ok / batch_elapsed) if batch_elapsed > 0 else 0.0
-        print(
-            f"[funnel] 批次#{batch_no} 完成: 成功={batch_ok}, 失败={batch_fail}, "
-            f"耗时={batch_elapsed:.1f}s, qps={batch_qps:.2f}, 累计成功={fetch_ok}, 累计失败={fetch_fail}"
-        )
-        if i + BATCH_SIZE < len(all_symbols) and BATCH_SLEEP > 0:
-            time.sleep(BATCH_SLEEP)
-
-    total_fetch_elapsed = time.monotonic() - total_fetch_started
-    overall_qps = (fetch_ok / total_fetch_elapsed) if total_fetch_elapsed > 0 else 0.0
-    print(
-        f"[funnel] 日线拉取完成: 成功={fetch_ok}, 失败={fetch_fail}, "
-        f"总耗时={total_fetch_elapsed:.1f}s, 平均qps={overall_qps:.2f}"
-    )
-    if ENFORCE_TARGET_TRADE_DATE:
-        print(
-            f"[funnel] 交易日对齐检查: mismatch={fetch_date_mismatch}, "
-            f"spot_patched={fetch_spot_patched}, target_trade_date={window.end_trade_date}"
-        )
     snapshot_dir = _dump_full_fetch_snapshot(
         df_map=all_df_map,
         all_symbols=all_symbols,
         window=window,
-        fetch_stats={
-            "fetch_ok": fetch_ok,
-            "fetch_fail": fetch_fail,
-            "fetch_date_mismatch": fetch_date_mismatch,
-            "fetch_spot_patched": fetch_spot_patched,
-            "fetch_elapsed_s": round(total_fetch_elapsed, 2),
-            "fetch_qps": round(overall_qps, 3),
-        },
+        fetch_stats=fetch_stats,
         bench_df=bench_df,
         smallcap_df=smallcap_df,
     )
