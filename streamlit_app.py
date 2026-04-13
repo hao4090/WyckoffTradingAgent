@@ -353,9 +353,11 @@ with content_col:
                     use_container_width=True,
                 )
             with compose_mid:
+                # 新对话时通过切换 key 清空输入框（Streamlit 不允许直接写 widget 绑定的 session_state）
+                _draft_key = f"_chat_draft_{st.session_state.get('_draft_gen', 0)}"
                 draft_input = st.text_input(
                     "输入消息",
-                    key="_chat_draft",
+                    key=_draft_key,
                     label_visibility="collapsed",
                     placeholder="问我关于股票的任何问题...",
                 )
@@ -366,7 +368,7 @@ with content_col:
             if mgr:
                 mgr.new_session()
             st.session_state["chat_messages"] = []
-            st.session_state["_chat_draft"] = ""
+            st.session_state["_draft_gen"] = st.session_state.get("_draft_gen", 0) + 1
             st.rerun()
 
         # 直接使用本次表单返回值，避免 Enter 提交时被 session_state 清空导致消息丢失
@@ -469,6 +471,6 @@ with content_col:
                             "role": "assistant",
                             "content": final_response,
                         })
-                    st.session_state["_chat_draft"] = ""
+                    st.session_state["_draft_gen"] = st.session_state.get("_draft_gen", 0) + 1
 
             st.rerun()
