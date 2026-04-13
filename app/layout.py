@@ -119,15 +119,30 @@ def init_session_state() -> None:
             st.session_state["_token_restore_pass"] = 2  # 出错不再重试
 
     # ── Cookie 同步：确保 session_state 里的 token 写入 Cookie ──
-    # 登录时 persist_tokens_to_storage 通过 st_javascript 写 Cookie，但紧跟着
-    # st.rerun()，JS iframe 来不及执行就被销毁，Cookie 从未实际写入。
-    # 这里在 rerun 后的正常渲染中补写一次：此时没有立即 rerun，JS 能正常执行。
-    # 下次 F5 时 st.context.cookies 就能同步读到 Cookie 了。
     _acc = st.session_state.get("access_token") or ""
     _ref = st.session_state.get("refresh_token") or ""
     if _acc and _ref and not st.session_state.get("_cookies_synced"):
         persist_tokens_to_storage(_acc, _ref)
         st.session_state["_cookies_synced"] = True
+
+    # ── 临时诊断（定位后删除） ──
+    import logging as _lg
+    _dbg = _lg.getLogger("auth_debug")
+    try:
+        _ck = dict(st.context.cookies)
+        _dbg.warning("[AUTH DEBUG] cookies keys=%s", list(_ck.keys()))
+        _dbg.warning("[AUTH DEBUG] session access_token=%s", "SET" if st.session_state.get("access_token") else "EMPTY")
+        _dbg.warning("[AUTH DEBUG] _cookies_synced=%s, _token_restore_pass=%s",
+                     st.session_state.get("_cookies_synced"), st.session_state.get("_token_restore_pass"))
+        # 在页面侧边栏展示诊断（方便直接看到）
+        with st.sidebar.expander("🔧 Auth Debug", expanded=False):
+            st.write("cookies keys:", list(_ck.keys()))
+            st.write("wyckoff_access_token in cookies:", bool(_ck.get("wyckoff_access_token")))
+            st.write("session access_token:", "SET" if st.session_state.get("access_token") else "EMPTY")
+            st.write("_cookies_synced:", st.session_state.get("_cookies_synced"))
+            st.write("_token_restore_pass:", st.session_state.get("_token_restore_pass"))
+    except Exception as _e:
+        _dbg.warning("[AUTH DEBUG] error: %s", _e)
 
 
 def _inject_base_ui_css() -> None:
