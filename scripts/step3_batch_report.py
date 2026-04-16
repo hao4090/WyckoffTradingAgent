@@ -75,10 +75,10 @@ STEP3_MAX_AI_INPUT = int(
     os.getenv("STEP3_MAX_AI_INPUT", "0")
 )
 STEP3_DEFAULT_CONTEXT_CAP = max(
-    int(os.getenv("STEP3_DEFAULT_CONTEXT_CAP", "8")),
+    int(os.getenv("STEP3_DEFAULT_CONTEXT_CAP", "0")),
     0,
 )
-STEP3_MAX_PER_INDUSTRY = int(os.getenv("STEP3_MAX_PER_INDUSTRY", "5"))
+STEP3_MAX_PER_INDUSTRY = int(os.getenv("STEP3_MAX_PER_INDUSTRY", "0"))
 STEP3_EMPTY_COMPRESSION_FALLBACK_CAP = max(
     int(os.getenv("STEP3_EMPTY_COMPRESSION_FALLBACK_CAP", "8")),
     0,
@@ -334,6 +334,8 @@ def ultimate_compressor(
     df = candidates_df.copy()
     if max_total <= 0:
         max_total = len(df)
+    if max_per_industry <= 0:
+        max_per_industry = len(df)
     df["code"] = df.get("code", "").astype(str).str.strip()
     df["bias_200"] = pd.to_numeric(df.get("bias_200"), errors="coerce")
     df["rs_10"] = pd.to_numeric(df.get("rs_10"), errors="coerce")
