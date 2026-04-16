@@ -791,6 +791,78 @@ def get_recommendation_tracking(limit: int = 20) -> dict:
         return {"error": str(e)}
 
 
+# ---------------------------------------------------------------------------
+# Tool 10: 信号确认池查询
+# ---------------------------------------------------------------------------
+
+def get_signal_pending(status: str = "all", limit: int = 30) -> dict:
+    """查询信号确认池（signal_pending）中的信号状态。
+
+    信号确认系统：L4 触发信号（SOS/Spring/LPS/EVR）先进入 pending 池，
+    经 1-3 天价格行为确认后变为 confirmed（可操作）或 expired（失效）。
+
+    Args:
+        status: 筛选状态，可选 "all"、"pending"、"confirmed"、"expired"，默认 "all"
+        limit: 返回记录数，默认 30，最大 100
+
+    Returns:
+        信号确认池记录列表。
+    """
+    try:
+        from integrations.supabase_base import create_admin_client, is_admin_configured
+        from core.constants import TABLE_SIGNAL_PENDING
+
+        if not is_admin_configured():
+            return {"error": "Supabase 未配置，无法查询信号确认池"}
+
+        limit = min(max(limit, 1), 100)
+        client = create_admin_client()
+        query = client.table(TABLE_SIGNAL_PENDING).select("*")
+
+        if status in ("pending", "confirmed", "expired"):
+            query = query.eq("status", status)
+
+        rows = query.order("updated_at", desc=True).limit(limit).execute().data or []
+
+        if not rows:
+            status_label = {"pending": "待确认", "confirmed": "已确认", "expired": "已过期"}.get(status, "")
+            return {"message": f"暂无{status_label}信号记录", "records": []}
+
+        records = [
+            {
+                "code": f"{int(r.get('code', 0)):06d}",
+                "name": str(r.get("name", "")),
+                "signal_type": str(r.get("signal_type", "")),
+                "signal_date": str(r.get("signal_date", "")),
+                "status": str(r.get("status", "")),
+                "days_elapsed": r.get("days_elapsed", 0),
+                "ttl_days": r.get("ttl_days", 3),
+                "signal_score": r.get("signal_score", 0),
+                "snap_close": r.get("snap_close"),
+                "confirm_date": str(r.get("confirm_date", "") or ""),
+                "expire_date": str(r.get("expire_date", "") or ""),
+                "confirm_reason": str(r.get("confirm_reason", "") or ""),
+                "regime": str(r.get("regime", "") or ""),
+                "industry": str(r.get("industry", "") or ""),
+            }
+            for r in rows
+        ]
+
+        # 统计摘要
+        status_counts = {}
+        for rec in records:
+            s = rec["status"]
+            status_counts[s] = status_counts.get(s, 0) + 1
+
+        return {
+            "total": len(records),
+            "status_counts": status_counts,
+            "records": records,
+        }
+    except Exception as e:
+        logger.exception("get_signal_pending error")
+        return {"error": str(e)}
+
 
 # ---------------------------------------------------------------------------
 # Helper
@@ -820,4 +892,5 @@ WYCKOFF_TOOLS = [
     generate_ai_report,
     generate_strategy_decision,
     get_recommendation_tracking,
+    get_signal_pending,
 ]
