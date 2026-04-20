@@ -528,7 +528,7 @@ def run_backtest(
     buy_friction_pct: float = DEFAULT_BUY_FRICTION_PCT,
     sell_friction_pct: float = DEFAULT_SELL_FRICTION_PCT,
     regime_filter: bool = False,
-    pending_mode: str = "off",
+    pending_mode: str = "both",
 ) -> tuple[pd.DataFrame, dict]:
     if pending_mode not in {"off", "only", "both"}:
         raise ValueError("pending_mode 必须是 off / only / both")
@@ -1185,6 +1185,7 @@ def _build_summary_md(summary: dict) -> str:
             f"- 买入摩擦成本: {_fmt_metric(summary.get('buy_friction_pct'), 3)}%",
             f"- 卖出摩擦成本: {_fmt_metric(summary.get('sell_friction_pct'), 3)}%",
             f"- 元数据口径: {meta_mode}",
+            f"- 信号确认模式: {summary.get('pending_mode')}",
             f"- 大盘水温仓控: {'开启' if summary.get('regime_filter') else '关闭'}",
             f"- 成交样本: {summary.get('trades')}",
             "",
@@ -1351,8 +1352,8 @@ def main() -> int:
     parser.add_argument(
         "--pending-mode",
         choices=["off", "only", "both"],
-        default="off",
-        help="信号确认模式: off=直接用L4信号(默认), only=仅用确认后信号, both=两者合并",
+        default="both",
+        help="信号确认模式: off=直接用L4信号, only=仅用确认后信号, both=两者合并(默认, 与生产链路对齐)",
     )
     args = parser.parse_args()
 

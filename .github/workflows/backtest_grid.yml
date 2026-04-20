@@ -33,7 +33,7 @@ on:
       trailing_stop:
         description: "移动止盈(%), 如 -5 表示从最高点回撤5%卖出, 0=关闭"
         required: true
-        default: "-5"
+        default: "0"
 
 concurrency:
   group: backtest-grid-${{ github.ref }}
@@ -47,7 +47,7 @@ env:
   BT_BOARD: ${{ inputs.board || 'all' }}
   BT_SAMPLE_SIZE: ${{ inputs.sample_size || '0' }}
   BT_TRADING_DAYS: ${{ inputs.trading_days || '320' }}
-  BT_TRAILING_STOP: ${{ inputs.trailing_stop || '-5' }}
+  BT_TRAILING_STOP: ${{ inputs.trailing_stop || '0' }}
 
 jobs:
   # ────────────────────────────────────────────────
@@ -306,8 +306,8 @@ jobs:
           retention-days: 3
 
   # ────────────────────────────────────────────────
-  # Phase 2: 36 个并行 job 读快照做回测（无需网络拉取）
-  # 维度: hold_days × stop_loss × take_profit × trailing_stop
+  # Phase 2: 18 个并行 job 读快照做回测（无需网络拉取）
+  # 维度: hold_days × stop_loss × take_profit（生产对齐默认关闭 trailing）
   # ────────────────────────────────────────────────
   grid:
     runs-on: ubuntu-latest
@@ -319,7 +319,7 @@ jobs:
         hold_days: [5, 10, 15]
         stop_loss: [-6, -7, -8]
         take_profit: [0, 18]
-        trailing_stop: [0, -5]
+        trailing_stop: [0]
     env:
       PYTHONUNBUFFERED: "1"
       TZ: Asia/Shanghai
@@ -380,7 +380,7 @@ jobs:
             --stop-loss "${STOP}" \
             --take-profit "${TP}" \
             --sltp-priority stop_first \
-            --regime-filter \
+            --pending-mode both \
             --trailing-stop "${TRAIL}" \
             --snapshot-dir snapshot_data \
             --output-dir "${OUT_DIR}" \
