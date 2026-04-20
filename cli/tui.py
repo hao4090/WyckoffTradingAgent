@@ -266,8 +266,8 @@ class WyckoffTUI(App):
         inp = self.query_one("#chat-input", Input)
         mode = self._input_mode
 
-        if not text:
-            # 留空取消
+        # MODEL_NAME 和 MODEL_URL 留空表示用默认值，不取消
+        if not text and mode not in (_InputState.MODEL_NAME, _InputState.MODEL_URL):
             log.write(Text.from_markup("[dim]已取消[/dim]"))
             self._input_mode = _InputState.NONE
             inp.placeholder = "问我关于股票的任何问题... (/help 查看命令)"
