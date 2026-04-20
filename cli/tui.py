@@ -231,6 +231,7 @@ class WyckoffTUI(App):
         log.write(Text(""))
         log.write(Text.from_markup(f"[bold cyan]❯[/bold cyan] {text}"))
         self._messages.append({"role": "user", "content": text})
+        self.query_one("#spinner", SpinnerBar).start("思考中")
         self._run_agent()
 
     # ----- 斜杠命令 -----
@@ -456,8 +457,6 @@ class WyckoffTUI(App):
 
         def _spinner_stop():
             self.call_from_thread(self.query_one("#spinner", SpinnerBar).stop)
-
-        _spinner_start()
 
         total_input = 0
         total_output = 0
