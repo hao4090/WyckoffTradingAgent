@@ -313,9 +313,10 @@ class WyckoffTUI(App):
             except Exception as e:
                 err = str(e)
                 if "Invalid login" in err or "invalid" in err.lower():
-                    log.write(Text.from_markup("  [red]邮箱或密码错误[/red]"))
+                    log.write(Text.from_markup("  [red]邮箱或密码错误，请重新输入[/red]"))
                 else:
-                    log.write(Text.from_markup(f"  [red]登录失败: {err}[/red]"))
+                    log.write(Text.from_markup(f"  [red]登录失败: {err}，请重新输入[/red]"))
+                self._start_login()
 
         elif mode == _InputState.MODEL_PROVIDER:
             prov = text.strip().lower()
