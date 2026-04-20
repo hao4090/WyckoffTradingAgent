@@ -122,8 +122,10 @@ def main():
     from cli.tools import ToolRegistry
     tools = ToolRegistry()
 
+    session_expired = False
     try:
-        from cli.auth import restore_session
+        from cli.auth import restore_session, _load_session
+        had_session = _load_session() is not None
         session = restore_session()
         if session:
             tools.state.update({
@@ -132,6 +134,8 @@ def main():
                 "access_token": session.get("access_token", ""),
                 "refresh_token": session.get("refresh_token", ""),
             })
+        elif had_session:
+            session_expired = True
     except Exception:
         pass
 
@@ -170,6 +174,7 @@ def main():
         tools=tools,
         state=state,
         system_prompt=system_prompt,
+        session_expired=session_expired,
     )
     app.run()
 

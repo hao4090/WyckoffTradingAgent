@@ -96,6 +96,7 @@ class WyckoffTUI(App):
         tools: Any = None,
         state: dict | None = None,
         system_prompt: str = "",
+        session_expired: bool = False,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -103,6 +104,7 @@ class WyckoffTUI(App):
         self._tools = tools
         self._state = state or {}
         self._system_prompt = system_prompt
+        self._session_expired = session_expired
         self._messages: list[dict] = []
         self._session_tokens = {"input": 0, "output": 0, "rounds": 0}
         self._busy = False
@@ -125,6 +127,10 @@ class WyckoffTUI(App):
         if not self._provider:
             log.write(Text.from_markup(
                 "[yellow]⚠ 未配置模型，请输入 /model 设置[/yellow]\n"
+            ))
+        if self._session_expired:
+            log.write(Text.from_markup(
+                "[yellow]⚠ 登录已过期，请输入 /login 重新登录[/yellow]\n"
             ))
         self.query_one("#chat-input", Input).focus()
 
