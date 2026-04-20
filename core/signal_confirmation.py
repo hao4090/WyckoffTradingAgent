@@ -130,6 +130,10 @@ def run_confirmation_cycle(
     confirmed_symbols: list[dict] = []
 
     for sig in pending_signals:
+        # 信号日当天不做确认检查：当天 K 线 == 信号快照，无法验证"次日回踩"
+        if str(sig.get("signal_date", ""))[:10] == str(trade_date)[:10]:
+            continue
+
         code_str = f"{int(sig['code']):06d}"
         df = df_map.get(code_str)
         if df is None or df.empty:

@@ -9,10 +9,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from datetime import datetime, timezone
 import os
 import re
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from supabase import Client
 from core.constants import TABLE_USER_SETTINGS
@@ -45,7 +48,7 @@ def load_user_settings_admin(user_id: str) -> dict[str, Any] | None:
             return None
         return row
     except Exception as e:
-        print(f"[supabase_portfolio] load_user_settings_admin failed: {e}")
+        logger.debug("[supabase_portfolio] load_user_settings_admin failed: {e}")
         return None
 
 
@@ -161,7 +164,7 @@ def load_portfolio_state(portfolio_id: str = "USER_LIVE") -> dict[str, Any] | No
             "positions": positions,
         }
     except Exception as e:
-        print(f"[supabase_portfolio] load_portfolio_state failed: {e}")
+        logger.debug("[supabase_portfolio] load_portfolio_state failed: {e}")
         return None
 
 
@@ -216,7 +219,7 @@ def list_step4_targets(target_user_id: str | None = None) -> list[dict[str, Any]
             )
         return targets
     except Exception as e:
-        print(f"[supabase_portfolio] list_step4_targets failed: {e}")
+        logger.debug("[supabase_portfolio] list_step4_targets failed: {e}")
         return []
 
 
@@ -254,7 +257,7 @@ def check_daily_run_exists(
             for row in active_rows
         )
     except Exception as e:
-        print(f"[supabase_portfolio] check_daily_run_exists failed: {e}")
+        logger.debug("[supabase_portfolio] check_daily_run_exists failed: {e}")
         return False
 
 
@@ -283,7 +286,7 @@ def update_position_stops(portfolio_id: str, updates: list[dict[str, Any]]) -> b
             )
         return True
     except Exception as e:
-        print(f"[supabase_portfolio] update_position_stops failed: {e}")
+        logger.debug("[supabase_portfolio] update_position_stops failed: {e}")
         return False
 
 
@@ -334,7 +337,7 @@ def save_ai_trade_orders(
         client.table(TABLE_TRADE_ORDERS).insert(payload).execute()
         return True
     except Exception as e:
-        print(f"[supabase_portfolio] save_ai_trade_orders failed: {e}")
+        logger.debug("[supabase_portfolio] save_ai_trade_orders failed: {e}")
         return False
 
 
@@ -368,7 +371,7 @@ def cancel_trade_orders(
             )
         return len(active_rows)
     except Exception as e:
-        print(f"[supabase_portfolio] cancel_trade_orders failed: {e}")
+        logger.debug("[supabase_portfolio] cancel_trade_orders failed: {e}")
         return 0
 
 
@@ -398,5 +401,5 @@ def upsert_daily_nav(
         ).execute()
         return True
     except Exception as e:
-        print(f"[supabase_portfolio] upsert_daily_nav failed: {e}")
+        logger.debug("[supabase_portfolio] upsert_daily_nav failed: {e}")
         return False

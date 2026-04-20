@@ -38,6 +38,11 @@ except Exception:
     pass
 _silence_streamlit()
 
+# CLI 环境：只显示 CRITICAL，不泄漏 traceback 给用户
+import warnings as _warnings
+_warnings.filterwarnings("ignore", category=DeprecationWarning)
+_logging.basicConfig(level=_logging.CRITICAL)
+
 
 # ---------------------------------------------------------------------------
 # Provider 工厂
@@ -86,13 +91,30 @@ def _do_update():
     sys.exit(0)
 
 
+def _get_version() -> str:
+    try:
+        from importlib.metadata import version
+        return version("youngcan-wyckoff-analysis")
+    except Exception:
+        return "dev"
+
+
 def main():
-    parser = argparse.ArgumentParser(description="威科夫终端读盘室")
+    parser = argparse.ArgumentParser(
+        prog="wyckoff",
+        description="威科夫终端读盘室 — Wyckoff 量价分析 Agent",
+    )
+    parser.add_argument("-v", "--version", action="version", version=f"wyckoff {_get_version()}")
+    parser.add_argument("-q", "--quiet", action="store_true", help="静默模式，不显示 banner")
+    parser.add_argument("--no-color", action="store_true", help="禁用颜色输出")
     parser.add_argument(
         "command", nargs="?", default=None,
         help="子命令: update（升级到最新版）",
     )
     args = parser.parse_args()
+
+    if args.no_color:
+        os.environ["NO_COLOR"] = "1"
 
     if args.command == "update":
         _do_update()
@@ -161,25 +183,27 @@ def main():
         return False
 
     def _do_login():
-        """执行登录流程。"""
-        creds = ui.login_prompt()
-        if not creds:
-            return
-        email, password = creds
-        try:
-            from cli.auth import login
-            session = login(email, password)
-            auth_state["user_id"] = session["user_id"]
-            auth_state["email"] = session["email"]
-            # 更新工具的 user_id
-            tools._tool_context.state["user_id"] = session["user_id"]
-            ui.print_info(f"✓ 登录成功 ({session['email']})")
-        except Exception as e:
-            err_msg = str(e)
-            if "Invalid login" in err_msg or "invalid" in err_msg.lower():
-                ui.print_error("邮箱或密码错误。")
-            else:
-                ui.print_error(f"登录失败: {err_msg}")
+        """执行登录流程，失败后引导重新输入。"""
+        from cli.auth import login
+        while True:
+            creds = ui.login_prompt()
+            if not creds:
+                return
+            email, password = creds
+            try:
+                session = login(email, password)
+                auth_state["user_id"] = session["user_id"]
+                auth_state["email"] = session["email"]
+                tools._tool_context.state["user_id"] = session["user_id"]
+                ui.print_info(f"✓ 登录成功 ({session['email']})")
+                return
+            except Exception as e:
+                err_msg = str(e)
+                if "Invalid login" in err_msg or "invalid" in err_msg.lower():
+                    ui.print_error("邮箱或密码错误，请重新输入。")
+                else:
+                    ui.print_error(f"登录失败: {err_msg}")
+                    return
 
     def _do_logout():
         """执行登出。"""
@@ -191,8 +215,9 @@ def main():
         ui.print_info("已退出登录。")
 
     # Banner
-    model_hint = f"{state['provider_name']}:{state['model']}" if state["provider"] else ""
-    ui.print_banner(email=auth_state["email"], model=model_hint)
+    if not args.quiet:
+        model_hint = f"{state['provider_name']}:{state['model']}" if state["provider"] else ""
+        ui.print_banner(email=auth_state["email"], model=model_hint)
 
     # 对话历史
     messages: list[dict] = []
@@ -209,9 +234,13 @@ def main():
             if cmd in ("/quit", "/exit", "/q"):
                 ui.print_info("再见。")
                 break
-            elif cmd in ("/clear", "/new"):
+            elif cmd == "/clear":
+                os.system("clear" if os.name != "nt" else "cls")
+                model_hint = f"{state['provider_name']}:{state['model']}" if state["provider"] else ""
+                ui.print_banner(email=auth_state["email"], model=model_hint)
+            elif cmd == "/new":
                 messages.clear()
-                ui.print_info("对话已清空。")
+                ui.print_info("新对话已开始。")
                 continue
             elif cmd == "/help":
                 ui.print_help()
@@ -261,7 +290,7 @@ def main():
 
         try:
             from cli.agent import run
-            response = run(
+            result = run(
                 provider=state["provider"],
                 tools=tools,
                 messages=messages,
@@ -270,7 +299,17 @@ def main():
                 on_tool_result=on_tool_result,
                 console=ui.console,
             )
-            ui.print_response(response)
+            if not result.get("streamed"):
+                ui.print_response(result["text"])
+            else:
+                ui.console.print()  # 流式后补一个空行
+            usage = result.get("usage", {})
+            ui.print_usage(
+                usage.get("input_tokens", 0),
+                usage.get("output_tokens", 0),
+                result.get("elapsed", 0),
+                state.get("model", ""),
+            )
         except KeyboardInterrupt:
             ui.print_info("\n已中断。")
             if messages and messages[-1]["role"] == "user":

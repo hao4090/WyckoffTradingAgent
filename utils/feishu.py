@@ -44,7 +44,7 @@ _TERM_GLOSSARY_PATTERNS: list[tuple[re.Pattern, str]] = [
     (re.compile(r"\bLPS\b(?!\s*[（(])"), "LPS（最后支撑点）"),
     (re.compile(r"\bSOS\b(?!\s*[（(])"), "SOS（强势信号）"),
     (re.compile(r"\bUTAD\b(?!\s*[（(])"), "UTAD（上冲诱多）"),
-    (re.compile(r"\bEVR\b(?!\s*[（(])"), "EVR（努力无结果）"),
+    (re.compile(r"\bEVR\b(?!\s*[（(])"), "EVR（放量不跌）"),
     (re.compile(r"\bJAC\b(?!\s*[（(])"), "JAC（跃过小溪）"),
     (re.compile(r"\bBUEC\b(?!\s*[（(])"), "BUEC（回踩小溪边缘）"),
     # Common trade terms

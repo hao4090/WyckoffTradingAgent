@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-工具注册表 — 复用 agents/chat_tools.py 的 9 个函数，去除 ADK 依赖。
+工具注册表 — 复用 agents/chat_tools.py 的 10 个函数，去除 ADK 依赖。
 
 核心思路：
 1. ToolContext 用 shim 类替代（只需 .state 属性）
@@ -130,6 +130,20 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             },
         },
     },
+    {
+        "name": "get_signal_pending",
+        "description": "查询信号确认池（signal_pending）。L4 触发信号经 1-3 天价格确认后变为 confirmed（可操作）或 expired（失效）。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "status": {
+                    "type": "string",
+                    "description": "筛选状态：'all'（全部）、'pending'（待确认）、'confirmed'（已确认）、'expired'（已过期），默认 'all'",
+                },
+                "limit": {"type": "integer", "description": "返回记录数，默认 30，最大 100"},
+            },
+        },
+    },
 ]
 
 # 工具中文显示名，用于终端展示
@@ -143,6 +157,7 @@ TOOL_DISPLAY_NAMES: dict[str, str] = {
     "generate_ai_report": "深度审讯",
     "generate_strategy_decision": "攻防决策",
     "get_recommendation_tracking": "战绩追踪",
+    "get_signal_pending": "信号确认池",
 }
 
 
@@ -169,6 +184,7 @@ class ToolRegistry:
             generate_ai_report,
             generate_strategy_decision,
             get_recommendation_tracking,
+            get_signal_pending,
         )
         return {
             "search_stock_by_name": search_stock_by_name,
@@ -180,6 +196,7 @@ class ToolRegistry:
             "generate_ai_report": generate_ai_report,
             "generate_strategy_decision": generate_strategy_decision,
             "get_recommendation_tracking": get_recommendation_tracking,
+            "get_signal_pending": get_signal_pending,
         }
 
     def schemas(self) -> list[dict[str, Any]]:
