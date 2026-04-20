@@ -109,6 +109,24 @@ def get_session_tokens(client: "Client") -> tuple[str, str]:
 
 
 def is_admin_configured() -> bool:
-    """检查是否能创建可用的 Supabase 客户端。"""
-    url, key = _resolve_credentials()
-    return bool(url and key)
+    """检查是否存在显式 Supabase 凭据（env / st.secrets）。
+
+    说明：
+    - 这里用于判断“是否完成业务级配置”，不应把内置 anon 凭据视为“已配置”。
+    - 因此不走 _resolve_credentials()（该函数会回退到内置 anon）。
+    """
+    url = os.getenv("SUPABASE_URL", "").strip()
+    key = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip() or os.getenv("SUPABASE_KEY", "").strip()
+    if url and key:
+        return True
+    try:
+        import streamlit as st
+
+        sec_url = str(st.secrets.get("SUPABASE_URL", "") or "").strip()
+        sec_key = (
+            str(st.secrets.get("SUPABASE_SERVICE_ROLE_KEY", "") or "").strip()
+            or str(st.secrets.get("SUPABASE_KEY", "") or "").strip()
+        )
+        return bool(sec_url and sec_key)
+    except Exception:
+        return False
