@@ -262,7 +262,15 @@ def diagnose_portfolio(tool_context: ToolContext) -> dict:
 
         portfolio_id = build_user_live_portfolio_id(user_id)
         logger.info("diagnose_portfolio: user_id=%s, portfolio_id=%s", user_id, portfolio_id)
-        state = load_portfolio_state(portfolio_id)
+
+        # CLI 登录后有 access_token，用 user client 通过 RLS
+        _at = (tool_context.state.get("access_token") or "") if tool_context else ""
+        _rt = (tool_context.state.get("refresh_token") or "") if tool_context else ""
+        _user_client = None
+        if _at:
+            from integrations.supabase_base import create_user_client
+            _user_client = create_user_client(_at, _rt)
+        state = load_portfolio_state(portfolio_id, client=_user_client)
         if state is None:
             from integrations.supabase_portfolio import is_supabase_configured
             if not is_supabase_configured():

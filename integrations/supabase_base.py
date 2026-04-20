@@ -60,6 +60,25 @@ def create_anon_client() -> "Client":
     return create_client(url, key)
 
 
+def create_user_client(access_token: str, refresh_token: str = "") -> "Client":
+    """用用户 JWT 创建客户端（通过 RLS）。
+
+    CLI 登录后拿到的 access_token 用于身份验证，等同于 Web 端
+    supabase_client._apply_user_session 的逻辑。
+    """
+    from supabase import create_client
+
+    url = os.getenv("SUPABASE_URL", "").strip()
+    key = os.getenv("SUPABASE_KEY", "").strip()
+    if not url or not key:
+        raise ValueError("SUPABASE_URL / SUPABASE_KEY 未配置")
+    client = create_client(url, key)
+    if refresh_token:
+        client.auth.set_session(access_token, refresh_token)
+    client.postgrest.auth(access_token)
+    return client
+
+
 def is_admin_configured() -> bool:
     """检查 admin 写库环境变量是否已配置。"""
     url = os.getenv("SUPABASE_URL", "").strip()

@@ -98,7 +98,7 @@ def _is_active_trade_order_status(status: Any) -> bool:
     return str(status or "").strip().upper() not in {"", "CANCELLED", "CANCELED"}
 
 
-def load_portfolio_state(portfolio_id: str = "USER_LIVE") -> dict[str, Any] | None:
+def load_portfolio_state(portfolio_id: str = "USER_LIVE", client: Client | None = None) -> dict[str, Any] | None:
     """
     返回格式：
     {
@@ -111,7 +111,7 @@ def load_portfolio_state(portfolio_id: str = "USER_LIVE") -> dict[str, Any] | No
     if not is_supabase_configured():
         return None
     try:
-        client = _get_supabase_admin_client()
+        client = client or _get_supabase_admin_client()
         p_resp = (
             client.table(TABLE_PORTFOLIOS)
             .select("portfolio_id,free_cash,total_equity,updated_at")

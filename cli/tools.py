@@ -168,8 +168,12 @@ TOOL_DISPLAY_NAMES: dict[str, str] = {
 class ToolRegistry:
     """工具注册表：注册、查询 schema、执行工具。"""
 
-    def __init__(self, user_id: str = ""):
-        self._tool_context = ToolContext(state={"user_id": user_id})
+    def __init__(self, user_id: str = "", access_token: str = "", refresh_token: str = ""):
+        self._tool_context = ToolContext(state={
+            "user_id": user_id,
+            "access_token": access_token,
+            "refresh_token": refresh_token,
+        })
         self._tools = self._register_tools()
 
     def _register_tools(self) -> dict[str, callable]:

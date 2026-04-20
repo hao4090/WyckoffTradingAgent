@@ -130,6 +130,8 @@ def main():
     auth_state = {
         "user_id": "",
         "email": "",
+        "access_token": "",
+        "refresh_token": "",
     }
 
     try:
@@ -138,12 +140,18 @@ def main():
         if session:
             auth_state["user_id"] = session["user_id"]
             auth_state["email"] = session["email"]
+            auth_state["access_token"] = session.get("access_token", "")
+            auth_state["refresh_token"] = session.get("refresh_token", "")
     except Exception:
         pass
 
-    # 创建工具注册表（user_id 来自 auth）
+    # 创建工具注册表（user_id + token 来自 auth）
     from cli.tools import ToolRegistry
-    tools = ToolRegistry(user_id=auth_state["user_id"])
+    tools = ToolRegistry(
+        user_id=auth_state["user_id"],
+        access_token=auth_state.get("access_token", ""),
+        refresh_token=auth_state.get("refresh_token", ""),
+    )
 
     # 加载系统提示词
     from core.prompts import CHAT_AGENT_SYSTEM_PROMPT
@@ -194,7 +202,11 @@ def main():
                 session = login(email, password)
                 auth_state["user_id"] = session["user_id"]
                 auth_state["email"] = session["email"]
+                auth_state["access_token"] = session.get("access_token", "")
+                auth_state["refresh_token"] = session.get("refresh_token", "")
                 tools._tool_context.state["user_id"] = session["user_id"]
+                tools._tool_context.state["access_token"] = session.get("access_token", "")
+                tools._tool_context.state["refresh_token"] = session.get("refresh_token", "")
                 ui.print_info(f"✓ 登录成功 ({session['email']})")
                 return
             except Exception as e:
@@ -211,7 +223,11 @@ def main():
         logout()
         auth_state["user_id"] = ""
         auth_state["email"] = ""
+        auth_state["access_token"] = ""
+        auth_state["refresh_token"] = ""
         tools._tool_context.state["user_id"] = ""
+        tools._tool_context.state["access_token"] = ""
+        tools._tool_context.state["refresh_token"] = ""
         ui.print_info("已退出登录。")
 
     # Banner
