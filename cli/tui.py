@@ -15,7 +15,7 @@ from rich.text import Text
 from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.widgets import Footer, Input, RichLog, Static
+from textual.widgets import Input, RichLog, Static
 
 
 # ---------------------------------------------------------------------------
@@ -79,15 +79,10 @@ class WyckoffTUI(App):
         dock: bottom;
         margin: 0 1 0 1;
     }
-    Footer {
-        background: $primary-background;
-    }
     """
 
     BINDINGS = [
-        Binding("ctrl+c", "quit", "退出", show=True),
-        Binding("ctrl+l", "clear_chat", "清屏", show=True),
-        Binding("ctrl+n", "new_chat", "新对话", show=True),
+        Binding("ctrl+c", "quit", show=False),
     ]
 
     def __init__(
@@ -116,7 +111,6 @@ class WyckoffTUI(App):
         yield StatusBar(self._build_status_text(), id="status-bar")
         yield ChatLog(id="chat-log", highlight=True, markup=True, wrap=True)
         yield Input(placeholder="问我关于股票的任何问题... (/help 查看命令)", id="chat-input")
-        yield Footer()
 
     def on_mount(self) -> None:
         log = self.query_one("#chat-log", ChatLog)
@@ -508,7 +502,15 @@ class WyckoffTUI(App):
                 _write(Text.from_markup("[yellow](工具调用轮次超限)[/yellow]"))
 
         except Exception as e:
-            _write(Text.from_markup(f"[red]Agent 错误: {e}[/red]"))
+            err = str(e)
+            # 清理 HTML 错误响应，只保留关键信息
+            if "<html" in err.lower():
+                import re
+                title = re.search(r"<title>(.*?)</title>", err, re.IGNORECASE)
+                err = title.group(1) if title else "服务端返回 HTML 错误"
+            if len(err) > 200:
+                err = err[:200] + "..."
+            _write(Text.from_markup(f"[red]错误: {err}[/red]"))
             while self._messages and self._messages[-1].get("role") != "user":
                 self._messages.pop()
             if self._messages:
