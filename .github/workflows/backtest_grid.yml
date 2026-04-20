@@ -507,6 +507,7 @@ jobs:
           elements.append({'tag': 'div', 'text': {'tag': 'lark_md',
               'content': f'**区间** {bt_start} ~ {bt_end}  ·  **TopN** {bt_topn}  ·  **共 {len(cells)} 单元**\n[查看详情]({run_url})'}})
 
+          best = None
           if not cells:
               elements.append({'tag': 'div', 'text': {'tag': 'lark_md', 'content': '⚠️ 未找到回测结果文件'}})
           else:
