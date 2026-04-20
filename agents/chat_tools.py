@@ -248,14 +248,7 @@ def diagnose_portfolio(tool_context: ToolContext) -> dict:
         portfolio_id = build_user_live_portfolio_id(user_id)
         logger.info("diagnose_portfolio: user_id=%s, portfolio_id=%s", user_id, portfolio_id)
 
-        # CLI 登录后有 access_token，用 user client 通过 RLS
-        _at = (tool_context.state.get("access_token") or "") if tool_context else ""
-        _rt = (tool_context.state.get("refresh_token") or "") if tool_context else ""
-        _user_client = None
-        if _at:
-            from integrations.supabase_base import create_user_client
-            _user_client = create_user_client(_at, _rt)
-            _refresh_tokens(_user_client, tool_context)
+        _user_client = _get_user_client(tool_context)
         state = load_portfolio_state(portfolio_id, client=_user_client)
         if state is None:
             from integrations.supabase_portfolio import is_supabase_configured
@@ -861,22 +854,34 @@ def get_signal_pending(status: str = "all", limit: int = 30) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Helper
+# Helper — 缓存 user client，避免重复消费 refresh_token
 # ---------------------------------------------------------------------------
 
-def _refresh_tokens(client, tool_context: ToolContext | None) -> None:
-    """将 set_session 刷新后的 token 回写到 tool_context.state。"""
+_user_client_cache: dict[str, Any] = {}  # user_id → Client
+
+
+def _get_user_client(tool_context: ToolContext | None):
+    """获取或复用 user client。首次创建时消费 RT 并回写新 token，后续复用。"""
     if tool_context is None:
-        return
-    try:
-        from integrations.supabase_base import get_session_tokens
-        new_at, new_rt = get_session_tokens(client)
-        if new_at:
-            tool_context.state["access_token"] = new_at
-        if new_rt:
-            tool_context.state["refresh_token"] = new_rt
-    except Exception:
-        pass
+        return None
+    at = (tool_context.state.get("access_token") or "")
+    if not at:
+        return None
+    user_id = _get_user_id(tool_context)
+    cached = _user_client_cache.get(user_id)
+    if cached is not None:
+        return cached
+    rt = (tool_context.state.get("refresh_token") or "")
+    from integrations.supabase_base import create_user_client, get_session_tokens
+    client = create_user_client(at, rt)
+    # 回写刷新后的 token
+    new_at, new_rt = get_session_tokens(client)
+    if new_at:
+        tool_context.state["access_token"] = new_at
+    if new_rt:
+        tool_context.state["refresh_token"] = new_rt
+    _user_client_cache[user_id] = client
+    return client
 
 
 def _to_ts_code(code: str) -> str:
@@ -904,19 +909,12 @@ def get_portfolio(tool_context: ToolContext) -> dict:
             build_user_live_portfolio_id,
             load_portfolio_state,
         )
-        from integrations.supabase_base import create_user_client
 
         user_id = _get_user_id(tool_context)
         if not user_id:
             return {"error": "未登录，请先执行 /login"}
 
-        _at = (tool_context.state.get("access_token") or "") if tool_context else ""
-        _rt = (tool_context.state.get("refresh_token") or "") if tool_context else ""
-        _client = None
-        if _at:
-            _client = create_user_client(_at, _rt)
-            _refresh_tokens(_client, tool_context)
-
+        _client = _get_user_client(tool_context)
         portfolio_id = build_user_live_portfolio_id(user_id)
         state = load_portfolio_state(portfolio_id, client=_client)
         if state is None:
@@ -979,20 +977,14 @@ def update_portfolio(
             delete_position,
             update_free_cash,
         )
-        from integrations.supabase_base import create_user_client, get_session_tokens
-
         user_id = _get_user_id(tool_context)
         if not user_id:
             return {"error": "未登录，请先执行 /login"}
 
-        _at = (tool_context.state.get("access_token") or "") if tool_context else ""
-        _rt = (tool_context.state.get("refresh_token") or "") if tool_context else ""
-        if not _at:
+        client = _get_user_client(tool_context)
+        if client is None:
             return {"error": "缺少 access_token，请重新登录"}
 
-        client = create_user_client(_at, _rt)
-        # 回写刷新后的 token，防止后续调用 "Invalid Refresh Token: Already Used"
-        _refresh_tokens(client, tool_context)
         portfolio_id = build_user_live_portfolio_id(user_id)
         action = action.strip().lower()
 

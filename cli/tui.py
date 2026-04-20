@@ -156,7 +156,7 @@ class WyckoffTUI(App):
 
     # ----- Spinner（ChatLog 底部边框） -----
 
-    def _start_spinner(self, label: str = "思考中") -> None:
+    def _start_spinner(self, label: str = "thinking") -> None:
         self._spinner_label = label
         self._spinner_idx = 0
         log = self.query_one("#chat-log", ChatLog)
@@ -214,7 +214,7 @@ class WyckoffTUI(App):
         log.write(Text(""))
         log.write(Text.from_markup(f"[bold cyan]❯[/bold cyan] {text}"))
         self._messages.append({"role": "user", "content": text})
-        self._start_spinner("思考中")
+        self._start_spinner("thinking")
         self._run_agent()
 
     # ----- 斜杠命令 -----
@@ -485,7 +485,7 @@ class WyckoffTUI(App):
                     if len(preview) > 80:
                         preview = preview[:80] + "…"
                     _write(Text.from_markup(
-                        f"  [dim italic]💭 {preview}[/dim italic]  [dim]({len(thinking_buf)} 字)[/dim]"
+                        f"  [italic magenta]💭 {preview}[/italic magenta]  [dim]({len(thinking_buf)} 字)[/dim]"
                     ))
 
                 # ── 工具调用 ──
@@ -501,14 +501,13 @@ class WyckoffTUI(App):
                         call_id = call["id"]
                         display = self._tools.display_name(name)
 
-                        _write(Text.from_markup(
-                            f"  [yellow]⚙ {display}[/yellow] [dim]{_brief_args(args)}[/dim]"
-                        ))
-                        _scroll()
+                        _spinner_start(display)
 
                         t_tool = time.monotonic()
                         result = self._tools.execute(name, args)
                         elapsed_tool = time.monotonic() - t_tool
+
+                        _spinner_stop()
 
                         if isinstance(result, dict) and result.get("error"):
                             _write(Text.from_markup(
