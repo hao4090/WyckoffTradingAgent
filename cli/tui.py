@@ -16,7 +16,8 @@ from rich.text import Text
 from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.widgets import Input, RichLog, Static
+from textual.widgets import Input, OptionList, RichLog, Static
+from textual.widgets.option_list import Option
 
 
 # ---------------------------------------------------------------------------
@@ -44,6 +45,34 @@ class StatusBar(Static):
     """
 
 
+class FloatingSelector(OptionList):
+    """临时浮层选择器 — 上下键选择，Enter 确认，Esc 取消。"""
+    DEFAULT_CSS = """
+    FloatingSelector {
+        dock: bottom;
+        height: auto;
+        max-height: 8;
+        margin: 0 1;
+        border: round $accent;
+        background: $surface;
+    }
+    """
+
+    def __init__(self, options: list[tuple[str, str]], callback_id: str, **kwargs):
+        """options: [(value, label), ...], callback_id: 回调标识。"""
+        self._values = [v for v, _ in options]
+        self._callback_id = callback_id
+        super().__init__(*[Option(label, id=val) for val, label in options], **kwargs)
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        value = self._values[event.option_index]
+        self.app._on_selector_choice(self._callback_id, value)
+
+    def on_key(self, event) -> None:
+        if event.key == "escape":
+            self.app._on_selector_choice(self._callback_id, None)
+
+
 _SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
 
@@ -56,6 +85,7 @@ class _InputState:
     NONE = "none"
     LOGIN_EMAIL = "login_email"
     LOGIN_PASSWORD = "login_password"
+    MODEL_ID = "model_id"
     MODEL_PROVIDER = "model_provider"
     MODEL_KEY = "model_key"
     MODEL_NAME = "model_name"
@@ -85,8 +115,15 @@ class WyckoffTUI(App):
     }
     """
 
+    ENABLE_COMMAND_PALETTE = True
+    COMMAND_PALETTE_BINDING = "ctrl+p"
+    COMMANDS = set()  # will be populated below after class definition
+
     BINDINGS = [
-        Binding("ctrl+c", "quit", show=False),
+        Binding("ctrl+c", "smart_copy", show=False, priority=True),
+        Binding("ctrl+q", "quit", "退出", show=False),
+        Binding("ctrl+n", "new_chat", "新对话"),
+        Binding("ctrl+l", "clear_chat", "清屏"),
     ]
 
     def __init__(
@@ -123,14 +160,23 @@ class WyckoffTUI(App):
         yield Input(placeholder="问我关于股票的任何问题... (/help 查看命令)", id="chat-input")
 
     def on_mount(self) -> None:
+        # 加载保存的主题
+        try:
+            from cli.auth import load_config
+            saved_theme = load_config().get("theme", "")
+            if saved_theme and saved_theme in self.available_themes:
+                self.theme = saved_theme
+        except Exception:
+            pass
+
         log = self.query_one("#chat-log", ChatLog)
         log.write(Text.from_markup(
             "[bold]Wyckoff 读盘室[/bold]\n"
-            "[dim]直接输入问题开始对话  ·  /help 查看命令  ·  Ctrl+C 退出[/dim]\n"
+            "[dim]直接输入问题开始对话  ·  /help 查看命令  ·  Ctrl+P 命令面板  ·  Ctrl+C 复制/退出[/dim]\n"
         ))
         if not self._provider:
             log.write(Text.from_markup(
-                "[yellow]⚠ 未配置模型，请输入 /model 设置[/yellow]\n"
+                "[yellow]⚠ 未配置模型，请输入 /model add 添加[/yellow]\n"
             ))
         if self._session_expired:
             log.write(Text.from_markup(
@@ -153,6 +199,54 @@ class WyckoffTUI(App):
 
     def _update_status(self) -> None:
         self.query_one("#status-bar", StatusBar).update(self._build_status_text())
+
+    # ----- 快捷键动作 -----
+
+    def action_smart_copy(self) -> None:
+        """Ctrl+C: 有选中文本 → 复制；无选中 → 退出。"""
+        text = self.screen.get_selected_text()
+        if text:
+            self.copy_to_clipboard(text)
+            self.screen.clear_selection()
+            self.notify("已复制", timeout=1)
+        else:
+            self.exit()
+
+    def action_list_models(self) -> None:
+        self._list_models()
+
+    def action_add_model(self) -> None:
+        self._start_model_add()
+
+    def action_start_login(self) -> None:
+        self._start_login()
+
+    def action_do_logout(self) -> None:
+        self._do_logout()
+
+    def action_show_token(self) -> None:
+        log = self.query_one("#chat-log", ChatLog)
+        t = self._session_tokens
+        if t["rounds"] == 0:
+            log.write(Text.from_markup("[dim]本次会话尚无 Token 记录[/dim]"))
+        else:
+            log.write(Text.from_markup(
+                f"\n[bold]Token 用量[/bold]  "
+                f"输入: {t['input']:,}  输出: {t['output']:,}  "
+                f"合计: {t['input']+t['output']:,}  轮次: {t['rounds']}"
+            ))
+
+    def action_switch_theme(self) -> None:
+        """打开主题切换器并保存选择。"""
+        self.action_change_theme()
+
+    def watch_theme(self, new_theme: str) -> None:
+        """主题变化时自动保存。"""
+        try:
+            from cli.auth import save_config_key
+            save_config_key("theme", new_theme)
+        except Exception:
+            pass
 
     # ----- Spinner（ChatLog 底部边框） -----
 
@@ -199,7 +293,7 @@ class WyckoffTUI(App):
             return
 
         if not self._provider:
-            log.write(Text.from_markup("[yellow]⚠ 未配置模型，请先输入 /model[/yellow]"))
+            log.write(Text.from_markup("[yellow]⚠ 未配置模型，请先输入 /model add[/yellow]"))
             return
 
         if self._busy:
@@ -232,13 +326,19 @@ class WyckoffTUI(App):
         elif cmd == "/help":
             log.write(Text.from_markup(
                 "\n[bold]可用命令[/bold]\n"
-                "  /model   — 配置模型供应商\n"
+                "  /model   — 查看已配置模型（add/rm/default）\n"
                 "  /login   — 登录\n"
                 "  /logout  — 退出登录\n"
                 "  /token   — Token 用量\n"
                 "  /new     — 新对话 (Ctrl+N)\n"
                 "  /clear   — 清屏 (Ctrl+L)\n"
-                "  /quit    — 退出 (Ctrl+C)\n"
+                "  /quit    — 退出 (Ctrl+Q)\n"
+                "\n[bold]快捷键[/bold]\n"
+                "  Ctrl+P   — 命令面板\n"
+                "  Ctrl+C   — 复制选中文本 / 退出\n"
+                "  Ctrl+N   — 新对话\n"
+                "  Ctrl+L   — 清屏\n"
+                "  鼠标拖选  — 选择文本\n"
             ))
         elif cmd == "/token":
             t = self._session_tokens
@@ -255,7 +355,19 @@ class WyckoffTUI(App):
         elif cmd == "/logout":
             self._do_logout()
         elif cmd == "/model":
-            self._start_model_config()
+            parts = raw.strip().split()
+            if len(parts) == 1:
+                self._list_models()
+            elif parts[1] == "add":
+                self._start_model_add()
+            elif parts[1] == "rm" and len(parts) >= 3:
+                self._remove_model(parts[2])
+            elif parts[1] == "default" and len(parts) >= 3:
+                self._set_default_model(parts[2])
+            else:
+                log.write(Text.from_markup(
+                    "[dim]/model 用法: /model (列表) | /model add | /model rm <id> | /model default <id>[/dim]"
+                ))
         else:
             log.write(Text.from_markup(f"[red]未知命令: {raw}[/red]，/help 查看"))
 
@@ -284,16 +396,114 @@ class WyckoffTUI(App):
 
     # ----- /model 交互 -----
 
-    def _start_model_config(self) -> None:
+    def _list_models(self) -> None:
+        log = self.query_one("#chat-log", ChatLog)
+        from cli.auth import load_model_configs, load_default_model_id
+        configs = load_model_configs()
+        default_id = load_default_model_id()
+        if not configs:
+            log.write(Text.from_markup("[dim]尚无模型配置，使用 /model add 添加[/dim]"))
+            return
+        log.write(Text.from_markup("\n[bold]已配置模型[/bold]"))
+        for c in configs:
+            mark = " [green]⭐ 默认[/green]" if c["id"] == default_id else ""
+            log.write(Text.from_markup(
+                f"  [bold]{c['id']}[/bold] — {c['provider_name']}/{c.get('model', '?')}{mark}"
+            ))
+        log.write(Text.from_markup(
+            "[dim]  /model add | /model rm <id> | /model default <id>[/dim]"
+        ))
+
+    def _remove_model(self, model_id: str) -> None:
+        log = self.query_one("#chat-log", ChatLog)
+        from cli.auth import remove_model_entry
+        if remove_model_entry(model_id):
+            log.write(Text.from_markup(f"  [green]✓ 已删除 {model_id}[/green]"))
+            self._rebuild_provider()
+        else:
+            log.write(Text.from_markup(f"  [red]无法删除（至少保留一个模型）[/red]"))
+
+    def _set_default_model(self, model_id: str) -> None:
+        log = self.query_one("#chat-log", ChatLog)
+        from cli.auth import load_model_configs, set_default_model
+        configs = load_model_configs()
+        if not any(c["id"] == model_id for c in configs):
+            log.write(Text.from_markup(f"  [red]未找到: {model_id}[/red]"))
+            return
+        set_default_model(model_id)
+        log.write(Text.from_markup(f"  [green]✓ 默认模型已设为 {model_id}[/green]"))
+        self._rebuild_provider()
+
+    def _rebuild_provider(self) -> None:
+        from cli.auth import load_model_configs, load_default_model_id
+        configs = load_model_configs()
+        default_id = load_default_model_id()
+        if not configs:
+            self._provider = None
+            return
+        default_cfg = next((c for c in configs if c["id"] == default_id), configs[0])
+        if len(configs) == 1:
+            from cli.__main__ import _create_provider
+            provider, err = _create_provider(
+                default_cfg["provider_name"], default_cfg["api_key"],
+                default_cfg.get("model", ""), default_cfg.get("base_url", ""),
+            )
+            if not err:
+                self._provider = provider
+        else:
+            from cli.providers.fallback import FallbackProvider
+            self._provider = FallbackProvider(configs, default_id)
+        self._state.update(default_cfg)
+        self._update_status()
+
+    def _show_selector(self, options: list[tuple[str, str]], callback_id: str) -> None:
+        """显示浮层选择器。options: [(value, label), ...]"""
+        # 移除已有的 selector
+        try:
+            old = self.query_one("#floating-selector", FloatingSelector)
+            old.remove()
+        except Exception:
+            pass
+        selector = FloatingSelector(options, callback_id, id="floating-selector")
+        self.mount(selector, before="#chat-input")
+        selector.focus()
+
+    def _dismiss_selector(self) -> None:
+        try:
+            self.query_one("#floating-selector", FloatingSelector).remove()
+        except Exception:
+            pass
+        self.query_one("#chat-input", Input).focus()
+
+    def _on_selector_choice(self, callback_id: str, value: str | None) -> None:
+        """选择器回调。"""
+        self._dismiss_selector()
+        log = self.query_one("#chat-log", ChatLog)
+        inp = self.query_one("#chat-input", Input)
+
+        if value is None:
+            log.write(Text.from_markup("[dim]已取消[/dim]"))
+            self._input_mode = _InputState.NONE
+            inp.placeholder = "问我关于股票的任何问题... (/help 查看命令)"
+            return
+
+        if callback_id == "model_provider":
+            self._input_buf["provider"] = value
+            log.write(Text.from_markup(f"  供应商: {value}"))
+            log.write(Text.from_markup("  输入 API Key："))
+            inp.placeholder = "API Key..."
+            inp.password = True
+            self._input_mode = _InputState.MODEL_KEY
+
+    def _start_model_add(self) -> None:
         log = self.query_one("#chat-log", ChatLog)
         inp = self.query_one("#chat-input", Input)
         log.write(Text.from_markup(
-            "\n[bold]模型配置[/bold]\n"
-            "  供应商：gemini / openai / claude\n"
-            "  输入供应商名（留空取消）："
+            "\n[bold]添加模型[/bold]\n"
+            "  输入别名（如 gemini, longcat, deepseek）："
         ))
-        inp.placeholder = "供应商: gemini / openai / claude"
-        self._input_mode = _InputState.MODEL_PROVIDER
+        inp.placeholder = "模型别名..."
+        self._input_mode = _InputState.MODEL_ID
         self._input_buf = {}
 
     # ----- 交互式输入状态机 -----
@@ -304,7 +514,7 @@ class WyckoffTUI(App):
         mode = self._input_mode
 
         # MODEL_NAME 和 MODEL_URL 留空表示用默认值，不取消
-        if not text and mode not in (_InputState.MODEL_NAME, _InputState.MODEL_URL):
+        if not text and mode not in (_InputState.MODEL_NAME, _InputState.MODEL_URL, _InputState.MODEL_ID):
             log.write(Text.from_markup("[dim]已取消[/dim]"))
             self._input_mode = _InputState.NONE
             inp.placeholder = "问我关于股票的任何问题... (/help 查看命令)"
@@ -345,7 +555,26 @@ class WyckoffTUI(App):
                     log.write(Text.from_markup(f"  [red]登录失败: {err}，请重新输入[/red]"))
                 self._start_login()
 
+        elif mode == _InputState.MODEL_ID:
+            model_id = text.strip().lower() if text.strip() else ""
+            if not model_id:
+                log.write(Text.from_markup("[dim]已取消[/dim]"))
+                self._input_mode = _InputState.NONE
+                inp.placeholder = "问我关于股票的任何问题... (/help 查看命令)"
+                return
+            self._input_buf["id"] = model_id
+            log.write(Text.from_markup(f"  别名: {model_id}"))
+            log.write(Text.from_markup("  选择供应商（↑↓ 选择，Enter 确认，Esc 取消）："))
+            self._input_mode = _InputState.MODEL_PROVIDER
+            self._show_selector([
+                ("gemini", "Gemini (Google)"),
+                ("openai", "OpenAI / 兼容接口 (LongCat, DeepSeek, Qwen...)"),
+                ("claude", "Claude (Anthropic)"),
+            ], "model_provider")
+            return  # 等 selector 回调
+
         elif mode == _InputState.MODEL_PROVIDER:
+            # 文本输入兜底（selector 取消后手动输入）
             prov = text.strip().lower()
             if prov not in ("gemini", "openai", "claude"):
                 log.write(Text.from_markup(f"  [red]不支持: {prov}[/red]"))
@@ -389,36 +618,24 @@ class WyckoffTUI(App):
         log = self.query_one("#chat-log", ChatLog)
         buf = self._input_buf
         try:
-            from cli.__main__ import _create_provider
-            provider, err = _create_provider(
-                buf["provider"], buf["api_key"],
-                buf.get("model", ""), buf.get("base_url", ""),
-            )
-            if err:
-                log.write(Text.from_markup(f"  [red]{err}[/red]"))
-                return
-            self._provider = provider
-            self._state.update({
-                "provider": provider,
+            entry = {
+                "id": buf.get("id", buf["provider"]),
                 "provider_name": buf["provider"],
                 "api_key": buf["api_key"],
                 "model": buf.get("model", ""),
                 "base_url": buf.get("base_url", ""),
-            })
-            # 持久化
-            from cli.auth import save_model_config
-            save_model_config({
-                "provider_name": buf["provider"],
-                "api_key": buf["api_key"],
-                "model": buf.get("model", ""),
-                "base_url": buf.get("base_url", ""),
-            })
+            }
+            from cli.auth import save_model_entry, load_model_configs, set_default_model
+            save_model_entry(entry)
+            # 首条模型或新添加的设为默认
+            if len(load_model_configs()) == 1:
+                set_default_model(entry["id"])
             import os
             env_key = {"gemini": "GEMINI_API_KEY", "claude": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY"}.get(buf["provider"])
             if env_key:
                 os.environ[env_key] = buf["api_key"]
-            log.write(Text.from_markup(f"  [green]✓ 已切换到 {provider.name}[/green]"))
-            self._update_status()
+            self._rebuild_provider()
+            log.write(Text.from_markup(f"  [green]✓ 已添加 {entry['id']} ({self._provider.name if self._provider else '?'})[/green]"))
         except Exception as e:
             log.write(Text.from_markup(f"  [red]配置失败: {e}[/red]"))
 
@@ -478,6 +695,12 @@ class WyckoffTUI(App):
                 _spinner_stop()
                 total_input += round_usage.get("input_tokens", 0)
                 total_output += round_usage.get("output_tokens", 0)
+
+                # ── Fallback 通知 ──
+                fb_msg = getattr(self._provider, "last_fallback_msg", None)
+                if fb_msg:
+                    _write(Text.from_markup(f"  [yellow]⚡ {fb_msg}[/yellow]"))
+                    self._provider.last_fallback_msg = None
 
                 # ── Thinking 摘要（折叠为一行） ──
                 if thinking_buf:
@@ -612,9 +835,19 @@ class WyckoffTUI(App):
     def action_new_chat(self) -> None:
         self._messages.clear()
         self._queue.clear()
+        self._session_tokens = {"input": 0, "output": 0, "rounds": 0}
         log = self.query_one("#chat-log", ChatLog)
         log.clear()
         log.write(Text.from_markup("[green]新对话已开始[/green]\n"))
+        self._update_status()
+
+
+# 注册命令面板（class 定义完成后）
+try:
+    from cli.commands import WyckoffCommands
+    WyckoffTUI.COMMANDS = {WyckoffCommands}
+except ImportError:
+    pass
 
 
 def _brief_args(args: dict) -> str:

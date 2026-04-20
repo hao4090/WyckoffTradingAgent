@@ -143,19 +143,106 @@ def _save_config(data: dict[str, Any]) -> None:
     )
 
 
-def save_model_config(config: dict[str, Any]) -> None:
-    """将模型配置合并写入 wyckoff.json。"""
-    data = _load_config()
-    data.update(config)
+def _migrate_config(data: dict[str, Any]) -> dict[str, Any]:
+    """旧 flat 格式 → models 列表。只在检测到旧格式时调用一次。"""
+    entry = {
+        "id": data.get("provider_name", "default"),
+        "provider_name": data["provider_name"],
+        "api_key": data["api_key"],
+        "model": data.get("model", ""),
+        "base_url": data.get("base_url", ""),
+    }
+    return {"models": [entry], "default": entry["id"]}
+
+
+def _ensure_models_format(data: dict[str, Any]) -> dict[str, Any]:
+    """确保配置为 models 列表格式，必要时迁移并持久化。"""
+    if "models" in data:
+        return data
+    if data.get("provider_name") and data.get("api_key"):
+        migrated = _migrate_config(data)
+        _save_config(migrated)
+        return migrated
+    return data
+
+
+def load_model_configs() -> list[dict[str, Any]]:
+    """返回有序 models 列表。"""
+    data = _ensure_models_format(_load_config())
+    return data.get("models", [])
+
+
+def load_default_model_id() -> str | None:
+    """返回默认模型 id。"""
+    data = _ensure_models_format(_load_config())
+    models = data.get("models", [])
+    default = data.get("default", "")
+    if default and any(m["id"] == default for m in models):
+        return default
+    return models[0]["id"] if models else None
+
+
+def save_model_entry(entry: dict[str, Any]) -> None:
+    """按 id 插入或更新一条模型配置。首条自动设为默认。"""
+    data = _ensure_models_format(_load_config())
+    models = data.get("models", [])
+    # 更新已有 or 追加
+    found = False
+    for i, m in enumerate(models):
+        if m["id"] == entry["id"]:
+            models[i] = entry
+            found = True
+            break
+    if not found:
+        models.append(entry)
+    data["models"] = models
+    if not data.get("default") or not any(m["id"] == data["default"] for m in models):
+        data["default"] = models[0]["id"]
     _save_config(data)
 
 
+def remove_model_entry(model_id: str) -> bool:
+    """删除模型。返回 False 表示是最后一条不允许删。"""
+    data = _ensure_models_format(_load_config())
+    models = data.get("models", [])
+    if len(models) <= 1:
+        return False
+    data["models"] = [m for m in models if m["id"] != model_id]
+    if data.get("default") == model_id:
+        data["default"] = data["models"][0]["id"] if data["models"] else ""
+    _save_config(data)
+    return True
+
+
+def set_default_model(model_id: str) -> None:
+    """设置默认模型。"""
+    data = _ensure_models_format(_load_config())
+    models = data.get("models", [])
+    if any(m["id"] == model_id for m in models):
+        data["default"] = model_id
+        _save_config(data)
+
+
+# --- 向后兼容 ---
+
+def save_model_config(config: dict[str, Any]) -> None:
+    """将模型配置合并写入 wyckoff.json（向后兼容）。"""
+    entry = dict(config)
+    if "id" not in entry:
+        entry["id"] = entry.get("provider_name", "default")
+    save_model_entry(entry)
+
+
 def load_model_config() -> dict[str, Any] | None:
-    """加载模型配置部分。"""
-    data = _load_config()
-    if data.get("provider_name") and data.get("api_key"):
-        return data
-    return None
+    """加载默认模型配置（向后兼容）。"""
+    configs = load_model_configs()
+    if not configs:
+        return None
+    default_id = load_default_model_id()
+    for m in configs:
+        if m["id"] == default_id:
+            return m
+    return configs[0]
 
 
 def load_config() -> dict[str, Any]:

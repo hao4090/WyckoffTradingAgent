@@ -154,19 +154,29 @@ def main():
     }
 
     try:
-        from cli.auth import load_model_config
-        saved_config = load_model_config()
-        if saved_config and saved_config.get("provider_name") and saved_config.get("api_key"):
-            env_key = {"gemini": "GEMINI_API_KEY", "claude": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY"}.get(saved_config["provider_name"])
-            if env_key:
-                os.environ[env_key] = saved_config["api_key"]
-            provider, err = _create_provider(
-                saved_config["provider_name"], saved_config["api_key"],
-                saved_config.get("model", ""), saved_config.get("base_url", ""),
-            )
-            if not err:
-                state.update(saved_config)
-                state["provider"] = provider
+        from cli.auth import load_model_configs, load_default_model_id
+        configs = load_model_configs()
+        default_id = load_default_model_id()
+        if configs and default_id:
+            # 为所有配置设置环境变量（工具可能读取）
+            env_map = {"gemini": "GEMINI_API_KEY", "claude": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY"}
+            for cfg in configs:
+                ek = env_map.get(cfg.get("provider_name", ""))
+                if ek and cfg.get("api_key"):
+                    os.environ.setdefault(ek, cfg["api_key"])
+            default_cfg = next((c for c in configs if c["id"] == default_id), configs[0])
+            if len(configs) == 1:
+                provider, err = _create_provider(
+                    default_cfg["provider_name"], default_cfg["api_key"],
+                    default_cfg.get("model", ""), default_cfg.get("base_url", ""),
+                )
+                if not err:
+                    state.update(default_cfg)
+                    state["provider"] = provider
+            else:
+                from cli.providers.fallback import FallbackProvider
+                state.update(default_cfg)
+                state["provider"] = FallbackProvider(configs, default_id)
     except Exception:
         pass
 
