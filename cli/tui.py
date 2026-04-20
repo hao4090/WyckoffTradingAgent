@@ -158,8 +158,8 @@ class WyckoffTUI(App):
     def compose(self) -> ComposeResult:
         yield StatusBar(self._build_status_text(), id="status-bar")
         yield ChatLog(id="chat-log", highlight=True, markup=True, wrap=True)
-        yield SpinnerBar(id="spinner", classes="hidden")
         yield Input(placeholder="问我关于股票的任何问题... (/help 查看命令)", id="chat-input")
+        yield SpinnerBar(id="spinner", classes="hidden")
 
     def on_mount(self) -> None:
         log = self.query_one("#chat-log", ChatLog)
