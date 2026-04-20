@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import time
+from collections import deque
 from typing import Any
 
 from rich.markdown import Markdown
@@ -103,6 +104,12 @@ class WyckoffTUI(App):
         self._messages: list[dict] = []
         self._session_tokens = {"input": 0, "output": 0, "rounds": 0}
         self._busy = False
+        self._queue: deque[str] = deque()
+        # 后台任务管理
+        from cli.background import BackgroundTaskManager
+        self._bg_manager = BackgroundTaskManager()
+        if self._tools:
+            self._tools.set_background_manager(self._bg_manager, self._on_bg_complete)
         # 交互式输入状态
         self._input_mode = _InputState.NONE
         self._input_buf: dict[str, str] = {}
@@ -166,15 +173,20 @@ class WyckoffTUI(App):
             self._handle_command(text)
             return
 
-        if self._busy:
-            log.write(Text.from_markup("[yellow]正在处理上一条消息，请稍候...[/yellow]"))
-            return
-
         if not self._provider:
             log.write(Text.from_markup("[yellow]⚠ 未配置模型，请先输入 /model[/yellow]"))
             return
 
+        if self._busy:
+            self._queue.append(text)
+            log.write(Text.from_markup(f"  [dim]⏳ 已排队 ({len(self._queue)})[/dim] {text}"))
+            return
+
         # 用户消息
+        self._send_message(text)
+
+    def _send_message(self, text: str) -> None:
+        log = self.query_one("#chat-log", ChatLog)
         log.write(Text(""))
         log.write(Text.from_markup(f"[bold cyan]❯[/bold cyan] {text}"))
         self._messages.append({"role": "user", "content": text})
@@ -395,8 +407,6 @@ class WyckoffTUI(App):
         def _scroll():
             self.call_from_thread(log.scroll_end, animate=False)
 
-        _write(Text.from_markup("  [dim]思考中...[/dim]"))
-
         total_input = 0
         total_output = 0
         t_start = time.monotonic()
@@ -409,18 +419,15 @@ class WyckoffTUI(App):
                 thinking_buf = ""
                 tool_calls = None
                 round_usage = {}
-                last_thinking_update = 0
+
+                # ── Thinking 阶段：单行滚动，不累积 ──
+                thinking_line_id = None
 
                 for chunk in self._provider.chat_stream(
                     self._messages, self._tools.schemas(), self._system_prompt
                 ):
                     if chunk["type"] == "thinking_delta":
                         thinking_buf += chunk["text"]
-                        now = time.monotonic()
-                        if now - last_thinking_update > 0.3:
-                            _write(Text(f"  💭 {thinking_buf[-200:]}", style="dim italic"))
-                            _scroll()
-                            last_thinking_update = now
 
                     elif chunk["type"] == "text_delta":
                         text_buf += chunk["text"]
@@ -437,9 +444,16 @@ class WyckoffTUI(App):
                 total_input += round_usage.get("input_tokens", 0)
                 total_output += round_usage.get("output_tokens", 0)
 
+                # ── Thinking 摘要（折叠为一行） ──
                 if thinking_buf:
-                    _write(Text(f"  💭 推理完成 ({len(thinking_buf)} 字)", style="dim"))
+                    preview = thinking_buf.strip().replace("\n", " ")
+                    if len(preview) > 80:
+                        preview = preview[:80] + "…"
+                    _write(Text.from_markup(
+                        f"  [dim italic]💭 {preview}[/dim italic]  [dim]({len(thinking_buf)} 字)[/dim]"
+                    ))
 
+                # ── 工具调用 ──
                 if tool_calls:
                     assistant_msg: dict[str, Any] = {"role": "assistant", "tool_calls": tool_calls}
                     if text_buf:
@@ -453,7 +467,7 @@ class WyckoffTUI(App):
                         display = self._tools.display_name(name)
 
                         _write(Text.from_markup(
-                            f"  [yellow]⚡ {display}[/yellow] [dim]{_brief_args(args)}[/dim]"
+                            f"  [yellow]⚙ {display}[/yellow] [dim]{_brief_args(args)}[/dim]"
                         ))
                         _scroll()
 
@@ -464,6 +478,10 @@ class WyckoffTUI(App):
                         if isinstance(result, dict) and result.get("error"):
                             _write(Text.from_markup(
                                 f"  [red]✗ {display}[/red] [dim]{elapsed_tool:.1f}s {str(result['error'])[:80]}[/dim]"
+                            ))
+                        elif isinstance(result, dict) and result.get("status") == "background":
+                            _write(Text.from_markup(
+                                f"  [cyan]↗ {display}[/cyan] [dim]已提交后台[/dim]"
                             ))
                         else:
                             _write(Text.from_markup(
@@ -479,9 +497,10 @@ class WyckoffTUI(App):
                         })
                     continue
 
-                # 纯文本回答
+                # ── 最终输出（独立区域） ──
                 self._messages.append({"role": "assistant", "content": text_buf})
                 if text_buf:
+                    _write(Text.from_markup("  [dim]───[/dim]"))
                     _write(Markdown(text_buf))
                     _scroll()
 
@@ -518,6 +537,37 @@ class WyckoffTUI(App):
 
         finally:
             self._busy = False
+            if self._queue:
+                next_msg = self._queue.popleft()
+                self.call_from_thread(self._send_message, next_msg)
+
+    # ----- 后台任务回调 -----
+
+    def _on_bg_complete(self, task_id: str, tool_name: str, result) -> None:
+        """后台任务完成，注入结果到消息队列。"""
+        from cli.tools import TOOL_DISPLAY_NAMES
+        display = TOOL_DISPLAY_NAMES.get(tool_name, tool_name)
+        is_error = isinstance(result, dict) and result.get("error")
+
+        log = self.query_one("#chat-log", ChatLog)
+        if is_error:
+            self.call_from_thread(
+                log.write,
+                Text.from_markup(f"  [red]✗ 后台任务失败：{display}[/red] [dim]{str(result['error'])[:80]}[/dim]"),
+            )
+        else:
+            self.call_from_thread(
+                log.write,
+                Text.from_markup(f"  [green]✅ 后台任务完成：{display}[/green]"),
+            )
+
+        summary = json.dumps(result, ensure_ascii=False, default=str)
+        if len(summary) > 3000:
+            summary = summary[:3000] + "..."
+        self._queue.append(f"[后台任务完成] {tool_name}: {summary}")
+        # 空闲时自动触发
+        if not self._busy:
+            self.call_from_thread(self._send_message, self._queue.popleft())
 
     # ----- Actions -----
 
@@ -526,6 +576,7 @@ class WyckoffTUI(App):
 
     def action_new_chat(self) -> None:
         self._messages.clear()
+        self._queue.clear()
         log = self.query_one("#chat-log", ChatLog)
         log.clear()
         log.write(Text.from_markup("[green]新对话已开始[/green]\n"))

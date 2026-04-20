@@ -6,22 +6,23 @@
 
 ```
                     ┌──────────────┐  ┌──────────────┐  ┌──────────────┐
-                    │  Streamlit   │  │  CLI         │  │  GitHub      │
+                    │  Streamlit   │  │  CLI (TUI)   │  │  GitHub      │
                     │  Web UI      │  │  Terminal    │  │  Actions     │
                     └──────┬───────┘  └──────┬───────┘  └──────┬───────┘
                            │                 │                 │
                            ▼                 ▼                 ▼
                     ┌─────────────────────────────────────────────────┐
                     │              Agent Brain                        │
-                    │  Web: Google ADK  ·  CLI: 裸写 Agent 循环       │
+                    │  Web: Google ADK  ·  CLI: Agent Loop + BG Task  │
                     │                                                 │
-                    │  10 FunctionTools — LLM 自主编排                 │
+                    │  13 FunctionTools — LLM 自主编排                 │
+                    │  自动 Plan Mode — 复杂任务拆步骤执行              │
                     └────────────────────┬────────────────────────────┘
                                          │
                     ┌────────────────────┼────────────────────┐
                     ▼                    ▼                    ▼
              ┌─────────────┐    ┌──────────────┐    ┌──────────────┐
-             │ Core Engine │    │ LLM x8       │    │ Cloud Store  │
+             │ Core Engine │    │ LLM          │    │ Cloud Store  │
              │             │    │              │    │              │
              │ Funnel      │    │ Gemini  ★    │    │ Supabase     │
              │ Diagnostic  │    │ OpenAI       │    │  Portfolio   │
@@ -31,247 +32,249 @@
              └──────┬──────┘    │ Minimax      │    └──────────────┘
                     │           └──────────────┘
                     ▼
-             ┌─────────────┐         ┌──────────────────────┐
-             │ Data Sources│         │ Notifications        │
-             │             │         │                      │
-             │ tushare  ★  │         │ 飞书 · 企微 · 钉钉   │
-             │ akshare     │         │ Telegram             │
-             │ baostock    │         └──────────────────────┘
+             ┌─────────────┐
+             │ Data Sources│
+             │             │
+             │ tushare  ★  │
+             │ akshare     │
+             │ baostock    │
              │ efinance    │
              └─────────────┘
-```
-
-## 目录结构
-
-```
-.
-├── cli/                        # 终端 CLI Agent
-│   ├── __main__.py             # 入口：wyckoff 命令
-│   ├── agent.py                # Agent 循环（think → tool → execute）
-│   ├── auth.py                 # Supabase 认证 + session 持久化
-│   ├── tools.py                # 工具注册表（复用 chat_tools.py）
-│   ├── ui.py                   # TUI（rich + prompt_toolkit）
-│   └── providers/              # LLM 适配层
-│       ├── base.py             # LLMProvider 抽象接口
-│       ├── gemini.py           # google-genai SDK
-│       ├── claude.py           # anthropic SDK
-│       └── openai.py           # openai SDK（支持兼容端点）
-│
-├── agents/                     # Web 端 Agent（Google ADK）
-│   ├── wyckoff_chat_agent.py   # ADK LlmAgent 定义
-│   ├── chat_tools.py           # 10 个 FunctionTool 实现
-│   └── session_manager.py      # 会话管理
-│
-├── core/                       # 核心策略与领域逻辑
-│   ├── wyckoff_engine.py       # 五层漏斗引擎（~60 可调参数）
-│   ├── holding_diagnostic.py   # 持仓诊断
-│   ├── signal_confirmation.py  # 信号确认状态机
-│   ├── sector_rotation.py      # 板块轮动
-│   ├── prompts.py              # 全部 LLM 提示词
-│   ├── stock_cache.py          # 行情缓存
-│   ├── constants.py            # 常量
-│   ├── funnel_pipeline.py      # 漏斗编排（re-export）
-│   ├── batch_report.py         # 研报（re-export）
-│   └── strategy.py             # 策略（re-export）
-│
-├── integrations/               # 外部集成
-│   ├── data_source.py          # 数据源（tushare→akshare→baostock→efinance）
-│   ├── llm_client.py           # LLM 客户端（8 厂商直连）
-│   ├── stock_hist_repository.py# 缓存 + gap-fill
-│   ├── supabase_base.py        # Supabase 客户端工厂
-│   ├── supabase_client.py      # Web 端 Supabase（用户 session 绑定）
-│   ├── supabase_portfolio.py   # 持仓读写
-│   ├── supabase_recommendation.py # 推荐跟踪
-│   ├── rag_veto.py             # RAG 防雷（负面舆情过滤）
-│   └── github_actions.py       # GitHub Actions 触发与结果查询
-│
-├── tools/                      # 可复用工具函数
-│   ├── data_fetcher.py         # 数据拉取辅助
-│   ├── report_builder.py       # 研报拼装
-│   ├── market_regime.py        # 市场环境判断
-│   ├── candidate_ranker.py     # 候选排序
-│   └── funnel_config.py        # 漏斗配置
-│
-├── scripts/                    # 定时 / 批处理任务
-│   ├── daily_job.py            # 主编排：Step2→3→4
-│   ├── wyckoff_funnel.py       # 全市场漏斗
-│   ├── step3_batch_report.py   # AI 研报生成
-│   ├── step4_rebalancer.py     # 私人决断 + OMS
-│   ├── premarket_risk_job.py   # 盘前风控
-│   ├── review_list_replay.py   # 涨停复盘
-│   ├── backtest_runner.py      # 日线回测
-│   ├── diagnose_holdings.py    # 持仓诊断脚本
-│   └── stock_hist_cache_maintenance.py # 缓存维护
-│
-├── app/                        # Streamlit 组件
-│   ├── auth_component.py       # 认证组件
-│   ├── layout.py               # 页面布局
-│   ├── navigation.py           # 导航
-│   └── background_jobs.py      # 后台任务状态
-│
-├── pages/                      # Streamlit 页面
-│   ├── WyckoffScreeners.py     # 漏斗筛选
-│   ├── AIAnalysis.py           # AI 分析
-│   ├── Portfolio.py            # 持仓管理
-│   ├── RecommendationTracking.py # 推荐跟踪
-│   ├── Export.py               # 数据导出
-│   ├── CustomExport.py         # 自定义导出
-│   ├── Settings.py             # 设置
-│   └── Changelog.py            # 更新日志
-│
-├── streamlit_app.py            # Web 入口
-├── pyproject.toml              # 包定义
-└── requirements.txt            # 依赖
 ```
 
 ## Agent 架构
 
 ### 双通道复用
 
-Web 和 CLI 共享同一套工具函数（`agents/chat_tools.py`），通过不同的 Agent 运行时驱动：
+Web 和 CLI 共享同一套工具函数（`agents/chat_tools.py`）+ 同一份 System Prompt（`core/prompts.py`），通过不同运行时驱动：
 
-- **Web**：Google ADK `LlmAgent`，原生工具绑定
-- **CLI**：裸写 Agent 循环（`cli/agent.py`），`think → tool_call → execute → think`
+| | Web | CLI |
+|---|---|---|
+| 运行时 | Google ADK `LlmAgent` | 裸写 Agent Loop（`cli/tui.py` → `cli/agent.py`） |
+| UI | Streamlit 页面 | Textual 全屏 TUI |
+| 工具数 | 12（共享） | 13（+`check_background_tasks`） |
+| 后台任务 | ✗ | ✓ 长任务非阻塞 |
+| 消息排队 | ✗ | ✓ Agent 忙时自动排队 |
+| Thinking | ✗ | ✓ 推理模型 reasoning 展示 |
+| Plan Mode | ✓ prompt 驱动 | ✓ prompt 驱动 |
 
-### 决策流
+### ReAct 循环（Reasoning + Acting）
+
+Agent 采用 ReAct 范式：每一轮 LLM 先推理（Reason），再决定是否行动（Act），观察工具结果（Observe）后进入下一轮推理，直到能直接回答用户。
 
 ```
-用户："帮我看看 000001 和 600519 哪个更值得买"
+                        ┌──────────┐
+                        │  用户输入  │
+                        └────┬─────┘
+                             │
+                   ┌─────────▼──────────┐
+                   │  Reason            │
+                   │  LLM 推理 + 规划   │◄───────────┐
+                   │  (thinking/text)   │            │
+                   └─────────┬──────────┘            │
+                             │                       │
+                    ┌────────┴────────┐              │
+                    │  需要 Act?      │              │
+                    └───┬─────────┬───┘              │
+                     No │         │ Yes              │
+                        ▼         ▼                  │
+                  ┌──────────┐  ┌──────────────┐     │
+                  │ 输出回答  │  │  Act         │     │
+                  └──────────┘  │  执行工具     │     │
+                                │              │     │
+                                │ 后台工具?     │     │  Observe
+                                │  ├─Y→ submit │     │  工具结果
+                                │  └─N→ 同步   │     │  注入上下文
+                                └──────┬───────┘     │
+                                       └─────────────┘
+                                    (最多 15 轮)
+```
+
+单轮 ReAct 示例：
+
+```
+用户: "帮我看看宁德时代"
+
+Round 1 — Reason: 用户要看宁德时代，需要先查代码
+         Act:    search_stock_by_name("宁德")
+         Observe: {"code": "300750", "name": "宁德时代"}
+
+Round 2 — Reason: 拿到代码 300750，执行诊断
+         Act:    diagnose_stock("300750")
+         Observe: {health: "CAUTION", l2_channel: "潜伏", ...}
+
+Round 3 — Reason: 有诊断数据了，综合输出结论
+         Act:    无（直接回答）
+         Output: "300750 宁德时代当前处于潜伏通道..."
+```
+
+### 工具清单
+
+| # | 工具 | 显示名 | 说明 | 执行 |
+|---|------|--------|------|------|
+| 1 | `search_stock_by_name` | 搜索股票 | 代码⇄名字双向模糊搜索（多源降级） | 同步 |
+| 2 | `diagnose_stock` | 读盘诊断 | 单只股票 Wyckoff 结构化诊断 | 同步 |
+| 3 | `get_portfolio` | 查看持仓 | 持仓列表 + 可用资金，纯数据 | 同步 |
+| 4 | `diagnose_portfolio` | 持仓审判 | 逐只持仓量价体检 | 同步 |
+| 5 | `update_portfolio` | 调仓操作 | 新增/修改/删除持仓、设可用资金 | 同步 |
+| 6 | `get_stock_price` | 调取行情 | 近期 OHLCV + 涨跌幅 | 同步 |
+| 7 | `get_market_overview` | 大盘水温 | 主要指数涨跌幅 | 同步 |
+| 8 | `screen_stocks` | 全市场扫描 | 五层漏斗筛选 | ⚡后台 |
+| 9 | `generate_ai_report` | 深度审讯 | 三阵营 AI 研报 | ⚡后台 |
+| 10 | `generate_strategy_decision` | 攻防决策 | 扫描→研报→决策全流程 | ⚡后台 |
+| 11 | `get_recommendation_tracking` | 战绩追踪 | 历史推荐记录 + 涨跌幅 | 同步 |
+| 12 | `get_signal_pending` | 信号确认池 | L4 信号确认进度 | 同步 |
+| 13 | `check_background_tasks` | 任务状态 | 后台任务进度查询（CLI 专属） | 同步 |
+
+### 工具路由原则
+
+System Prompt 内建路由规则，LLM 自主判断调哪个工具：
+
+- "我有什么持仓" → `get_portfolio`（纯数据，秒回）
+- "持仓健康吗" → `diagnose_portfolio`（逐只诊断，较慢）
+- "帮我加/删持仓" → `search_stock_by_name` → `update_portfolio`（先查名再改）
+- "有什么机会" → `screen_stocks`（后台执行）
+
+**铁律：一个工具能回答的问题，绝不调两个。用户没要求分析，就不要分析。**
+
+### 自动 Plan Mode
+
+复杂任务（≥2 个工具）自动进入 Plan Mode：
+
+```
+用户: "帮我全面分析一下现在的市场"
   │
   ▼
-Agent 理解意图 → "对比两只股票"
+Agent 输出计划:
+  1. 查大盘水温 → get_market_overview
+  2. 全市场扫描 → screen_stocks（后台）
+  3. 诊断持仓 → diagnose_portfolio
+  4. 综合建议
   │
-  ├─→ diagnose_stock("000001") → 吸筹末期
-  ├─→ diagnose_stock("600519") → Markup 中段
-  ├─→ get_stock_price("000001") → 近期量价
-  ├─→ get_stock_price("600519") → 近期量价
+  ├─→ 逐步执行，每步汇报进度
+  ├─→ 步骤间可动态调整（如大盘极弱则跳过进攻）
   │
   ▼
-综合推理 → 对比结构、量价、风险收益比
+最终综合结论
+```
+
+### 后台任务架构
+
+`cli/background.py` — `BackgroundTaskManager`
+
+```
+Agent → tool_call: screen_stocks
+  │
+  ├─→ ToolRegistry 检测为 BACKGROUND_TOOLS
+  │   {"screen_stocks", "generate_ai_report", "generate_strategy_decision"}
+  │
+  ├─→ BackgroundTaskManager.submit() → daemon Thread 执行
+  ├─→ 立即返回 {"status": "background", "task_id": "bg_xxx"}
   │
   ▼
-输出结论："000001 处于 Spring 确认阶段，胜率更高..."
+Agent → "已提交后台，可继续提问"
+  │
+  │   （用户继续聊天...）
+  │
+  ▼   （后台线程完成）
+on_complete 回调 → TUI 显示通知 → 结果注入消息队列 → Agent 自动汇报
 ```
 
-工具调用顺序和次数由 LLM 实时决策，无需预编排。
+用户可随时通过 `check_background_tasks` 查询进度。
 
-### CLI Provider 架构
+### 消息排队
 
 ```
-LLMProvider (abstract)
-  ├── GeminiProvider   — google-genai SDK
-  ├── ClaudeProvider   — anthropic SDK
-  └── OpenAIProvider   — openai SDK（支持 base_url 自定义）
+用户输入 → Agent 忙? ─No→ 立即处理
+                      │
+                      Yes→ 入 deque 队列，显示 "⏳ 已排队 (N)"
+                              │
+                              ▼ （当前任务完成后）
+                         自动取队首消息 → 继续处理
 ```
 
-三者共享统一的消息格式和工具 Schema，通过 `cli/tools.py` 的 `TOOL_SCHEMAS` 定义。
+`/new` 清对话时同步清空队列。
+
+### CLI Provider 层
+
+```
+LLMProvider (abstract)              cli/providers/base.py
+  │
+  ├── GeminiProvider                google-genai SDK
+  ├── ClaudeProvider                anthropic SDK
+  └── OpenAIProvider                openai SDK + base_url + reasoning_content
+```
+
+统一接口：`chat_stream(messages, tools, system_prompt) → Generator[chunk]`
+
+chunk 类型：`thinking_delta` | `text_delta` | `tool_calls` | `usage`
+
+OpenAI provider 兼容所有 OpenAI API 格式端点（DeepSeek / Qwen / Kimi / LongCat 等），支持推理模型的 `reasoning_content` thinking 流。
+
+### TUI 视觉层次
+
+```
+❯ 用户问题                           ← cyan 粗体
+
+  💭 推理摘要…  (1234 字)             ← thinking：一行，dim italic
+  ⚙ 搜索股票  keyword=宁德           ← tool 执行：黄色
+  ✓ 搜索股票  0.3s                   ← tool 完成：绿色
+  ✗ 调取行情  1.2s 超时              ← tool 失败：红色
+  ↗ 全市场扫描  已提交后台            ← 后台任务：cyan
+  ───                                ← 分隔线
+  最终 Markdown 输出...              ← Markdown 渲染
+
+  ↑1,234 ↓567 · 2.3s               ← token 统计：dim
+```
+
+### 本地持久化（~/.wyckoff/）
+
+| 文件 | 用途 |
+|------|------|
+| `session.json` | Supabase 登录态（access_token / refresh_token） |
+| `wyckoff.json` | 模型配置（provider / api_key / model / base_url） |
+
+启动自动恢复：登录态 → `restore_session()`；模型 → `load_model_config()`。登录过期提示 `/login`。
 
 ## 五层漏斗引擎
 
-`core/wyckoff_engine.py` 实现，`FunnelConfig` 数据类包含 ~60 个可调参数。
+`core/wyckoff_engine.py`，~60 可调参数（`FunnelConfig`）。
 
-### Layer 1 — 剥离垃圾
-
-- 剔除 ST / *ST / 北交所 / 科创板
-- 市值 ≥ 35 亿（`min_market_cap_yi`）
-- 近 20 日均成交额 ≥ 5000 万（`min_avg_amount_wan`）
-
-### Layer 2 — 六通道甄选
-
-| 通道 | 逻辑 |
-|------|------|
-| 主升 | MA50 > MA200 + MA50 斜率向上 |
-| 点火 | 近期放量突破 + MA20 拐头 |
-| 潜伏 | 低位横盘 + 缩量 + MA20 走平 |
-| 吸筹 | 在底部区间 + 量价特征符合 Wyckoff 吸筹 |
-| 地量 | 极度缩量 + 价格不再创新低 |
-| 护盘 | RS 相对强度分歧 |
-
-### Layer 2.5 — Markup 识别
-
-MA50 上穿 MA200 + 角度验证 → 标注已进入上升趋势。
-
-### Layer 3 — 板块共振
-
-统计 L2 通过股票的行业分布，保留 Top-N 行业的标的。
-
-### Layer 4 — 微观狙击
-
-| 信号 | 含义 |
-|------|------|
-| Spring | 终极震仓——跌破支撑后快速收回 |
-| LPS | 缩量回踩最后支撑点 |
-| SOS | 低位放量突破（Sign of Strength） |
-| EVR | 放量不跌（Effort vs Result） |
-
-### Layer 5 — 退出信号
-
-止损 -7%、盈利激活 +15% 后回撤 -10% 止盈、派发警告。
+| 层 | 名称 | 逻辑 |
+|----|------|------|
+| L1 | 剥离垃圾 | 剔除 ST / 北交 / 科创，市值 ≥ 35 亿，成交额 ≥ 5000 万 |
+| L2 | 六通道甄选 | 主升 / 点火 / 潜伏 / 吸筹 / 地量 / 护盘 |
+| L2.5 | Markup 识别 | MA50 上穿 MA200 + 角度验证 |
+| L3 | 板块共振 | L2 通过股票行业分布，保留 Top-N 行业 |
+| L4 | 微观狙击 | Spring / LPS / SOS / EVR 触发信号 |
+| L5 | 退出信号 | 止损 -7%、止盈回撤 -10%、派发警告 |
 
 ## 信号确认状态机
 
-`core/signal_confirmation.py` 实现 L4 触发信号经 1-3 天价格确认：
+`core/signal_confirmation.py`，L4 信号经 1-3 天价格确认：
 
 ```
 pending ──(价格确认)──→ confirmed（可操作）
-   │
    └──(超时)──→ expired（失效）
 ```
 
 TTL：SOS 2 天、Spring 3 天、LPS 3 天、EVR 2 天。
 
-## Pipeline 执行流
-
-定时任务（`.github/workflows/wyckoff_funnel.yml`）：
+## Pipeline（定时任务）
 
 ```
-cron (周日-周四 18:25 北京) / 手动触发
-  │
+cron (周日-周四 18:25 北京)
   ├─→ Step 2: 全市场 OHLCV → 五层漏斗 → ~30 候选
-  │
   ├─→ Step 3: LLM 三阵营研报 → 飞书推送
-  │
   └─→ Step 4: LLM 持仓决策 → OMS 风控 → Telegram 推送
 ```
 
-| 步骤 | 代码 | 本质 |
-|------|------|------|
-| Funnel | `scripts/wyckoff_funnel.py` → `core/wyckoff_engine.py` | 确定性量价计算 |
-| Report | `scripts/step3_batch_report.py` | 单次 LLM 调用 |
-| Rebalance | `scripts/step4_rebalancer.py` | LLM + OMS 风控 |
-
-## 数据源降级
+## 数据源
 
 ```
-tushare(★) → akshare → baostock → efinance
+tushare(★) → akshare → baostock → efinance   （行情 OHLCV，四级降级）
+tushare → akshare + 本地 24h 缓存              （股票列表，代码⇄名字映射）
 ```
-
-- `TUSHARE_TOKEN` 未配置时自动跳过
-- baostock 有熔断机制（连续 10 次失败后暂停）
-- 指数 / 大盘数据固定走 tushare
-- 可通过环境变量禁用：`DATA_SOURCE_DISABLE_AKSHARE=1`
-
-## LLM 支持
-
-### CLI 三选一
-
-| Provider | SDK | 默认模型 |
-|----------|-----|---------|
-| Gemini | google-genai | gemini-2.5-flash |
-| Claude | anthropic | claude-sonnet-4-20250514 |
-| OpenAI | openai | gpt-4o |
-
-OpenAI provider 支持 `base_url`，兼容 DeepSeek / Qwen / Kimi 等端点。
-
-### Pipeline 八厂商
-
-Gemini / OpenAI / DeepSeek / Qwen / Kimi / 智谱 / 火山引擎 / Minimax
-
-通过 `integrations/llm_client.py` 直连，无中间层。
-
-### Web Agent
-
-Google ADK 原生 Gemini，可通过 LiteLLM 桥接切换其他模型。
 
 ## 云端存储（Supabase）
 
@@ -280,83 +283,9 @@ Google ADK 原生 Gemini，可通过 LiteLLM 桥接切换其他模型。
 | `portfolios` | 投资组合元数据 |
 | `portfolio_positions` | 持仓明细 |
 | `trade_orders` | AI 交易建议 |
-| `daily_nav` | 每日净值快照 |
-| `user_settings` | 用户配置（API Key / Webhook 等） |
+| `user_settings` | 用户配置（API Key / Webhook） |
 | `stock_hist_cache` | 行情缓存（qfq，滚动 400 天） |
 | `recommendations` | 推荐跟踪 |
 | `signal_pending` | 信号确认池 |
 
-Web 端通过用户 JWT 走 RLS，CLI 通过 `access_token` 走 RLS，脚本通过 `service_role_key` 绕过 RLS。
-
-## 完整配置项
-
-### 环境变量（.env）
-
-| 变量 | 必填 | 说明 |
-|------|------|------|
-| `SUPABASE_URL` | 是 | Supabase 项目 URL |
-| `SUPABASE_KEY` | 是 | Supabase anon key |
-| `GEMINI_API_KEY` | 是* | Gemini（或配其他厂商 Key） |
-| `TUSHARE_TOKEN` | 否 | 高级数据源 |
-| `FEISHU_WEBHOOK_URL` | 否 | 飞书推送 |
-| `WECOM_WEBHOOK_URL` | 否 | 企微推送 |
-| `DINGTALK_WEBHOOK_URL` | 否 | 钉钉推送 |
-| `TG_BOT_TOKEN` | 否 | Telegram Bot |
-| `TG_CHAT_ID` | 否 | Telegram Chat ID |
-| `TAVILY_API_KEY` | 否 | RAG 防雷 |
-| `SUPABASE_SERVICE_ROLE_KEY` | 否 | 脚本侧写库 |
-
-### GitHub Actions Secrets
-
-以上所有变量 + 额外：
-
-| 变量 | 说明 |
-|------|------|
-| `SUPABASE_USER_ID` | Step4 目标用户 |
-| `MY_PORTFOLIO_STATE` | 本地持仓兜底（JSON） |
-| `DEFAULT_LLM_PROVIDER` | 定时任务 LLM 厂商 |
-| `GEMINI_MODEL` | 模型覆盖 |
-
-### Streamlit Secrets（Web 后台任务）
-
-| 变量 | 说明 |
-|------|------|
-| `GITHUB_ACTIONS_TOKEN` | 触发 workflow_dispatch |
-| `GITHUB_ACTIONS_ALLOWED_USER_IDS` | 白名单 |
-
-## 日线回测
-
-```bash
-python -m scripts.backtest_runner \
-  --start 2025-01-01 --end 2025-12-31 \
-  --hold-days 15 --top-n 3 \
-  --exit-mode sltp --stop-loss -9 --take-profit 0
-```
-
-输出：`summary_*.md`（收益/风险统计）+ `trades_*.csv`（逐笔明细）
-
-偏差说明：
-- 默认关闭当前截面过滤（降低前视偏差）
-- 含双边摩擦成本 0.2%
-- 仍存在幸存者偏差
-
-## RAG 防雷
-
-基于 akshare 东方财富新闻搜索，自动过滤含负面关键词的股票：
-
-立案、调查、证监会、处罚、退市、减持、造假、质押爆仓、债务违约、业绩预亏等。
-
-## 部署
-
-### Streamlit Cloud
-
-1. Fork 仓库
-2. [Streamlit Cloud](https://share.streamlit.io/) 部署，入口 `streamlit_app.py`
-3. 配置 Secrets：`SUPABASE_URL`、`SUPABASE_KEY`、`COOKIE_SECRET`
-
-### 自建
-
-```bash
-pip install -e ".[streamlit]"
-streamlit run streamlit_app.py
-```
+数据隔离：Web JWT → RLS，CLI access_token → RLS，脚本 service_role_key → 绕过 RLS。

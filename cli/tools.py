@@ -12,6 +12,7 @@ from __future__ import annotations
 import inspect
 import json
 import logging
+import time
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -173,7 +174,18 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "required": ["action"],
         },
     },
+    {
+        "name": "check_background_tasks",
+        "description": "查询后台任务执行状态。用户问'扫描好了没''任务进度'时调用。",
+        "parameters": {
+            "type": "object",
+            "properties": {},
+        },
+    },
 ]
+
+# 后台执行的长任务工具
+BACKGROUND_TOOLS = {"screen_stocks", "generate_ai_report", "generate_strategy_decision"}
 
 # 工具中文显示名，用于终端展示
 TOOL_DISPLAY_NAMES: dict[str, str] = {
@@ -189,6 +201,7 @@ TOOL_DISPLAY_NAMES: dict[str, str] = {
     "get_signal_pending": "信号确认池",
     "get_portfolio": "查看持仓",
     "update_portfolio": "调仓操作",
+    "check_background_tasks": "任务状态",
 }
 
 
@@ -206,6 +219,13 @@ class ToolRegistry:
             "refresh_token": refresh_token,
         })
         self._tools = self._register_tools()
+        self._bg_manager = None
+        self._on_bg_complete = None
+
+    def set_background_manager(self, bg_manager, on_complete=None):
+        from cli.background import BackgroundTaskManager
+        self._bg_manager: BackgroundTaskManager = bg_manager
+        self._on_bg_complete = on_complete
 
     @property
     def state(self) -> dict:
@@ -248,7 +268,13 @@ class ToolRegistry:
         return TOOL_SCHEMAS
 
     def execute(self, name: str, args: dict[str, Any]) -> Any:
-        """执行指定工具，返回结果。"""
+        """执行指定工具，返回结果。长任务自动提交后台。"""
+        # check_background_tasks 直接返回状态
+        if name == "check_background_tasks":
+            if not self._bg_manager:
+                return {"tasks": [], "message": "无后台任务"}
+            return {"tasks": self._bg_manager.list_tasks()}
+
         fn = self._tools.get(name)
         if fn is None:
             return {"error": f"未知工具: {name}"}
@@ -259,9 +285,22 @@ class ToolRegistry:
         if "tool_context" in sig.parameters:
             call_args["tool_context"] = self._tool_context
 
+        # 长任务提交后台
+        if name in BACKGROUND_TOOLS and self._bg_manager is not None:
+            task_id = f"bg_{int(time.time())}_{name}"
+            display = TOOL_DISPLAY_NAMES.get(name, name)
+            self._bg_manager.submit(
+                task_id, name, fn, call_args,
+                on_complete=self._on_bg_complete,
+            )
+            return {
+                "status": "background",
+                "task_id": task_id,
+                "message": f"{display}已提交后台执行，您可以继续提问。任务完成后会自动通知。",
+            }
+
         try:
-            result = fn(**call_args)
-            return result
+            return fn(**call_args)
         except Exception as e:
             logger.exception("Tool %s execution failed", name)
             return {"error": f"工具执行失败: {e}"}
