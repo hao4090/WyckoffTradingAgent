@@ -7,13 +7,13 @@ on:
   workflow_dispatch:
     inputs:
       start:
-        description: "回测起始日期 (YYYY-MM-DD)"
-        required: true
-        default: "2025-09-01"
+        description: "回测起始日期 (YYYY-MM-DD)，留空=自动取6个月前"
+        required: false
+        default: ""
       end:
-        description: "回测结束日期 (YYYY-MM-DD)"
-        required: true
-        default: "2026-04-11"
+        description: "回测结束日期 (YYYY-MM-DD)，留空=自动取昨天"
+        required: false
+        default: ""
       top_n:
         description: "每日选股 TopN"
         required: true
@@ -40,9 +40,9 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # schedule 触发时 inputs.* 为空，这里统一设置默认值做 fallback
-  BT_START: ${{ inputs.start || '2025-09-01' }}
-  BT_END: ${{ inputs.end || '2026-04-11' }}
+  # BT_START / BT_END 留空时由各 job 的 compute-dates 步骤动态计算
+  BT_START: ${{ inputs.start }}
+  BT_END: ${{ inputs.end }}
   BT_TOP_N: ${{ inputs.top_n || '3' }}
   BT_BOARD: ${{ inputs.board || 'all' }}
   BT_SAMPLE_SIZE: ${{ inputs.sample_size || '0' }}
@@ -65,6 +65,15 @@ jobs:
       TZ: Asia/Shanghai
       FUNNEL_EXPORT_FULL_FETCH: "1"
     steps:
+      - name: Compute date defaults
+        run: |
+          if [ -z "$BT_END" ]; then
+            echo "BT_END=$(TZ=Asia/Shanghai date -d '-1 day' +%Y-%m-%d)" >> "$GITHUB_ENV"
+          fi
+          if [ -z "$BT_START" ]; then
+            echo "BT_START=$(TZ=Asia/Shanghai date -d '-6 months -1 day' +%Y-%m-%d)" >> "$GITHUB_ENV"
+          fi
+
       - uses: actions/checkout@v4
 
       - name: Set up Python
@@ -316,6 +325,15 @@ jobs:
       TZ: Asia/Shanghai
 
     steps:
+      - name: Compute date defaults
+        run: |
+          if [ -z "$BT_END" ]; then
+            echo "BT_END=$(TZ=Asia/Shanghai date -d '-1 day' +%Y-%m-%d)" >> "$GITHUB_ENV"
+          fi
+          if [ -z "$BT_START" ]; then
+            echo "BT_START=$(TZ=Asia/Shanghai date -d '-6 months -1 day' +%Y-%m-%d)" >> "$GITHUB_ENV"
+          fi
+
       - uses: actions/checkout@v4
 
       - name: Set up Python
@@ -387,6 +405,15 @@ jobs:
     env:
       FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
     steps:
+      - name: Compute date defaults
+        run: |
+          if [ -z "$BT_END" ]; then
+            echo "BT_END=$(TZ=Asia/Shanghai date -d '-1 day' +%Y-%m-%d)" >> "$GITHUB_ENV"
+          fi
+          if [ -z "$BT_START" ]; then
+            echo "BT_START=$(TZ=Asia/Shanghai date -d '-6 months -1 day' +%Y-%m-%d)" >> "$GITHUB_ENV"
+          fi
+
       - uses: actions/checkout@v4
 
       - name: Set up Python
@@ -406,8 +433,6 @@ jobs:
       - name: Aggregate and notify
         shell: bash
         env:
-          BT_START: ${{ inputs.start || '2025-09-01' }}
-          BT_END: ${{ inputs.end || '2026-04-11' }}
           BT_TOP_N: ${{ inputs.top_n || '3' }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
