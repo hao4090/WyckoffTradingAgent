@@ -119,6 +119,14 @@ TRACK_LABELS = {
     "Trend": "Trend轨（右侧主升 / 放量点火）",
     "Accum": "Accum轨（左侧潜伏 / Spring / LPS）",
 }
+SPRINGBOARD_ABC_LEGEND = (
+    "## 🧾 起跳板硬门槛释义（A/B/C）\n"
+    "- A：近5日出现缩量测试/拒绝下跌（量比 < 0.8x 且收位 > 60%）\n"
+    "- B：突破日量比 >= 1.5x 且收盘站稳突破位（收位 > 70%）\n"
+    "- C：支撑位至少经过 2 次测试且未被有效击穿\n"
+    "- 进入“处于起跳板”通常需至少满足 2 条；若弱市（RISK_OFF/CRASH）执行更严格。\n\n"
+    "---\n"
+)
 
 
 def _dump_model_input(
@@ -578,6 +586,15 @@ def _call_track_report(
     if not _has_required_sections(report):
         print(f"[step3] {track} 轨结构修复后仍缺少关键章节，追加系统兜底分层")
         report = report.rstrip() + "\n\n" + _build_fallback_sections(selected_df)
+
+    # 校验：检测报告中出现但不属于本轨输入集的股票代码（模型幻觉）
+    input_set = set(str(c).strip() for c in selected_codes)
+    mentioned = set(re.findall(r"\b(\d{6})\b", report))
+    leaked = mentioned - input_set
+    if leaked:
+        print(f"[step3] ⚠ {track} 轨报告中出现非本轨标的: {','.join(sorted(leaked))}")
+        report += f"\n\n> ⚠ 以下代码不在{track}轨输入集中，可能为模型幻觉: {', '.join(sorted(leaked))}"
+
     return (True, report, used_model or model)
 
 
@@ -835,23 +852,15 @@ def run(
         if not bool(rag_status.get("enabled")):
             print("[step3][rag] 已关闭（RAG_VETO_ENABLED=0）")
             rag_skip_reason = "RAG_VETO_ENABLED=0"
-        elif not bool(rag_status.get("has_provider")):
-            print("[step3][rag] 跳过：未配置 TAVILY_API_KEY/SERPAPI_API_KEY")
-            rag_skip_reason = "未配置 TAVILY_API_KEY/SERPAPI_API_KEY"
         else:
             rag_inputs = [
                 {"code": str(r.get("code", "")).strip(), "name": str(r.get("name", ""))}
                 for _, r in selected_df.iterrows()
             ]
-            provider_text = (
-                f"tavily={bool(rag_status.get('tavily_configured'))}, "
-                f"serpapi={bool(rag_status.get('serpapi_configured'))}"
-            )
             print(
-                "[step3][rag] 启动："
-                f"candidates={len(rag_inputs)}, providers=({provider_text}), "
+                f"[step3][rag] 启动：candidates={len(rag_inputs)}, "
+                f"source={rag_status.get('source', 'akshare')}, "
                 f"lookback_days={rag_status.get('lookback_days')}, "
-                f"max_results={rag_status.get('max_results')}, "
                 f"workers={rag_status.get('max_workers')}"
             )
 
@@ -862,17 +871,7 @@ def run(
             relevant_n = 0
             semantic_checked_n = 0
             error_n = 0
-            source_counts = {"tavily": 0, "serpapi": 0, "none": 0}
-
             for code, result in veto_map.items():
-                src = str(result.search_source or "").strip().lower()
-                if src == "tavily":
-                    source_counts["tavily"] += 1
-                elif src == "serpapi":
-                    source_counts["serpapi"] += 1
-                else:
-                    source_counts["none"] += 1
-
                 if int(result.raw_result_count or 0) > 0:
                     external_ok_n += 1
                 if int(result.relevant_result_count or 0) > 0:
@@ -910,14 +909,10 @@ def run(
 
             rag_summary_lines = [
                 f"- 扫描股票: {scanned_n}",
-                f"- 外部检索成功: {external_ok_n}/{scanned_n}" if scanned_n else "- 外部检索成功: 0/0",
-                f"- 有效相关新闻: {relevant_n}/{scanned_n}" if scanned_n else "- 有效相关新闻: 0/0",
-                (
-                    f"- 来源分布: tavily={source_counts['tavily']}, "
-                    f"serpapi={source_counts['serpapi']}, none={source_counts['none']}"
-                ),
+                f"- 新闻拉取成功: {external_ok_n}/{scanned_n}" if scanned_n else "- 新闻拉取成功: 0/0",
+                f"- 命中负面关键词: {relevant_n}/{scanned_n}" if scanned_n else "- 命中负面关键词: 0/0",
                 f"- 语义二判执行: {semantic_checked_n}",
-                f"- 检索异常: {error_n}",
+                f"- 拉取异常: {error_n}",
                 f"- veto 剔除: {len(vetoed_codes)}",
             ]
 
@@ -1206,7 +1201,7 @@ def run(
         + "\n\n---\n"
     )
 
-    content = f"{model_banner}\n\n{rag_veto_preview}{ops_preview}\n{report}"
+    content = f"{model_banner}\n\n{rag_veto_preview}{ops_preview}{SPRINGBOARD_ABC_LEGEND}\n{report}"
     if rag_veto_lines:
         content += "\n\n## 🛑 RAG 防雷剔除清单\n" + "\n".join(rag_veto_lines)
     print(f"[step3] 飞书发送原文长度={len(content)}（不压缩，交由飞书分片）")

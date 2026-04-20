@@ -11,7 +11,6 @@ from __future__ import annotations
 
 from collections import Counter
 import os
-import re
 import sys
 
 import pandas as pd
@@ -30,21 +29,6 @@ def _is_main_or_chinext(code: str) -> bool:
         ("600", "601", "603", "605", "000", "001", "002", "003", "300", "301")
     )
 
-
-def _parse_review_list(raw: str) -> list[str]:
-    tokens = re.split(r"[,，;；\s]+", str(raw or "").strip())
-    out: list[str] = []
-    seen: set[str] = set()
-    for tok in tokens:
-        code = tok.strip()
-        if not code:
-            continue
-        if re.fullmatch(r"\d{1,6}", code):
-            code = code.zfill(6)
-        if code and code not in seen:
-            out.append(code)
-            seen.add(code)
-    return out
 
 
 def _close_return_pct(close_series: pd.Series, lookback: int) -> float | None:
@@ -392,6 +376,30 @@ def _build_hit_map(triggers: dict[str, list[tuple[str, float]]]) -> dict[str, li
     return hit_map
 
 
+def _find_big_gainers(
+    df_map: dict[str, pd.DataFrame],
+    name_map: dict[str, str],
+    threshold: float = 8.0,
+) -> list[str]:
+    """找出当日涨幅 >= threshold% 的主板+创业板非ST股票。"""
+    codes: list[str] = []
+    for code, df in df_map.items():
+        if not _is_main_or_chinext(code):
+            continue
+        if "ST" in str(name_map.get(code, "")).upper():
+            continue
+        if df is None or df.empty:
+            continue
+        s = _sorted_if_needed(df)
+        pct = pd.to_numeric(s.get("pct_chg"), errors="coerce")
+        if pct.empty or pd.isna(pct.iloc[-1]):
+            continue
+        if float(pct.iloc[-1]) >= threshold:
+            codes.append(code)
+    codes.sort()
+    return codes
+
+
 def _blocked_exit_signal_map(exit_signals: dict[str, dict] | None) -> dict[str, dict]:
     blocked: dict[str, dict] = {}
     for code, raw in (exit_signals or {}).items():
@@ -430,18 +438,12 @@ def _explain_risk_reject(
 
 
 def main() -> int:
-    raw_list = os.getenv("REVIEW_LIST", "").strip() or os.getenv("review_list", "").strip()
-    review_codes = _parse_review_list(raw_list)
-    if not review_codes:
-        print("[review] REVIEW_LIST/review_list 为空，示例: 300164,600759,002378")
-        return 2
-
     webhook = os.getenv("FEISHU_WEBHOOK_URL", "").strip()
     if not webhook:
         print("[review] FEISHU_WEBHOOK_URL 未配置")
         return 2
 
-    print(f"[review] 输入代码数={len(review_codes)}: {', '.join(review_codes)}")
+    print("[review] 运行漏斗获取调试上下文 ...")
     triggers, metrics = run_funnel_job(include_debug_context=True)
 
     debug = metrics.get("_debug", {}) or {}
@@ -459,6 +461,13 @@ def main() -> int:
     l2_symbols = [str(x) for x in (debug.get("layer2_symbols", []) or [])]
     l3_symbols = [str(x) for x in (debug.get("layer3_symbols_raw", []) or [])]
     end_trade_date = str(debug.get("end_trade_date", "未知"))
+
+    review_codes = _find_big_gainers(df_map, name_map, threshold=8.0)
+    if not review_codes:
+        print("[review] 当日无涨幅 ≥ 8% 的股票，跳过")
+        send_feishu_notification(webhook, "🔍 涨停复盘", f"交易日 {end_trade_date}：当日无涨幅 ≥ 8% 的主板/创业板股票")
+        return 0
+    print(f"[review] 发现涨幅 ≥ 8% 股票 {len(review_codes)} 只: {', '.join(review_codes)}")
 
     l1_set = set(l1_symbols)
     l2_set = set(l2_symbols)
@@ -530,7 +539,7 @@ def main() -> int:
     summary = " | ".join([f"{k}{v}" for k, v in stage_counter.items()]) or "无"
     lines = [
         f"**交易日**: {end_trade_date}",
-        f"**输入代码数**: {len(review_codes)}",
+        f"**涨幅 ≥ 8% 股票数**: {len(review_codes)}",
         f"**结果汇总**: {summary}",
         "",
         "**逐票复盘（止步层级与原因）**",
@@ -542,7 +551,7 @@ def main() -> int:
             f"• {row['code']} {row['name']} | {row['stage']} | {row['reason']}"
         )
 
-    title = "🧪 Review List 漏斗复盘"
+    title = "🔍 涨停复盘：漏斗未捕获分析"
     content = "\n".join(lines)
     ok = send_feishu_notification(webhook, title, content)
     print(f"[review] feishu_sent={ok}")

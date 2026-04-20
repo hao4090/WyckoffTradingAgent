@@ -258,12 +258,23 @@ def diagnose_portfolio(tool_context: ToolContext) -> dict:
 
         user_id = _get_user_id(tool_context)
         if not user_id:
-            return {"error": "未找到用户 ID，无法加载持仓"}
+            return {"error": "未登录，请先执行 /login"}
 
         portfolio_id = build_user_live_portfolio_id(user_id)
+        logger.info("diagnose_portfolio: user_id=%s, portfolio_id=%s", user_id, portfolio_id)
         state = load_portfolio_state(portfolio_id)
-        if not state or not state.get("positions"):
-            return {"message": "当前没有持仓数据", "positions": []}
+        if state is None:
+            from integrations.supabase_portfolio import is_supabase_configured
+            if not is_supabase_configured():
+                return {"error": "Supabase 未配置（缺少 SUPABASE_URL/KEY 环境变量）"}
+            return {"error": f"未找到持仓记录 (portfolio_id={portfolio_id})，请确认 Web 端已录入持仓"}
+        if not state.get("positions"):
+            return {
+                "message": "持仓记录存在但无头寸",
+                "portfolio_id": portfolio_id,
+                "free_cash": state.get("free_cash", 0),
+                "positions": [],
+            }
 
         end_date = date.today()
         start_date = end_date - timedelta(days=500)

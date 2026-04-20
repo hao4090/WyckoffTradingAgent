@@ -64,12 +64,17 @@ class GeminiProvider(LLMProvider):
 
         text_buf = ""
         tool_calls = []
+        usage_meta = None
 
         for chunk in self._client.models.generate_content_stream(
             model=self._model,
             contents=contents,
             config=config,
         ):
+            # usage_metadata 可能出现在任意 chunk（尤其是最后一个无 candidates 的 chunk）
+            um = getattr(chunk, "usage_metadata", None)
+            if um is not None:
+                usage_meta = um
             if not chunk.candidates:
                 continue
             for part in chunk.candidates[0].content.parts:
@@ -87,14 +92,11 @@ class GeminiProvider(LLMProvider):
         if tool_calls:
             yield {"type": "tool_calls", "tool_calls": tool_calls, "text": text_buf}
 
-        # Gemini 最后一个 chunk 可能有 usage_metadata
-        try:
-            usage = getattr(chunk, "usage_metadata", None)
-            yield {"type": "usage",
-                   "input_tokens": getattr(usage, "prompt_token_count", 0) if usage else 0,
-                   "output_tokens": getattr(usage, "candidates_token_count", 0) if usage else 0}
-        except NameError:
-            yield {"type": "usage", "input_tokens": 0, "output_tokens": 0}
+        yield {
+            "type": "usage",
+            "input_tokens": getattr(usage_meta, "prompt_token_count", 0) or 0,
+            "output_tokens": getattr(usage_meta, "candidates_token_count", 0) or 0,
+        }
 
     def _build_contents(self, messages: list[dict]) -> list[types.Content]:
         """将统一消息格式转为 Gemini Content 列表。"""

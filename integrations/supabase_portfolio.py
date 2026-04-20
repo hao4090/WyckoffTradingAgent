@@ -164,7 +164,7 @@ def load_portfolio_state(portfolio_id: str = "USER_LIVE") -> dict[str, Any] | No
             "positions": positions,
         }
     except Exception as e:
-        logger.debug("[supabase_portfolio] load_portfolio_state failed: {e}")
+        logger.warning("[supabase_portfolio] load_portfolio_state failed: %s", e)
         return None
 
 
