@@ -36,14 +36,26 @@ Web + CLI dual channel, Gemini / Claude / OpenAI pick one, GitHub Actions for fu
 
 ## Quick Start
 
-### CLI (recommended)
+### One-line Install (recommended)
 
 ```bash
-# Install
+curl -fsSL https://raw.githubusercontent.com/YoungCan-Wang/Wyckoff-Analysis/main/install.sh | bash
+```
+
+Detects Python, installs uv, creates an isolated environment. Run `wyckoff` when done.
+
+### Homebrew
+
+```bash
+brew tap YoungCan-Wang/wyckoff
+brew install wyckoff
+```
+
+### pip
+
+```bash
 uv venv && source .venv/bin/activate
 uv pip install youngcan-wyckoff-analysis
-
-# Launch
 wyckoff
 ```
 

@@ -36,14 +36,26 @@ Web + CLI 双通道，Gemini / Claude / OpenAI 三选一，GitHub Actions 定时
 
 ## 快速开始
 
-### CLI（推荐）
+### 一键安装（推荐）
 
 ```bash
-# 安装
+curl -fsSL https://raw.githubusercontent.com/YoungCan-Wang/Wyckoff-Analysis/main/install.sh | bash
+```
+
+自动检测 Python、安装 uv、创建隔离环境，装完直接 `wyckoff` 启动。
+
+### Homebrew
+
+```bash
+brew tap YoungCan-Wang/wyckoff
+brew install wyckoff
+```
+
+### pip
+
+```bash
 uv venv && source .venv/bin/activate
 uv pip install youngcan-wyckoff-analysis
-
-# 启动
 wyckoff
 ```
 
