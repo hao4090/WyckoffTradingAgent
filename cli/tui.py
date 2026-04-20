@@ -424,8 +424,9 @@ class WyckoffTUI(App):
                 tool_calls = None
                 round_usage = {}
 
-                # ── Thinking 阶段：单行滚动，不累积 ──
-                thinking_line_id = None
+                if round_idx > 0:
+                    _write(Text.from_markup("  [dim]思考中...[/dim]"))
+                    _scroll()
 
                 for chunk in self._provider.chat_stream(
                     self._messages, self._tools.schemas(), self._system_prompt
