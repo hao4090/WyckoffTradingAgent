@@ -108,7 +108,7 @@ def load_portfolio_state(portfolio_id: str = "USER_LIVE", client: Client | None 
       "positions": [{"code","name","cost","buy_dt","shares"}, ...]
     }
     """
-    if not is_supabase_configured():
+    if client is None and not is_supabase_configured():
         return None
     try:
         client = client or _get_supabase_admin_client()
