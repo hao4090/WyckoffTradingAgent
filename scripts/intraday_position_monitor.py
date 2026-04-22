@@ -21,6 +21,7 @@ if __name__ == "__main__" or not __package__:
 from core.intraday_sell_signals import PositionSnapshot, SellSignal, scan_position
 from integrations.supabase_base import is_admin_configured
 from integrations.supabase_portfolio import load_portfolio_state
+from integrations.tickflow_notice import TICKFLOW_LIMIT_HINT, is_tickflow_rate_limited_error
 from integrations.tickflow_client import TickFlowClient, normalize_cn_symbol
 from utils.feishu import send_feishu_notification
 from utils.notify import send_to_telegram
@@ -75,12 +76,13 @@ def _fetch_and_scan(
     thresholds: dict,
     check_gap: bool,
     logs_path: str | None,
-) -> list[SellSignal]:
+) -> tuple[list[SellSignal], bool]:
     """获取分钟K线并扫描单只持仓。"""
     symbol = normalize_cn_symbol(snap.code)
     df_1m = None
     df_5m = None
     yday_volume = 0.0
+    rate_limit_hit = False
 
     try:
         df_daily = client.get_klines(symbol, period="1d", count=2, intraday=False)
@@ -89,25 +91,34 @@ def _fetch_and_scan(
         elif df_daily is not None and len(df_daily) == 1:
             yday_volume = float(df_daily.iloc[0]["volume"])
     except Exception as e:
+        if is_tickflow_rate_limited_error(e):
+            rate_limit_hit = True
         _log(f"  {snap.code} 日线获取失败: {e}", logs_path)
 
     try:
         df_1m = client.get_intraday(symbol, period="1m", count=500)
     except Exception as e:
+        if is_tickflow_rate_limited_error(e):
+            rate_limit_hit = True
         _log(f"  {snap.code} 1m获取失败: {e}", logs_path)
 
     try:
         df_5m = client.get_intraday(symbol, period="5m", count=500)
     except Exception as e:
+        if is_tickflow_rate_limited_error(e):
+            rate_limit_hit = True
         _log(f"  {snap.code} 5m获取失败: {e}", logs_path)
 
-    return scan_position(
-        snap, df_1m, df_5m, yday_volume,
-        hard_pct=thresholds["hard_pct"],
-        gap_pct=thresholds["gap_pct"],
-        gain_pct=thresholds["gain_pct"],
-        vol_ratio=thresholds["vol_ratio"],
-        check_gap=check_gap,
+    return (
+        scan_position(
+            snap, df_1m, df_5m, yday_volume,
+            hard_pct=thresholds["hard_pct"],
+            gap_pct=thresholds["gap_pct"],
+            gain_pct=thresholds["gain_pct"],
+            vol_ratio=thresholds["vol_ratio"],
+            check_gap=check_gap,
+        ),
+        rate_limit_hit,
     )
 
 
@@ -118,9 +129,12 @@ def _build_report(
     total_positions: int,
     time_text: str,
     elapsed_s: float,
+    tickflow_limit_hit: bool = False,
 ) -> str:
     lines: list[str] = []
     lines.append(f"持仓 {total_positions} 只 | 触发 {len(signals)} 个信号")
+    if tickflow_limit_hit:
+        lines.append(f"⚠️ {TICKFLOW_LIMIT_HINT}")
     lines.append("")
 
     for sig in signals:
@@ -227,6 +241,8 @@ def main() -> int:
     try:
         quotes = client.get_quotes(codes)
     except Exception as e:
+        if is_tickflow_rate_limited_error(e):
+            _log(f"实时行情触发限流。{TICKFLOW_LIMIT_HINT}", logs_path)
         _log(f"实时行情获取失败: {e}", logs_path)
         return 1
 
@@ -276,6 +292,7 @@ def main() -> int:
 
     # 并发获取K线，跑放量滞涨 + VWAP破位
     kline_signals: list[SellSignal] = []
+    tickflow_limit_hit = False
     with ThreadPoolExecutor(max_workers=fetch_concurrency) as pool:
         futures = {}
         for snap in snapshots:
@@ -288,12 +305,15 @@ def main() -> int:
         for fut in as_completed(futures, timeout=max(_remaining_seconds(deadline_at), 1)):
             code = futures[fut]
             try:
-                sigs = fut.result(timeout=3)
+                sigs, one_limit_hit = fut.result(timeout=3)
+                tickflow_limit_hit = tickflow_limit_hit or one_limit_hit
                 # 只保留K线相关信号（放量滞涨、VWAP破位），避免与快速路径重复
                 for s in sigs:
                     if s.signal_type in ("放量滞涨", "VWAP破位"):
                         kline_signals.append(s)
             except Exception as e:
+                if is_tickflow_rate_limited_error(e):
+                    tickflow_limit_hit = True
                 _log(f"  {code} K线扫描异常: {e}", logs_path)
 
     all_signals.extend(kline_signals)
@@ -306,6 +326,8 @@ def main() -> int:
             time_hm = _now().strftime("%H:%M")
             title = f"\u2705 持仓监控 {time_hm} 正常"
             report = f"持仓 {len(snapshots)} 只均正常\n耗时 {elapsed:.1f}s"
+            if tickflow_limit_hit:
+                report += f"\n⚠️ {TICKFLOW_LIMIT_HINT}"
             _send_notifications(
                 feishu_webhook=feishu_webhook, tg_bot_token=tg_bot_token,
                 tg_chat_id=tg_chat_id, title=title, report=report, logs_path=logs_path,
@@ -317,7 +339,13 @@ def main() -> int:
     # 构建并推送报告
     time_hm = _now().strftime("%H:%M")
     title = f"\U0001f50d 盘中持仓监控 {time_hm}"
-    report = _build_report(all_signals, len(snapshots), time_hm, elapsed)
+    report = _build_report(
+        all_signals,
+        len(snapshots),
+        time_hm,
+        elapsed,
+        tickflow_limit_hit=tickflow_limit_hit,
+    )
     feishu_ok, tg_ok = _send_notifications(
         feishu_webhook=feishu_webhook, tg_bot_token=tg_bot_token,
         tg_chat_id=tg_chat_id, title=title, report=report, logs_path=logs_path,

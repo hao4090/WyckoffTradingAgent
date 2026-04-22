@@ -17,7 +17,7 @@ on:
       top_n:
         description: "每日选股 TopN"
         required: true
-        default: "3"
+        default: "2"
       board:
         description: "股票池"
         required: true

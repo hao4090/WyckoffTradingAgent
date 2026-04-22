@@ -8,6 +8,7 @@ import os
 
 import requests
 
+from integrations.tickflow_notice import append_tickflow_limit_hint
 # ── Telegram ──
 
 TELEGRAM_MAX_LEN = 3900
@@ -49,6 +50,7 @@ def send_to_telegram(
     """发送 Telegram Bot 消息。token 或 chat_id 为空则跳过。"""
     token = str(tg_bot_token or "").strip()
     chat_id = str(tg_chat_id or "").strip()
+    message_text = append_tickflow_limit_hint(message_text)
     if not token or not chat_id:
         print("[telegram] tg_bot_token/tg_chat_id 未配置，跳过 Telegram 推送")
         return False
@@ -84,6 +86,7 @@ def _send_webhook_markdown(tag: str, webhook_url: str, title: str, content: str)
     url = str(webhook_url or "").strip()
     if not url:
         return False
+    content = append_tickflow_limit_hint(content)
     body = f"# {title}\n\n{content}" if title else content
     if len(body.encode("utf-8")) > _MARKDOWN_MAX_BYTES:
         body = body[: _MARKDOWN_MAX_BYTES // 2] + "\n\n...(内容过长已截断)"

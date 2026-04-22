@@ -323,13 +323,19 @@ def layer1_filter(
     market_cap_map: dict[str, float],
     df_map: dict[str, pd.DataFrame],
     cfg: FunnelConfig,
+    *,
+    financial_map: dict[str, dict] | None = None,
 ) -> list[str]:
     """
     硬过滤：剔除 ST、北交所/科创板、市值<阈值、近期均成交额<阈值。
     market_cap_map 单位：亿元。若 market_cap_map 为空则跳过市值过滤。
+    financial_map 来自 TickFlow，可选；有则追加 ROE / 资产负债率硬过滤。
     """
     cap_available = bool(market_cap_map)
+    fin_available = bool(financial_map)
     passed: list[str] = []
+    l1_roe_negative = 0
+    l1_high_debt = 0
     for sym in symbols:
         if not _is_main_or_chinext(sym):
             continue
@@ -348,7 +354,20 @@ def layer1_filter(
             avg_amt = df_sorted["amount"].tail(cfg.amount_avg_window).mean()
             if pd.notna(avg_amt) and avg_amt < cfg.min_avg_amount_wan * 10000:
                 continue
+        if fin_available:
+            metrics = financial_map.get(sym)
+            if metrics:
+                roe = metrics.get("roe")
+                if roe is not None and roe < -10:
+                    l1_roe_negative += 1
+                    continue
+                debt_ratio = metrics.get("debt_to_asset_ratio")
+                if debt_ratio is not None and debt_ratio > 85:
+                    l1_high_debt += 1
+                    continue
         passed.append(sym)
+    if fin_available and (l1_roe_negative or l1_high_debt):
+        print(f"[L1] 财务过滤: ROE<-10%={l1_roe_negative}, 负债率>85%={l1_high_debt}")
     return passed
 
 

@@ -27,6 +27,12 @@ from http.client import RemoteDisconnected
 
 import pandas as pd
 
+from integrations.tickflow_notice import (
+    TICKFLOW_LIMIT_HINT,
+    is_tickflow_rate_limited_error,
+    record_tickflow_limit_event,
+)
+
 
 _BAOSTOCK_LOGGED = False
 _BAOSTOCK_EXIT_HOOKED = False
@@ -57,6 +63,8 @@ _BAOSTOCK_CIRCUIT_NOTE = ""
 _TICKFLOW_CLIENT = None
 _TICKFLOW_CLIENT_READY = False
 _TICKFLOW_DAILY_MAX_COUNT = max(int(os.getenv("TICKFLOW_DAILY_MAX_COUNT", "10000")), 64)
+_TICKFLOW_LIMIT_NOTICE_EMITTED = False
+_TICKFLOW_LIMIT_NOTICE_LOCK = threading.Lock()
 
 
 def _debug_source_fail(source: str, err: Exception) -> None:
@@ -187,6 +195,34 @@ def _get_tickflow_client():
 def _tag_source(df: pd.DataFrame, source: str) -> pd.DataFrame:
     """在 DataFrame 上附加真实数据源标识，供上层缓存/展示使用。"""
     df.attrs["source"] = source
+    return df
+
+
+def _emit_tickflow_limit_notice_once() -> None:
+    global _TICKFLOW_LIMIT_NOTICE_EMITTED
+    with _TICKFLOW_LIMIT_NOTICE_LOCK:
+        if _TICKFLOW_LIMIT_NOTICE_EMITTED:
+            return
+        _TICKFLOW_LIMIT_NOTICE_EMITTED = True
+    print(f"[data_source] ⚠️ {TICKFLOW_LIMIT_HINT}", flush=True)
+
+
+def _attach_tickflow_limit_notices(
+    df: pd.DataFrame,
+    notices: list[str] | None,
+) -> pd.DataFrame:
+    if df is None:
+        return df
+    uniq: list[str] = []
+    for item in notices or []:
+        text = str(item or "").strip()
+        if text and text not in uniq:
+            uniq.append(text)
+    if not uniq:
+        return df
+    df.attrs["tickflow_limit_hint"] = uniq[0]
+    df.attrs["tickflow_limit_hints"] = uniq
+    _emit_tickflow_limit_notice_once()
     return df
 
 
@@ -775,6 +811,7 @@ def fetch_stock_hist(
 
     failed_sources: list[str] = []
     failed_details: list[str] = []
+    tickflow_limit_notices: list[str] = []
     disable_akshare = os.getenv("DATA_SOURCE_DISABLE_AKSHARE", "").strip().lower() in {
         "1",
         "true",
@@ -817,6 +854,10 @@ def fetch_stock_hist(
             _debug_source_fail("tickflow", e)
             failed_sources.append("tickflow")
             failed_details.append(f"tickflow={_compact_error(e)}")
+            if is_tickflow_rate_limited_error(e):
+                record_tickflow_limit_event(e)
+                tickflow_limit_notices.append(TICKFLOW_LIMIT_HINT)
+                failed_details.append(f"tickflow_limit_hint={TICKFLOW_LIMIT_HINT}")
 
     # 2) tushare 次优先（固定 qfq）
     from integrations.tushare_client import get_pro
@@ -825,7 +866,11 @@ def fetch_stock_hist(
     if pro is not None:
         try:
             return _tag_source(
-                _fetch_stock_tushare(symbol, start_s, end_s, "qfq"), "tushare"
+                _attach_tickflow_limit_notices(
+                    _fetch_stock_tushare(symbol, start_s, end_s, "qfq"),
+                    tickflow_limit_notices,
+                ),
+                "tushare",
             )
         except Exception as e:
             _debug_source_fail("tushare", e)
@@ -844,7 +889,11 @@ def fetch_stock_hist(
         for attempt in range(1, _AKSHARE_RETRY_TIMES + 1):
             try:
                 return _tag_source(
-                    _fetch_stock_akshare(symbol, start_s, end_s, adjust), "akshare"
+                    _attach_tickflow_limit_notices(
+                        _fetch_stock_akshare(symbol, start_s, end_s, adjust),
+                        tickflow_limit_notices,
+                    ),
+                    "akshare",
                 )
             except ModuleNotFoundError as e:
                 _debug_source_fail("akshare", e)
@@ -881,7 +930,10 @@ def fetch_stock_hist(
                     f"baostock slow={elapsed:.2f}s > {_BAOSTOCK_MAX_SECONDS:.2f}s"
                 )
             _baostock_mark_success()
-            return _tag_source(df, "baostock")
+            return _tag_source(
+                _attach_tickflow_limit_notices(df, tickflow_limit_notices),
+                "baostock",
+            )
         except ModuleNotFoundError as e:
             _debug_source_fail("baostock", e)
             _baostock_mark_failure(_compact_error(e))
@@ -899,7 +951,13 @@ def fetch_stock_hist(
         failed_details.append("efinance=disabled_by_env")
     else:
         try:
-            return _tag_source(_fetch_stock_efinance(symbol, start_s, end_s), "efinance")
+            return _tag_source(
+                _attach_tickflow_limit_notices(
+                    _fetch_stock_efinance(symbol, start_s, end_s),
+                    tickflow_limit_notices,
+                ),
+                "efinance",
+            )
         except ModuleNotFoundError as e:
             _debug_source_fail("efinance", e)
             failed_sources.append(f"efinance(未安装: {e.name})")

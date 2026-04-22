@@ -288,6 +288,7 @@ def generate_stock_payload(
     exit_signal: str | None = None,
     exit_price: float | None = None,
     exit_reason: str | None = None,
+    financial_metrics: dict | None = None,
 ) -> str:
     """
     将 320 个交易日 OHLCV 浓缩为发给 AI 的高密度文本。
@@ -391,6 +392,27 @@ def generate_stock_payload(
         if exit_reason:
             exit_parts.append(f"原因: {exit_reason}")
         header += f"  [退出预警] {', '.join(exit_parts)}\n"
+
+    if financial_metrics:
+        fm = financial_metrics
+        fm_parts = []
+        _pct_keys = {"roe", "net_income_yoy", "gross_margin", "debt_to_asset_ratio"}
+        for key, label in [
+            ("eps_basic", "EPS"),
+            ("roe", "ROE"),
+            ("net_income_yoy", "净利润同比"),
+            ("gross_margin", "毛利率"),
+            ("debt_to_asset_ratio", "资产负债率"),
+        ]:
+            v = fm.get(key)
+            if v is not None:
+                try:
+                    fv = float(v)
+                    fm_parts.append(f"{label}: {fv:.1f}%" if key in _pct_keys else f"{label}: {fv:.2f}")
+                except (ValueError, TypeError):
+                    pass
+        if fm_parts:
+            header += f"  [基本面快照] {' | '.join(fm_parts)}\n"
 
     supply_summary = _build_supply_demand_summary(df)
 

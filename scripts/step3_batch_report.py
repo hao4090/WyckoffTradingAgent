@@ -758,6 +758,20 @@ def run(
     sector_rotation_map = sector_rotation_ctx.get("state_map", {}) or {}
     sector_map = fetch_sector_map()
     market_cap_map = fetch_market_cap_map()
+    financial_map: dict[str, dict] = {}
+    tickflow_api_key = os.getenv("TICKFLOW_API_KEY", "").strip()
+    if tickflow_api_key:
+        try:
+            from integrations.tickflow_client import TickFlowClient
+            _tf = TickFlowClient(api_key=tickflow_api_key)
+            codes = [str(i["code"]) for i in items if i.get("code")]
+            raw_fin = _tf.get_financial_metrics(codes, latest=True)
+            for sym, records in raw_fin.items():
+                if records:
+                    financial_map[sym] = records[0]
+            print(f"[step3] TickFlow 财务指标: {len(financial_map)}/{len(codes)}")
+        except Exception as e:
+            print(f"[step3] TickFlow 财务指标加载失败: {e}")
     benchmark_ret_10: float | None = None
     try:
         bench_df = fetch_index_hist("000001", window.start_trade_date, window.end_trade_date)
@@ -1147,6 +1161,7 @@ def run(
             exit_signal=_exit_sig,
             exit_price=_exit_price,
             exit_reason=_exit_reason,
+            financial_metrics=financial_map.get(code),
         )
         payloads_by_track.setdefault(track_key, []).append(payload)
         df_by_track[track_key] = pd.concat(

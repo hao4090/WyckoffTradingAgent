@@ -308,6 +308,20 @@ def run_funnel_job(
         print(
             "[funnel] ⚠️ 市值数据为空（TUSHARE_TOKEN 可能缺失/失效），Layer1 将跳过市值过滤"
         )
+    # TickFlow 财务指标
+    financial_map: dict[str, dict] = {}
+    tickflow_api_key = os.getenv("TICKFLOW_API_KEY", "").strip()
+    if tickflow_api_key:
+        try:
+            from integrations.tickflow_client import TickFlowClient, normalize_cn_symbol
+            _tf = TickFlowClient(api_key=tickflow_api_key)
+            raw_fin = _tf.get_financial_metrics(all_symbols, latest=True)
+            for sym, records in raw_fin.items():
+                if records:
+                    financial_map[sym] = records[0]
+            print(f"[funnel] TickFlow 财务指标加载成功: {len(financial_map)}/{len(all_symbols)}")
+        except Exception as e:
+            print(f"[funnel] TickFlow 财务指标加载失败，跳过财务过滤: {e}")
     print(f"[funnel] 加载股票名称...")
     try:
         name_map = _stock_name_map()
@@ -374,7 +388,7 @@ def run_funnel_job(
 
     # Layer 1
     l1_input = list(all_df_map.keys())
-    l1_passed = layer1_filter(l1_input, name_map, market_cap_map, all_df_map, cfg)
+    l1_passed = layer1_filter(l1_input, name_map, market_cap_map, all_df_map, cfg, financial_map=financial_map)
 
     # Layer 2
     l2_passed, l2_channel_map = layer2_strength_detailed(
@@ -472,6 +486,7 @@ def run_funnel_job(
         "accum_stage_map": accum_stage_map,
         "exit_signals": exit_signals,
         "all_df_map": all_df_map,
+        "financial_map": financial_map,
     }
     if include_debug_context:
         metrics["_debug"] = {

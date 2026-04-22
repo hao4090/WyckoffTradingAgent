@@ -42,6 +42,23 @@ def _code_to_name(code: str) -> str:
     return _NAME_MAP.get(code, code)
 
 
+def _collect_tickflow_limit_hints_from_df(df: Any) -> list[str]:
+    if df is None or not hasattr(df, "attrs"):
+        return []
+    attrs = getattr(df, "attrs", {}) or {}
+    hints = attrs.get("tickflow_limit_hints")
+    if isinstance(hints, list):
+        out: list[str] = []
+        for item in hints:
+            text = str(item or "").strip()
+            if text and text not in out:
+                out.append(text)
+        if out:
+            return out
+    one = str(attrs.get("tickflow_limit_hint", "") or "").strip()
+    return [one] if one else []
+
+
 # ---------------------------------------------------------------------------
 # 用户凭据：从 Supabase 实时获取 + 进程内短期缓存
 # ---------------------------------------------------------------------------
@@ -193,6 +210,7 @@ def diagnose_stock(code: str, cost: float = 0.0, tool_context: ToolContext = Non
 
         if df is None or df.empty:
             return {"error": f"无法获取 {code} 的行情数据"}
+        hist_hints = _collect_tickflow_limit_hints_from_df(df)
 
         from core.stock_cache import _COL_MAP
         df = df.rename(columns=_COL_MAP)
@@ -222,6 +240,7 @@ def diagnose_stock(code: str, cost: float = 0.0, tool_context: ToolContext = Non
             "from_year_low_pct": round(d.from_year_low_pct, 1),
             "health_reasons": d.health_reasons,
             "formatted_text": text,
+            **({"tickflow_limit_hint": hist_hints[0]} if hist_hints else {}),
         }
     except Exception as e:
         logger.exception("diagnose_stock error")
@@ -274,6 +293,7 @@ def diagnose_portfolio(tool_context: ToolContext) -> dict:
         end_date = date.today()
         start_date = end_date - timedelta(days=500)
         results = []
+        hist_tickflow_hints: list[str] = []
         for pos in state["positions"]:
             code = pos["code"]
             name = pos.get("name", code)
@@ -283,6 +303,9 @@ def diagnose_portfolio(tool_context: ToolContext) -> dict:
                 if df is None or df.empty:
                     results.append({"code": code, "name": name, "error": "无行情数据"})
                     continue
+                for hint in _collect_tickflow_limit_hints_from_df(df):
+                    if hint not in hist_tickflow_hints:
+                        hist_tickflow_hints.append(hint)
                 from core.stock_cache import _COL_MAP
                 df = df.rename(columns=_COL_MAP)
                 d = diagnose_one_stock(code, name, cost, df)
@@ -368,6 +391,8 @@ def diagnose_portfolio(tool_context: ToolContext) -> dict:
         }
         if intraday_signals:
             result["intraday_signals"] = intraday_signals
+        if hist_tickflow_hints:
+            result["tickflow_limit_hint"] = hist_tickflow_hints[0]
         if tickflow_hint:
             result["tickflow_hint"] = tickflow_hint
         return result
@@ -401,6 +426,7 @@ def get_stock_price(code: str, days: int = 30, tool_context: ToolContext = None)
 
         if df is None or df.empty:
             return {"error": f"无法获取 {code} 的行情数据"}
+        hist_hints = _collect_tickflow_limit_hints_from_df(df)
 
         from core.stock_cache import _COL_MAP
         df = df.rename(columns=_COL_MAP)
@@ -425,6 +451,7 @@ def get_stock_price(code: str, days: int = 30, tool_context: ToolContext = None)
             "latest_close": round(float(latest.get("close", 0)), 2),
             "latest_date": str(latest.get("date", "")),
             "data": records,
+            **({"tickflow_limit_hint": hist_hints[0]} if hist_hints else {}),
         }
     except Exception as e:
         logger.exception("get_stock_price error")

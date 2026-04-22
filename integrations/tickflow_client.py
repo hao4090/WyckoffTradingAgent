@@ -12,6 +12,12 @@ from typing import Any
 import pandas as pd
 import requests
 
+from integrations.tickflow_notice import (
+    TICKFLOW_LIMIT_HINT,
+    is_tickflow_rate_limited_error,
+    record_tickflow_limit_event,
+)
+
 TICKFLOW_BASE_URL = os.getenv("TICKFLOW_BASE_URL", "https://api.tickflow.org").strip().rstrip("/")
 TICKFLOW_TIMEOUT_SECONDS = max(int(os.getenv("TICKFLOW_TIMEOUT_SECONDS", "12")), 3)
 TICKFLOW_MAX_RETRIES = max(int(os.getenv("TICKFLOW_MAX_RETRIES", "3")), 1)
@@ -106,6 +112,9 @@ class TickFlowClient:
                     return resp.json()
                 # Cloudflare 1010 / 临时网关错误等，走重试
                 body = (resp.text or "").strip()
+                if resp.status_code == 429 or "rate_limited" in body.lower():
+                    record_tickflow_limit_event(body)
+                    raise RuntimeError(f"TickFlow HTTP 429: {body[:200]}（{TICKFLOW_LIMIT_HINT}）")
                 if attempt < self.max_retries and (
                     resp.status_code >= 500 or "error code: 1010" in body.lower()
                 ):
@@ -113,6 +122,8 @@ class TickFlowClient:
                     continue
                 raise RuntimeError(f"TickFlow HTTP {resp.status_code}: {body[:200]}")
             except Exception as e:  # requests.Timeout / requests.ConnectionError / RuntimeError
+                if is_tickflow_rate_limited_error(e):
+                    record_tickflow_limit_event(e)
                 last_err = e
                 if attempt >= self.max_retries:
                     break
@@ -196,6 +207,34 @@ class TickFlowClient:
                 continue
             df = parse_ohlcv_payload({"data": kline_payload})
             out[symbol] = df
+        return out
+
+    def get_depth(self, symbol: str) -> dict[str, Any]:
+        """获取单个标的五档行情。返回 {bid_prices, bid_volumes, ask_prices, ask_volumes, timestamp}"""
+        sym = normalize_cn_symbol(str(symbol or "").strip())
+        if not sym:
+            return {}
+        resp = self._request("/v1/depth", params={"symbol": sym})
+        return resp.get("data", {}) if isinstance(resp, dict) else {}
+
+    def get_financial_metrics(self, symbols: list[str], *, latest: bool = True) -> dict[str, list[dict]]:
+        """批量获取核心财务指标。返回 {symbol: [MetricsRecord]}"""
+        clean = [normalize_cn_symbol(x) for x in symbols if str(x or "").strip()]
+        clean = [x for x in clean if x]
+        if not clean:
+            return {}
+        resp = self._request(
+            "/v1/financials/metrics",
+            params={"symbols": ",".join(sorted(set(clean))), "latest": "true" if latest else "false"},
+        )
+        data = resp.get("data") if isinstance(resp, dict) else None
+        if not isinstance(data, dict):
+            return {}
+        out: dict[str, list[dict]] = {}
+        for sym, records in data.items():
+            key = normalize_cn_symbol(str(sym).strip())
+            if key and isinstance(records, list):
+                out[key] = records
         return out
 
     def get_quotes(self, symbols: list[str]) -> dict[str, dict[str, Any]]:

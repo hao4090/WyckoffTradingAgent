@@ -35,13 +35,14 @@ from integrations.supabase_market_signal import (
     load_latest_market_signal_daily,
     load_market_signal_daily,
 )
+from integrations.tickflow_notice import TICKFLOW_LIMIT_HINT
 from integrations.tickflow_client import TickFlowClient, normalize_cn_symbol
 from utils.feishu import send_feishu_notification
 from utils.notify import send_to_telegram
 from utils.trading_clock import resolve_end_calendar_day
 
 TZ = ZoneInfo("Asia/Shanghai")
-TICKFLOW_UPGRADE_HINT = "触发数据源限制，升级数据源：https://tickflow.org/auth/register?ref=5N4NKTCPL4"
+TICKFLOW_UPGRADE_HINT = TICKFLOW_LIMIT_HINT
 
 
 def _now() -> datetime:
@@ -333,6 +334,42 @@ def _run_rule_scan_batch(
     return scanned
 
 
+def _fetch_depth_features(
+    client: TickFlowClient,
+    candidates: list[TailBuyCandidate],
+    *,
+    max_symbols: int = 20,
+    concurrency: int = 4,
+    logs_path: str | None = None,
+) -> dict[str, dict]:
+    """并发获取五档行情，计算委比。返回 {code: {bid_total, ask_total, weibi}}"""
+    top_codes = [c.code for c in candidates if not c.fetch_error][:max_symbols]
+    if not top_codes:
+        return {}
+    results: dict[str, dict] = {}
+
+    def _one(code: str) -> tuple[str, dict | None]:
+        try:
+            d = client.get_depth(code)
+            bid_total = sum(d.get("bid_volumes") or [])
+            ask_total = sum(d.get("ask_volumes") or [])
+            total = bid_total + ask_total
+            weibi = (bid_total - ask_total) / total * 100 if total > 0 else 0.0
+            return code, {"bid_total": bid_total, "ask_total": ask_total, "weibi": round(weibi, 1)}
+        except Exception:
+            return code, None
+
+    with ThreadPoolExecutor(max_workers=concurrency) as ex:
+        for code, feat in ex.map(_one, top_codes):
+            if feat:
+                results[code] = feat
+    _log(f"[depth] 五档获取完成: {len(results)}/{len(top_codes)} 成功", logs_path)
+    return results
+
+
+DEPTH_WEIBI_SKIP_THRESHOLD = -40.0
+
+
 def _run_llm_overlay(
     candidates: list[TailBuyCandidate],
     *,
@@ -341,6 +378,7 @@ def _run_llm_overlay(
     max_llm_symbols: int,
     llm_concurrency: int,
     deadline_at: datetime,
+    depth_map: dict[str, dict] | None = None,
     logs_path: str | None = None,
 ) -> tuple[dict[str, dict], int, int, dict[str, int]]:
     if not candidates or max_llm_symbols <= 0:
@@ -360,7 +398,8 @@ def _run_llm_overlay(
     max_workers = max(1, int(llm_concurrency))
 
     def _judge_one(item: TailBuyCandidate) -> tuple[str, dict | None, str | None]:
-        system_prompt, user_prompt = build_llm_prompt(item, style=style)
+        di = (depth_map or {}).get(item.code)
+        system_prompt, user_prompt = build_llm_prompt(item, style=style, depth_info=di)
         last_err = ""
         for route in llm_routes:
             left = _remaining_seconds(deadline_at)
@@ -679,6 +718,29 @@ def main() -> int:
         scored = scored_scanned + deferred
         scored.sort(key=lambda x: (-x.rule_score, x.code))
 
+    # ---- 五档行情过滤 ----
+    depth_map: dict[str, dict] = {}
+    if tickflow_client and _remaining_seconds(deadline_at) > 30:
+        depth_map = _fetch_depth_features(
+            tickflow_client,
+            sorted(
+                [c for c in scored if not c.fetch_error],
+                key=lambda x: (-x.rule_score, x.code),
+            ),
+            max_symbols=max_llm_symbols,
+            concurrency=4,
+            logs_path=logs_path,
+        )
+        skip_cnt = 0
+        for c in scored:
+            di = depth_map.get(c.code)
+            if di and di["weibi"] < DEPTH_WEIBI_SKIP_THRESHOLD and c.rule_decision != "SKIP":
+                c.rule_decision = "SKIP"
+                c.rule_reasons = (c.rule_reasons or []) + [f"五档委比={di['weibi']}%，卖压过重"]
+                skip_cnt += 1
+        if skip_cnt:
+            _log(f"[depth] 委比过滤: {skip_cnt} 只标的被跳过（阈值<{DEPTH_WEIBI_SKIP_THRESHOLD}%）", logs_path)
+
     llm_map, llm_total, llm_success, llm_route_stats = _run_llm_overlay(
         scored,
         llm_routes=llm_routes,
@@ -686,6 +748,7 @@ def main() -> int:
         max_llm_symbols=max_llm_symbols,
         llm_concurrency=llm_concurrency,
         deadline_at=deadline_at,
+        depth_map=depth_map,
         logs_path=logs_path,
     )
     merged = merge_rule_and_llm(scored, llm_map)

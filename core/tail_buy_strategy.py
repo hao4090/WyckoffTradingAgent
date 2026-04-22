@@ -429,7 +429,12 @@ def build_5m_summary(df_1m: pd.DataFrame, *, max_bars: int = 12) -> str:
     return "\n".join(rows)
 
 
-def build_llm_prompt(candidate: TailBuyCandidate, *, style: str = "hybrid") -> tuple[str, str]:
+def build_llm_prompt(
+    candidate: TailBuyCandidate,
+    *,
+    style: str = "hybrid",
+    depth_info: dict | None = None,
+) -> tuple[str, str]:
     f = candidate.features or {}
     style_desc = {
         "trend": "偏趋势（尾盘点火）",
@@ -456,8 +461,16 @@ def build_llm_prompt(candidate: TailBuyCandidate, *, style: str = "hybrid") -> t
         f"- breakout_tail={bool(f.get('breakout_tail'))}\n"
         f"- drop_from_high_pct={_safe_float(f.get('drop_from_high_pct')):.3f}\n"
         "最近5m摘要:\n"
-        f"{candidate.summary_5m or 'NO_DATA'}\n\n"
-        "请输出严格 JSON："
+        f"{candidate.summary_5m or 'NO_DATA'}\n"
+    )
+    if depth_info:
+        user_prompt += (
+            f"\n[五档] 委比: {depth_info.get('weibi', 0):.1f}% | "
+            f"买盘总量: {depth_info.get('bid_total', 0)}手 | "
+            f"卖盘总量: {depth_info.get('ask_total', 0)}手\n"
+        )
+    user_prompt += (
+        "\n请输出严格 JSON："
         '{"decision":"BUY|WATCH|SKIP","reason":"<=80字","risk":"<=40字","confidence":0.0}'
     )
     return system_prompt, user_prompt

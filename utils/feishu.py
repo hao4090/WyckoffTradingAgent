@@ -13,6 +13,11 @@ import re
 import requests
 import time
 
+from integrations.tickflow_notice import (
+    TICKFLOW_LIMIT_HINT,
+    append_tickflow_limit_hint,
+    has_recent_tickflow_limit_event,
+)
 
 _TERM_GLOSSARY_PATTERNS: list[tuple[re.Pattern, str]] = [
     # Regime / risk state
@@ -322,6 +327,20 @@ def send_backtest_card(webhook_url: str, summary_path: str) -> bool:
                 "elements": [{"tag": "div", "text": {"tag": "lark_md", "content": txt}}]})
         elements.append({"tag": "column_set", "flex_mode": "stretch", "columns": regime_cols})
 
+    if has_recent_tickflow_limit_event():
+        elements.append({"tag": "hr"})
+        elements.append(
+            {
+                "tag": "note",
+                "elements": [
+                    {
+                        "tag": "plain_text",
+                        "content": f"⚠️ {TICKFLOW_LIMIT_HINT}",
+                    }
+                ],
+            }
+        )
+
     # --- 发送 ---
     template = "blue" if sharpe_val > 0 else "orange"
     title = "📊 Backtest 回测报告"
@@ -347,6 +366,7 @@ def send_feishu_notification(webhook_url: str, title: str, content: str) -> bool
     if not webhook_url or not webhook_url.strip():
         return False
 
+    content = append_tickflow_limit_hint(content)
     annotated = _annotate_financial_terms(content)
     normalized = _normalize_for_lark_md(annotated)
     max_len = int(os.getenv("FEISHU_LARK_MAX_LEN", "2800"))
