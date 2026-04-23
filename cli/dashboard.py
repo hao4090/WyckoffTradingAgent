@@ -231,497 +231,338 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Wyckoff Dashboard</title>
 <style>
-/* ── Reset & Base ── */
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{
   --bg:#0a0e17;--bg2:#0f1420;--bg3:#151b2b;
   --border:#1e2740;--border2:#2a3452;
   --text:#c8d1e0;--text2:#8892a8;--text-dim:#505a70;
   --accent:#00d4aa;--accent2:#00b894;
-  --red:#ff4757;--amber:#f59e0b;--blue:#3b82f6;
-  --green:#10b981;
+  --red:#ff4757;--amber:#f59e0b;--blue:#3b82f6;--green:#10b981;
+  --hover-bg:rgba(255,255,255,.02);--hover-td:rgba(255,255,255,.015);
+  --scan-a:rgba(0,0,0,.03);
   --font:'SF Mono','Cascadia Code','Fira Code','JetBrains Mono',Consolas,'Courier New',monospace;
 }
-html{font-size:13px}
-body{
-  background:var(--bg);color:var(--text);font-family:var(--font);
-  line-height:1.5;overflow:hidden;height:100vh;
+html.light{
+  --bg:#f4f5f7;--bg2:#ffffff;--bg3:#ebedf0;
+  --border:#dce0e6;--border2:#c8cdd5;
+  --text:#1a1d24;--text2:#5a6270;--text-dim:#9aa0ab;
+  --accent:#0a9b7a;--accent2:#088a6b;
+  --red:#d63031;--amber:#d4880f;--blue:#2563eb;--green:#059669;
+  --hover-bg:rgba(0,0,0,.02);--hover-td:rgba(0,0,0,.02);
+  --scan-a:rgba(255,255,255,.04);
 }
+html{font-size:13px}
+body{background:var(--bg);color:var(--text);font-family:var(--font);line-height:1.5;overflow:hidden;height:100vh}
 ::selection{background:var(--accent);color:var(--bg)}
 ::-webkit-scrollbar{width:5px}
 ::-webkit-scrollbar-track{background:var(--bg2)}
 ::-webkit-scrollbar-thumb{background:var(--border2);border-radius:3px}
 
-/* ── Layout ── */
 .shell{display:flex;height:100vh}
-.sidebar{
-  width:200px;min-width:200px;background:var(--bg2);
-  border-right:1px solid var(--border);display:flex;flex-direction:column;
-  padding:16px 0;
-}
-.logo{
-  padding:0 16px 20px;border-bottom:1px solid var(--border);margin-bottom:8px;
-  font-size:11px;letter-spacing:2px;text-transform:uppercase;color:var(--accent);
-  font-weight:700;
-}
+.sidebar{width:200px;min-width:200px;background:var(--bg2);border-right:1px solid var(--border);display:flex;flex-direction:column;padding:16px 0}
+.logo{padding:0 16px 20px;border-bottom:1px solid var(--border);margin-bottom:8px;font-size:11px;letter-spacing:2px;text-transform:uppercase;color:var(--accent);font-weight:700}
 .logo span{color:var(--text2);font-weight:400;display:block;font-size:10px;letter-spacing:1px;margin-top:2px}
-.nav-item{
-  padding:8px 16px;cursor:pointer;font-size:12px;color:var(--text2);
-  border-left:2px solid transparent;transition:all .15s;
-}
-.nav-item:hover{color:var(--text);background:rgba(255,255,255,.02)}
+.nav-item{padding:8px 16px;cursor:pointer;font-size:12px;color:var(--text2);border-left:2px solid transparent;transition:all .15s}
+.nav-item:hover{color:var(--text);background:var(--hover-bg)}
 .nav-item.active{color:var(--accent);border-left-color:var(--accent);background:rgba(0,212,170,.04)}
-.nav-item .tag{
-  display:inline-block;background:var(--bg3);border:1px solid var(--border);
-  border-radius:3px;font-size:9px;padding:1px 5px;margin-left:6px;color:var(--text-dim);
-}
-
 .main{flex:1;display:flex;flex-direction:column;overflow:hidden}
-.topbar{
-  height:40px;min-height:40px;border-bottom:1px solid var(--border);
-  display:flex;align-items:center;justify-content:space-between;padding:0 20px;
-  background:var(--bg2);
-}
+.topbar{height:40px;min-height:40px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;padding:0 20px;background:var(--bg2)}
 .topbar-title{font-size:12px;color:var(--text2);letter-spacing:1px;text-transform:uppercase}
+.topbar-r{display:flex;align-items:center;gap:12px}
 .clock{font-size:12px;color:var(--accent);letter-spacing:1px}
-
+.tb-btn{background:none;border:1px solid var(--border);color:var(--text2);cursor:pointer;font-size:11px;padding:3px 8px;border-radius:3px;font-family:var(--font);transition:all .15s}
+.tb-btn:hover{color:var(--accent);border-color:var(--accent)}
 .content{flex:1;overflow-y:auto;padding:20px}
 
-/* ── Cards ── */
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px;margin-bottom:20px}
-.card{
-  background:var(--bg2);border:1px solid var(--border);border-radius:4px;
-  padding:16px;position:relative;overflow:hidden;
-}
-.card::before{
-  content:'';position:absolute;top:0;left:0;right:0;height:1px;
-  background:linear-gradient(90deg,transparent,var(--accent),transparent);opacity:.3;
-}
-.card-title{
-  font-size:10px;letter-spacing:2px;text-transform:uppercase;
-  color:var(--text-dim);margin-bottom:12px;
-}
+.card{background:var(--bg2);border:1px solid var(--border);border-radius:4px;padding:16px;position:relative;overflow:hidden}
+.card::before{content:'';position:absolute;top:0;left:0;right:0;height:1px;background:linear-gradient(90deg,transparent,var(--accent),transparent);opacity:.3}
+.card-title{font-size:10px;letter-spacing:2px;text-transform:uppercase;color:var(--text-dim);margin-bottom:12px}
 .card-value{font-size:24px;font-weight:700;color:var(--accent);line-height:1}
 .card-sub{font-size:11px;color:var(--text2);margin-top:6px}
 
-/* ── Table ── */
 .tbl{width:100%;border-collapse:collapse;font-size:12px}
-.tbl th{
-  text-align:left;padding:8px 10px;border-bottom:1px solid var(--border2);
-  color:var(--text-dim);font-size:10px;letter-spacing:1px;text-transform:uppercase;
-  font-weight:600;position:sticky;top:0;background:var(--bg2);z-index:1;
-}
-.tbl td{
-  padding:7px 10px;border-bottom:1px solid var(--border);color:var(--text);
-  white-space:nowrap;
-}
-.tbl tr:hover td{background:rgba(255,255,255,.015)}
-.tbl-wrap{
-  background:var(--bg2);border:1px solid var(--border);border-radius:4px;
-  overflow:auto;max-height:calc(100vh - 180px);
-}
-.tbl-wrap::before{
-  content:'';display:block;height:1px;
-  background:linear-gradient(90deg,transparent,var(--accent),transparent);opacity:.3;
-}
+.tbl th{text-align:left;padding:8px 10px;border-bottom:1px solid var(--border2);color:var(--text-dim);font-size:10px;letter-spacing:1px;text-transform:uppercase;font-weight:600;position:sticky;top:0;background:var(--bg2);z-index:1}
+.tbl td{padding:7px 10px;border-bottom:1px solid var(--border);color:var(--text);white-space:nowrap}
+.tbl tr:hover td{background:var(--hover-td)}
+.tbl-wrap{background:var(--bg2);border:1px solid var(--border);border-radius:4px;overflow:auto;max-height:calc(100vh - 180px)}
+.tbl-wrap::before{content:'';display:block;height:1px;background:linear-gradient(90deg,transparent,var(--accent),transparent);opacity:.3}
 
-/* ── Tags & Pills ── */
-.pill{
-  display:inline-block;padding:2px 8px;border-radius:3px;font-size:10px;font-weight:600;
-  letter-spacing:.5px;
-}
+.pill{display:inline-block;padding:2px 8px;border-radius:3px;font-size:10px;font-weight:600;letter-spacing:.5px}
 .pill-green{background:rgba(16,185,129,.12);color:var(--green);border:1px solid rgba(16,185,129,.2)}
 .pill-red{background:rgba(255,71,87,.12);color:var(--red);border:1px solid rgba(255,71,87,.2)}
 .pill-amber{background:rgba(245,158,11,.12);color:var(--amber);border:1px solid rgba(245,158,11,.2)}
 .pill-blue{background:rgba(59,130,246,.12);color:var(--blue);border:1px solid rgba(59,130,246,.2)}
 .pill-dim{background:var(--bg3);color:var(--text-dim);border:1px solid var(--border)}
 
-/* ── Config display ── */
-.cfg-row{
-  display:flex;justify-content:space-between;align-items:center;
-  padding:8px 0;border-bottom:1px solid var(--border);font-size:12px;
-}
-.cfg-key{color:var(--text2)}
-.cfg-val{color:var(--accent);font-weight:600}
-.cfg-val.masked{color:var(--text-dim)}
-
-/* ── Memory ── */
-.mem-item{
-  padding:12px 14px;border-bottom:1px solid var(--border);
-  display:flex;justify-content:space-between;align-items:flex-start;gap:12px;
-}
+.cfg-row{display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--border);font-size:12px}
+.cfg-key{color:var(--text2)}.cfg-val{color:var(--accent);font-weight:600}.cfg-val.masked{color:var(--text-dim)}
+.mem-item{padding:12px 14px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:flex-start;gap:12px}
 .mem-item:last-child{border-bottom:none}
 .mem-content{flex:1;font-size:12px;line-height:1.6;white-space:pre-wrap;word-break:break-all}
 .mem-meta{font-size:10px;color:var(--text-dim);margin-top:4px}
-.btn-del{
-  background:none;border:1px solid var(--border);color:var(--red);
-  cursor:pointer;font-size:10px;padding:3px 8px;border-radius:3px;
-  font-family:var(--font);flex-shrink:0;
-}
+.btn-del{background:none;border:1px solid var(--border);color:var(--red);cursor:pointer;font-size:10px;padding:3px 8px;border-radius:3px;font-family:var(--font);flex-shrink:0}
 .btn-del:hover{background:rgba(255,71,87,.1);border-color:var(--red)}
-
-/* ── Sync status ── */
-.sync-row{
-  display:flex;align-items:center;gap:12px;padding:10px 0;
-  border-bottom:1px solid var(--border);font-size:12px;
-}
+.sync-row{display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--border);font-size:12px}
 .sync-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
 .sync-dot.ok{background:var(--green);box-shadow:0 0 6px var(--green)}
 .sync-dot.stale{background:var(--amber);box-shadow:0 0 6px var(--amber)}
 .sync-dot.none{background:var(--text-dim)}
-
-/* ── Empty state ── */
 .empty{text-align:center;padding:40px;color:var(--text-dim);font-size:12px}
-
-/* ── Scanline overlay ── */
-body::after{
-  content:'';position:fixed;inset:0;pointer-events:none;z-index:9999;
-  background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,.03) 2px,rgba(0,0,0,.03) 4px);
-}
-
-/* ── Animate ── */
+body::after{content:'';position:fixed;inset:0;pointer-events:none;z-index:9999;background:repeating-linear-gradient(0deg,transparent,transparent 2px,var(--scan-a) 2px,var(--scan-a) 4px)}
 @keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
 .fade-in{animation:fadeIn .3s ease both}
 </style>
 </head>
 <body>
 <div class="shell">
-  <!-- Sidebar -->
   <div class="sidebar">
     <div class="logo">WYCKOFF<span>Terminal Dashboard</span></div>
-    <div class="nav-item active" data-page="overview">Overview</div>
-    <div class="nav-item" data-page="recommendations">Recommendations</div>
-    <div class="nav-item" data-page="signals">Signals</div>
-    <div class="nav-item" data-page="portfolio">Portfolio</div>
-    <div class="nav-item" data-page="memory">Memory</div>
-    <div class="nav-item" data-page="config">Config</div>
-    <div class="nav-item" data-page="chatlog">Chat Log</div>
-    <div class="nav-item" data-page="agentlog">Agent Log</div>
-    <div class="nav-item" data-page="sync">Sync Status</div>
+    <div class="nav-item active" data-page="overview" data-i18n="nav_overview"></div>
+    <div class="nav-item" data-page="recommendations" data-i18n="nav_recommendations"></div>
+    <div class="nav-item" data-page="signals" data-i18n="nav_signals"></div>
+    <div class="nav-item" data-page="portfolio" data-i18n="nav_portfolio"></div>
+    <div class="nav-item" data-page="memory" data-i18n="nav_memory"></div>
+    <div class="nav-item" data-page="config" data-i18n="nav_config"></div>
+    <div class="nav-item" data-page="chatlog" data-i18n="nav_chatlog"></div>
+    <div class="nav-item" data-page="agentlog" data-i18n="nav_agentlog"></div>
+    <div class="nav-item" data-page="sync" data-i18n="nav_sync"></div>
   </div>
-  <!-- Main -->
   <div class="main">
     <div class="topbar">
-      <div class="topbar-title" id="pageTitle">OVERVIEW</div>
-      <div class="clock" id="clock"></div>
+      <div class="topbar-title" id="pageTitle"></div>
+      <div class="topbar-r">
+        <button class="tb-btn" id="btnTheme" onclick="toggleTheme()"></button>
+        <button class="tb-btn" id="btnLang" onclick="toggleLang()"></button>
+        <div class="clock" id="clock"></div>
+      </div>
     </div>
     <div class="content" id="content"></div>
   </div>
 </div>
-
 <script>
-const $ = s => document.querySelector(s);
-const $$ = s => document.querySelectorAll(s);
-const API = path => fetch(path).then(r => r.json());
+const $=s=>document.querySelector(s),$$=s=>document.querySelectorAll(s);
+const API=p=>fetch(p).then(r=>r.json());
 
-// Clock
-function tickClock(){
-  const d = new Date();
-  const pad = n => String(n).padStart(2,'0');
-  $('#clock').textContent = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+// ═══ i18n ═══
+const I18N={
+zh:{
+  nav_overview:'总览',nav_recommendations:'AI 推荐',nav_signals:'信号池',nav_portfolio:'持仓',
+  nav_memory:'Agent 记忆',nav_config:'配置',nav_chatlog:'对话日志',nav_agentlog:'Agent 日志',nav_sync:'同步状态',
+  theme_dark:'深色',theme_light:'浅色',
+  overview:'总览',recommendations:'AI 推荐',signals:'信号池',portfolio:'持仓',
+  memory:'Agent 记忆',config:'配置',chatlog:'对话日志',agentlog:'Agent 日志',sync:'同步状态',
+  card_recs:'AI 推荐跟踪',card_signals:'信号确认池',card_portfolio:'持仓',card_memory:'Agent 记忆',card_sync:'同步状态',
+  tracked:'只跟踪中',pending_confirm:'条待确认',positions:'持仓',cash:'可用资金',stored:'条记忆',synced:'表已同步',
+  recent_recs:'最近推荐',no_data:'暂无数据',loading:'加载中...',
+  th_code:'代码',th_name:'名称',th_camp:'阵营',th_date:'日期',th_init_price:'推荐价',th_cur_price:'现价',th_ai:'来源',
+  th_type:'类型',th_status:'状态',th_score:'评分',th_days:'天数',th_regime:'市况',th_industry:'行业',
+  th_shares:'股数',th_cost:'成本',th_stop_loss:'止损',
+  portfolio_id:'组合 ID',free_cash:'可用资金',no_portfolio:'暂无持仓数据',
+  no_memory:'暂无记忆',del:'删除',confirm_del:'确认删除记忆 #',
+  ds_config:'数据源配置',model_config:'模型配置',not_set:'未配置',no_config:'暂无配置',no_models:'暂无模型',
+  th_id:'ID',th_provider:'供应商',th_model:'模型',th_apikey:'API Key',th_baseurl:'Base URL',
+  sync_title:'Supabase → SQLite 同步',never_synced:'从未同步',rows:'行',
+  no_sessions:'暂无对话记录',th_session:'会话',th_started:'开始',th_ended:'结束',
+  th_messages:'消息数',th_tokens_in:'输入 Token',th_tokens_out:'输出 Token',th_error:'状态',
+  view:'查看',back:'返回列表',session:'会话',no_messages:'暂无消息',
+  agent_log_title:'Agent 日志（最近 200 行）',no_agent_log:'暂无日志 (~/.wyckoff/agent.log)',
+  no_recs:'暂无推荐',no_signals:'暂无信号',
+},
+en:{
+  nav_overview:'Overview',nav_recommendations:'Recommendations',nav_signals:'Signals',nav_portfolio:'Portfolio',
+  nav_memory:'Memory',nav_config:'Config',nav_chatlog:'Chat Log',nav_agentlog:'Agent Log',nav_sync:'Sync Status',
+  theme_dark:'Dark',theme_light:'Light',
+  overview:'Overview',recommendations:'Recommendations',signals:'Signals',portfolio:'Portfolio',
+  memory:'Memory',config:'Config',chatlog:'Chat Log',agentlog:'Agent Log',sync:'Sync Status',
+  card_recs:'AI Recommendations',card_signals:'Signal Pool',card_portfolio:'Portfolio',card_memory:'Agent Memory',card_sync:'Sync Status',
+  tracked:'tracked stocks',pending_confirm:'pending confirmation',positions:'positions',cash:'cash',stored:'stored memories',synced:'tables synced',
+  recent_recs:'Recent Recommendations',no_data:'No data',loading:'Loading...',
+  th_code:'Code',th_name:'Name',th_camp:'Camp',th_date:'Date',th_init_price:'Init Price',th_cur_price:'Cur Price',th_ai:'Source',
+  th_type:'Type',th_status:'Status',th_score:'Score',th_days:'Days',th_regime:'Regime',th_industry:'Industry',
+  th_shares:'Shares',th_cost:'Cost',th_stop_loss:'Stop Loss',
+  portfolio_id:'Portfolio ID',free_cash:'Free Cash',no_portfolio:'No portfolio data',
+  no_memory:'No memories stored',del:'DEL',confirm_del:'Delete memory #',
+  ds_config:'Data Source Config',model_config:'Model Configs',not_set:'not set',no_config:'No config',no_models:'No models configured',
+  th_id:'ID',th_provider:'Provider',th_model:'Model',th_apikey:'API Key',th_baseurl:'Base URL',
+  sync_title:'Supabase → SQLite Sync',never_synced:'Never synced',rows:'rows',
+  no_sessions:'No chat sessions recorded',th_session:'Session',th_started:'Started',th_ended:'Ended',
+  th_messages:'Messages',th_tokens_in:'Tokens In',th_tokens_out:'Tokens Out',th_error:'Status',
+  view:'VIEW',back:'Back to sessions',session:'Session',no_messages:'No messages',
+  agent_log_title:'Agent Log (last 200 lines)',no_agent_log:'No agent log (~/.wyckoff/agent.log)',
+  no_recs:'No recommendations',no_signals:'No signals',
+}};
+let _lang = localStorage.getItem('wk_lang') || 'zh';
+function t(k){return (I18N[_lang]||I18N.zh)[k]||k}
+function applyI18n(){
+  $$('[data-i18n]').forEach(el=>{el.textContent=t(el.dataset.i18n)});
+  $('#btnLang').textContent=_lang==='zh'?'EN':'中';
+  $('#btnTheme').textContent=document.documentElement.classList.contains('light')?t('theme_dark'):t('theme_light');
+  $('#pageTitle').textContent=t(currentPage);
 }
-setInterval(tickClock, 1000);
-tickClock();
+function toggleLang(){_lang=_lang==='zh'?'en':'zh';localStorage.setItem('wk_lang',_lang);applyI18n();loadPage(currentPage)}
 
-// Navigation
-let currentPage = 'overview';
-$$('.nav-item').forEach(el => {
-  el.addEventListener('click', () => {
-    $$('.nav-item').forEach(n => n.classList.remove('active'));
-    el.classList.add('active');
-    currentPage = el.dataset.page;
-    $('#pageTitle').textContent = currentPage.toUpperCase();
-    loadPage(currentPage);
-  });
-});
+// ═══ Theme ═══
+let _theme=localStorage.getItem('wk_theme')||'dark';
+function applyTheme(){
+  document.documentElement.classList.toggle('light',_theme==='light');
+  $('#btnTheme').textContent=_theme==='light'?t('theme_dark'):t('theme_light');
+}
+function toggleTheme(){_theme=_theme==='dark'?'light':'dark';localStorage.setItem('wk_theme',_theme);applyTheme()}
+applyTheme();
 
-// Page renderers
-async function loadPage(page) {
-  const c = $('#content');
-  c.innerHTML = '<div class="empty">Loading...</div>';
-  try {
-    switch(page) {
-      case 'overview': return renderOverview(c);
-      case 'recommendations': return renderRecommendations(c);
-      case 'signals': return renderSignals(c);
-      case 'portfolio': return renderPortfolio(c);
-      case 'memory': return renderMemory(c);
-      case 'config': return renderConfig(c);
-      case 'chatlog': return renderChatLog(c);
-      case 'agentlog': return renderAgentLog(c);
-      case 'sync': return renderSync(c);
+// ═══ Clock ═══
+function tickClock(){const d=new Date(),p=n=>String(n).padStart(2,'0');$('#clock').textContent=`${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`}
+setInterval(tickClock,1000);tickClock();
+
+// ═══ Nav ═══
+let currentPage='overview';
+$$('.nav-item').forEach(el=>{el.addEventListener('click',()=>{
+  $$('.nav-item').forEach(n=>n.classList.remove('active'));el.classList.add('active');
+  currentPage=el.dataset.page;$('#pageTitle').textContent=t(currentPage);loadPage(currentPage);
+})});
+
+async function loadPage(page){
+  const c=$('#content');c.innerHTML=`<div class="empty">${t('loading')}</div>`;
+  try{
+    switch(page){
+      case 'overview':return renderOverview(c);case 'recommendations':return renderRecommendations(c);
+      case 'signals':return renderSignals(c);case 'portfolio':return renderPortfolio(c);
+      case 'memory':return renderMemory(c);case 'config':return renderConfig(c);
+      case 'chatlog':return renderChatLog(c);case 'agentlog':return renderAgentLog(c);
+      case 'sync':return renderSync(c);
     }
-  } catch(e) {
-    c.innerHTML = `<div class="empty">Error: ${e.message}</div>`;
-  }
+  }catch(e){c.innerHTML=`<div class="empty">Error: ${e.message}</div>`}
 }
 
-// ── Overview ──
-async function renderOverview(c) {
-  const [recs, sigs, port, sync, mem] = await Promise.all([
-    API('/api/recommendations'), API('/api/signals'), API('/api/portfolio'),
-    API('/api/sync'), API('/api/memory'),
-  ]);
-  const pendingSigs = Array.isArray(sigs) ? sigs.filter(s => s.status === 'pending').length : 0;
-  const totalSigs = Array.isArray(sigs) ? sigs.length : 0;
-  const posCount = port?.positions?.length || 0;
-  const cash = port?.free_cash || 0;
-  const memCount = Array.isArray(mem) ? mem.length : 0;
-  const syncOk = Array.isArray(sync) ? sync.filter(s => s.last_synced_at).length : 0;
-  const syncTotal = Array.isArray(sync) ? sync.length : 0;
+function escHtml(s){const d=document.createElement('div');d.textContent=s||'';return d.innerHTML}
 
-  c.innerHTML = `
+// ═══ Overview ═══
+async function renderOverview(c){
+  const [recs,sigs,port,sync,mem]=await Promise.all([API('/api/recommendations'),API('/api/signals'),API('/api/portfolio'),API('/api/sync'),API('/api/memory')]);
+  const pendingSigs=Array.isArray(sigs)?sigs.filter(s=>s.status==='pending').length:0;
+  const totalSigs=Array.isArray(sigs)?sigs.length:0;
+  const posCount=port?.positions?.length||0;const cash=port?.free_cash||0;
+  const memCount=Array.isArray(mem)?mem.length:0;
+  const syncOk=Array.isArray(sync)?sync.filter(s=>s.last_synced_at).length:0;
+  const syncTotal=Array.isArray(sync)?sync.length:0;
+  c.innerHTML=`
     <div class="grid fade-in">
-      <div class="card">
-        <div class="card-title">AI Recommendations</div>
-        <div class="card-value">${Array.isArray(recs) ? recs.length : 0}</div>
-        <div class="card-sub">tracked stocks</div>
-      </div>
-      <div class="card">
-        <div class="card-title">Signal Pool</div>
-        <div class="card-value">${totalSigs}</div>
-        <div class="card-sub">${pendingSigs} pending confirmation</div>
-      </div>
-      <div class="card">
-        <div class="card-title">Portfolio</div>
-        <div class="card-value">${posCount}</div>
-        <div class="card-sub">positions &middot; cash: &yen;${cash.toLocaleString('zh-CN',{minimumFractionDigits:2})}</div>
-      </div>
-      <div class="card">
-        <div class="card-title">Agent Memory</div>
-        <div class="card-value">${memCount}</div>
-        <div class="card-sub">stored memories</div>
-      </div>
-      <div class="card">
-        <div class="card-title">Sync Status</div>
-        <div class="card-value">${syncOk}/${syncTotal}</div>
-        <div class="card-sub">tables synced</div>
-      </div>
+      <div class="card"><div class="card-title">${t('card_recs')}</div><div class="card-value">${Array.isArray(recs)?recs.length:0}</div><div class="card-sub">${t('tracked')}</div></div>
+      <div class="card"><div class="card-title">${t('card_signals')}</div><div class="card-value">${totalSigs}</div><div class="card-sub">${pendingSigs} ${t('pending_confirm')}</div></div>
+      <div class="card"><div class="card-title">${t('card_portfolio')}</div><div class="card-value">${posCount}</div><div class="card-sub">${t('positions')} · ${t('cash')}: &yen;${cash.toLocaleString('zh-CN',{minimumFractionDigits:2})}</div></div>
+      <div class="card"><div class="card-title">${t('card_memory')}</div><div class="card-value">${memCount}</div><div class="card-sub">${t('stored')}</div></div>
+      <div class="card"><div class="card-title">${t('card_sync')}</div><div class="card-value">${syncOk}/${syncTotal}</div><div class="card-sub">${t('synced')}</div></div>
     </div>
-    <div style="margin-top:8px">
-      <div class="card fade-in" style="animation-delay:.1s">
-        <div class="card-title">Recent Recommendations</div>
-        ${renderRecTable(Array.isArray(recs) ? recs.slice(0,8) : [])}
-      </div>
-    </div>
-  `;
+    <div style="margin-top:8px"><div class="card fade-in" style="animation-delay:.1s"><div class="card-title">${t('recent_recs')}</div>${renderRecTable(Array.isArray(recs)?recs.slice(0,8):[])}</div></div>`;
 }
+function renderRecTable(recs){
+  if(!recs.length)return `<div class="empty">${t('no_data')}</div>`;
+  return `<table class="tbl"><thead><tr><th>${t('th_code')}</th><th>${t('th_name')}</th><th>${t('th_camp')}</th><th>${t('th_date')}</th><th>${t('th_init_price')}</th><th>${t('th_cur_price')}</th><th>${t('th_ai')}</th></tr></thead><tbody>${recs.map(r=>{
+    const code=String(r.code||'').padStart(6,'0');
+    const ai=r.is_ai_recommended?'<span class="pill pill-green">AI</span>':'<span class="pill pill-dim">Manual</span>';
+    return `<tr><td>${code}</td><td>${r.name||''}</td><td>${r.camp||''}</td><td>${r.recommend_date||''}</td><td>${(r.initial_price||0).toFixed(2)}</td><td>${(r.current_price||0).toFixed(2)}</td><td>${ai}</td></tr>`}).join('')}</tbody></table>`}
 
-function renderRecTable(recs) {
-  if (!recs.length) return '<div class="empty">No data</div>';
-  return `<table class="tbl"><thead><tr>
-    <th>Code</th><th>Name</th><th>Camp</th><th>Date</th><th>Init Price</th><th>Cur Price</th><th>AI</th>
-  </tr></thead><tbody>${recs.map(r => {
-    const code = String(r.code||'').padStart(6,'0');
-    const ai = r.is_ai_recommended ? '<span class="pill pill-green">AI</span>' : '<span class="pill pill-dim">Manual</span>';
-    return `<tr><td>${code}</td><td>${r.name||''}</td><td>${r.camp||''}</td>
-      <td>${r.recommend_date||''}</td><td>${(r.initial_price||0).toFixed(2)}</td>
-      <td>${(r.current_price||0).toFixed(2)}</td><td>${ai}</td></tr>`;
-  }).join('')}</tbody></table>`;
-}
+// ═══ Recommendations ═══
+async function renderRecommendations(c){
+  const recs=await API('/api/recommendations');
+  if(!Array.isArray(recs)||!recs.length){c.innerHTML=`<div class="empty">${t('no_recs')}</div>`;return}
+  c.innerHTML=`<div class="tbl-wrap fade-in">${renderRecTable(recs)}</div>`}
 
-// ── Recommendations ──
-async function renderRecommendations(c) {
-  const recs = await API('/api/recommendations');
-  if (!Array.isArray(recs) || !recs.length) { c.innerHTML = '<div class="empty">No recommendations</div>'; return; }
-  c.innerHTML = `<div class="tbl-wrap fade-in">${renderRecTable(recs)}</div>`;
-}
+// ═══ Signals ═══
+async function renderSignals(c){
+  const sigs=await API('/api/signals');
+  if(!Array.isArray(sigs)||!sigs.length){c.innerHTML=`<div class="empty">${t('no_signals')}</div>`;return}
+  const statusPill=s=>{const m={pending:'pill-amber',confirmed:'pill-green',expired:'pill-red',rejected:'pill-red'};return `<span class="pill ${m[s]||'pill-dim'}">${s}</span>`};
+  c.innerHTML=`<div class="tbl-wrap fade-in"><table class="tbl"><thead><tr><th>${t('th_code')}</th><th>${t('th_name')}</th><th>${t('th_type')}</th><th>${t('th_status')}</th><th>${t('th_date')}</th><th>${t('th_score')}</th><th>${t('th_days')}</th><th>${t('th_regime')}</th><th>${t('th_industry')}</th></tr></thead><tbody>${sigs.map(s=>{
+    const code=String(s.code||'').padStart(6,'0');
+    return `<tr><td>${code}</td><td>${s.name||''}</td><td>${s.signal_type||''}</td><td>${statusPill(s.status||'')}</td><td>${s.signal_date||''}</td><td>${(s.signal_score||0).toFixed(2)}</td><td>${s.days_elapsed||0}</td><td>${s.regime||''}</td><td>${s.industry||''}</td></tr>`}).join('')}</tbody></table></div>`}
 
-// ── Signals ──
-async function renderSignals(c) {
-  const sigs = await API('/api/signals');
-  if (!Array.isArray(sigs) || !sigs.length) { c.innerHTML = '<div class="empty">No signals</div>'; return; }
-  const statusPill = s => {
-    const m = {pending:'pill-amber',confirmed:'pill-green',expired:'pill-red',rejected:'pill-red'};
-    return `<span class="pill ${m[s]||'pill-dim'}">${s}</span>`;
-  };
-  c.innerHTML = `<div class="tbl-wrap fade-in"><table class="tbl"><thead><tr>
-    <th>Code</th><th>Name</th><th>Type</th><th>Status</th><th>Date</th><th>Score</th><th>Days</th><th>Regime</th><th>Industry</th>
-  </tr></thead><tbody>${sigs.map(s => {
-    const code = String(s.code||'').padStart(6,'0');
-    return `<tr><td>${code}</td><td>${s.name||''}</td><td>${s.signal_type||''}</td>
-      <td>${statusPill(s.status||'')}</td><td>${s.signal_date||''}</td>
-      <td>${(s.signal_score||0).toFixed(2)}</td><td>${s.days_elapsed||0}</td>
-      <td>${s.regime||''}</td><td>${s.industry||''}</td></tr>`;
-  }).join('')}</tbody></table></div>`;
-}
-
-// ── Portfolio ──
-async function renderPortfolio(c) {
-  const port = await API('/api/portfolio');
-  if (!port || !port.portfolio_id) { c.innerHTML = '<div class="empty">No portfolio data</div>'; return; }
-  const pos = port.positions || [];
-  c.innerHTML = `
+// ═══ Portfolio ═══
+async function renderPortfolio(c){
+  const port=await API('/api/portfolio');
+  if(!port||!port.portfolio_id){c.innerHTML=`<div class="empty">${t('no_portfolio')}</div>`;return}
+  const pos=port.positions||[];
+  c.innerHTML=`
     <div class="grid fade-in">
-      <div class="card"><div class="card-title">Portfolio ID</div><div style="font-size:14px;color:var(--text)">${port.portfolio_id}</div></div>
-      <div class="card"><div class="card-title">Free Cash</div><div class="card-value">&yen;${(port.free_cash||0).toLocaleString('zh-CN',{minimumFractionDigits:2})}</div></div>
-      <div class="card"><div class="card-title">Positions</div><div class="card-value">${pos.length}</div></div>
+      <div class="card"><div class="card-title">${t('portfolio_id')}</div><div style="font-size:14px;color:var(--text)">${port.portfolio_id}</div></div>
+      <div class="card"><div class="card-title">${t('free_cash')}</div><div class="card-value">&yen;${(port.free_cash||0).toLocaleString('zh-CN',{minimumFractionDigits:2})}</div></div>
+      <div class="card"><div class="card-title">${t('positions')}</div><div class="card-value">${pos.length}</div></div>
     </div>
-    <div class="tbl-wrap fade-in" style="animation-delay:.1s"><table class="tbl"><thead><tr>
-      <th>Code</th><th>Name</th><th>Shares</th><th>Cost</th><th>Stop Loss</th>
-    </tr></thead><tbody>${pos.map(p => {
-      const code = String(p.code||'').padStart(6,'0');
-      const sl = p.stop_loss != null ? p.stop_loss.toFixed(2) : '-';
-      return `<tr><td>${code}</td><td>${p.name||''}</td><td>${p.shares||0}</td>
-        <td>${(p.cost_price||0).toFixed(3)}</td><td>${sl}</td></tr>`;
-    }).join('')}</tbody></table></div>`;
-}
+    <div class="tbl-wrap fade-in" style="animation-delay:.1s"><table class="tbl"><thead><tr><th>${t('th_code')}</th><th>${t('th_name')}</th><th>${t('th_shares')}</th><th>${t('th_cost')}</th><th>${t('th_stop_loss')}</th></tr></thead><tbody>${pos.map(p=>{
+      const code=String(p.code||'').padStart(6,'0');const sl=p.stop_loss!=null?p.stop_loss.toFixed(2):'-';
+      return `<tr><td>${code}</td><td>${p.name||''}</td><td>${p.shares||0}</td><td>${(p.cost_price||0).toFixed(3)}</td><td>${sl}</td></tr>`}).join('')}</tbody></table></div>`}
 
-// ── Memory ──
-async function renderMemory(c) {
-  const mems = await API('/api/memory');
-  if (!Array.isArray(mems) || !mems.length) { c.innerHTML = '<div class="empty">No memories stored</div>'; return; }
-  const typePill = t => {
-    const m = {session:'pill-blue',fact:'pill-green',preference:'pill-amber'};
-    return `<span class="pill ${m[t]||'pill-dim'}">${t}</span>`;
-  };
-  c.innerHTML = `<div class="tbl-wrap fade-in">${mems.map(m => `
-    <div class="mem-item">
-      <div style="flex:1">
-        <div style="margin-bottom:4px">${typePill(m.memory_type)} ${m.codes ? `<span style="color:var(--text-dim);font-size:10px;margin-left:8px">${m.codes}</span>` : ''}</div>
-        <div class="mem-content">${escHtml(m.content)}</div>
-        <div class="mem-meta">#${m.id} &middot; ${m.created_at||''}</div>
-      </div>
-      <button class="btn-del" onclick="delMemory(${m.id})">DEL</button>
-    </div>`).join('')}</div>`;
-}
+// ═══ Memory ═══
+async function renderMemory(c){
+  const mems=await API('/api/memory');
+  if(!Array.isArray(mems)||!mems.length){c.innerHTML=`<div class="empty">${t('no_memory')}</div>`;return}
+  const typePill=tp=>{const m={session:'pill-blue',fact:'pill-green',preference:'pill-amber'};return `<span class="pill ${m[tp]||'pill-dim'}">${tp}</span>`};
+  c.innerHTML=`<div class="tbl-wrap fade-in">${mems.map(m=>`
+    <div class="mem-item"><div style="flex:1">
+      <div style="margin-bottom:4px">${typePill(m.memory_type)} ${m.codes?`<span style="color:var(--text-dim);font-size:10px;margin-left:8px">${m.codes}</span>`:''}</div>
+      <div class="mem-content">${escHtml(m.content)}</div>
+      <div class="mem-meta">#${m.id} · ${m.created_at||''}</div>
+    </div><button class="btn-del" onclick="delMemory(${m.id})">${t('del')}</button></div>`).join('')}</div>`}
+window.delMemory=async function(id){if(!confirm(t('confirm_del')+id+'?'))return;await fetch('/api/memory/'+id,{method:'DELETE'});loadPage('memory')};
 
-function escHtml(s) {
-  const d = document.createElement('div');
-  d.textContent = s || '';
-  return d.innerHTML;
-}
+// ═══ Config ═══
+async function renderConfig(c){
+  const data=await API('/api/config');const cfg=data.config||{};const models=data.models||[];const defId=data.default_model||'';
+  let html=`<div class="card fade-in"><div class="card-title">${t('ds_config')}</div>`;
+  const keys=Object.entries(cfg);
+  if(keys.length){keys.forEach(([k,v])=>{const isMasked=String(v||'').includes('****');html+=`<div class="cfg-row"><span class="cfg-key">${k}</span><span class="cfg-val${isMasked?' masked':''}">${v||`<span style="color:var(--text-dim)">${t('not_set')}</span>`}</span></div>`})}
+  else{html+=`<div class="empty">${t('no_config')}</div>`}
+  html+='</div>';
+  html+=`<div class="card fade-in" style="margin-top:16px;animation-delay:.1s"><div class="card-title">${t('model_config')}</div>`;
+  if(models.length){
+    html+=`<table class="tbl"><thead><tr><th>${t('th_id')}</th><th>${t('th_provider')}</th><th>${t('th_model')}</th><th>${t('th_apikey')}</th><th>${t('th_baseurl')}</th></tr></thead><tbody>`;
+    models.forEach(m=>{const isDef=m.id===defId;html+=`<tr><td>${m.id}${isDef?' <span class="pill pill-green">DEFAULT</span>':''}</td><td>${m.provider_name||''}</td><td>${m.model||''}</td><td class="cfg-val masked">${m.api_key||''}</td><td>${m.base_url||'(default)'}</td></tr>`});
+    html+='</tbody></table>'}else{html+=`<div class="empty">${t('no_models')}</div>`}
+  html+='</div>';c.innerHTML=html}
 
-window.delMemory = async function(id) {
-  if (!confirm('Delete memory #' + id + '?')) return;
-  await fetch('/api/memory/' + id, {method:'DELETE'});
-  loadPage('memory');
-};
+// ═══ Sync ═══
+async function renderSync(c){
+  const sync=await API('/api/sync');if(!Array.isArray(sync)||!sync.length){c.innerHTML=`<div class="empty">${t('no_data')}</div>`;return}
+  const now=Date.now();
+  c.innerHTML=`<div class="card fade-in"><div class="card-title">${t('sync_title')}</div>${sync.map(s=>{
+    let cls='none',label=t('never_synced');
+    if(s.last_synced_at){const age=(now-new Date(s.last_synced_at+'Z').getTime())/3600000;cls=age<8?'ok':'stale';label=s.last_synced_at}
+    return `<div class="sync-row"><div class="sync-dot ${cls}"></div><div style="flex:1;font-weight:600">${s.table}</div><div style="color:var(--text2)">${s.row_count||0} ${t('rows')}</div><div style="color:var(--text-dim);font-size:11px;width:180px;text-align:right">${label}</div></div>`}).join('')}</div>`}
 
-// ── Config ──
-async function renderConfig(c) {
-  const data = await API('/api/config');
-  const cfg = data.config || {};
-  const models = data.models || [];
-  const defId = data.default_model || '';
+// ═══ Chat Log ═══
+let _chatSessionId=null;
+async function renderChatLog(c){
+  if(_chatSessionId)return renderChatSession(c,_chatSessionId);
+  const sessions=await API('/api/chat-sessions');
+  if(!Array.isArray(sessions)||!sessions.length){c.innerHTML=`<div class="empty">${t('no_sessions')}</div>`;return}
+  c.innerHTML=`<div class="tbl-wrap fade-in"><table class="tbl"><thead><tr><th>${t('th_session')}</th><th>${t('th_started')}</th><th>${t('th_ended')}</th><th>${t('th_messages')}</th><th>${t('th_tokens_in')}</th><th>${t('th_tokens_out')}</th><th>${t('th_error')}</th><th></th></tr></thead><tbody>${sessions.map(s=>{
+    const hasErr=s.last_error?'<span class="pill pill-red">ERR</span>':'<span class="pill pill-green">OK</span>';
+    return `<tr><td style="color:var(--accent);cursor:pointer" onclick="viewSession('${s.session_id}')">${s.session_id}</td><td>${s.started_at||''}</td><td>${s.ended_at||''}</td><td>${s.msg_count||0}</td><td>${(s.total_tokens_in||0).toLocaleString()}</td><td>${(s.total_tokens_out||0).toLocaleString()}</td><td>${hasErr}</td><td><span style="cursor:pointer;color:var(--accent)" onclick="viewSession('${s.session_id}')">${t('view')}</span></td></tr>`}).join('')}</tbody></table></div>`}
+window.viewSession=function(sid){_chatSessionId=sid;loadPage('chatlog')};
+window.backToSessions=function(){_chatSessionId=null;loadPage('chatlog')};
+async function renderChatSession(c,sid){
+  const logs=await API('/api/chat-log/'+sid);
+  if(!Array.isArray(logs)||!logs.length){c.innerHTML=`<div class="empty">${t('no_messages')}</div>`;return}
+  const rolePill=r=>{const m={user:'pill-blue',assistant:'pill-green',error:'pill-red',tool:'pill-dim'};return `<span class="pill ${m[r]||'pill-dim'}">${r}</span>`};
+  c.innerHTML=`<div style="margin-bottom:12px"><span style="cursor:pointer;color:var(--accent)" onclick="backToSessions()">&larr; ${t('back')}</span><span style="margin-left:12px;color:var(--text-dim)">${t('session')}: ${sid}</span></div>
+    <div class="tbl-wrap fade-in">${logs.map(l=>`<div class="mem-item"><div style="flex:1">
+      <div style="margin-bottom:4px">${rolePill(l.role)} <span style="color:var(--text-dim);font-size:10px;margin-left:8px">${l.created_at||''}</span>
+        ${l.model?`<span style="color:var(--text-dim);font-size:10px;margin-left:8px">${l.model}</span>`:''}
+        ${l.tokens_in||l.tokens_out?`<span style="color:var(--text-dim);font-size:10px;margin-left:8px">↑${l.tokens_in||0} ↓${l.tokens_out||0}</span>`:''}
+        ${l.elapsed_s?`<span style="color:var(--text-dim);font-size:10px;margin-left:8px">${l.elapsed_s}s</span>`:''}</div>
+      ${l.error?`<div style="color:var(--red);font-size:12px;margin-bottom:4px">${escHtml(l.error)}</div>`:''}
+      <div class="mem-content">${escHtml(l.content)}</div>
+      ${l.tool_calls?`<div style="color:var(--text-dim);font-size:10px;margin-top:4px">tools: ${escHtml(l.tool_calls)}</div>`:''}</div></div>`).join('')}</div>`}
 
-  let html = '<div class="card fade-in"><div class="card-title">Data Source Config</div>';
-  const keys = Object.entries(cfg);
-  if (keys.length) {
-    keys.forEach(([k,v]) => {
-      const isMasked = String(v||'').includes('****');
-      html += `<div class="cfg-row"><span class="cfg-key">${k}</span><span class="cfg-val${isMasked?' masked':''}">${v||'<span style="color:var(--text-dim)">not set</span>'}</span></div>`;
-    });
-  } else {
-    html += '<div class="empty">No config</div>';
-  }
-  html += '</div>';
+// ═══ Agent Log ═══
+async function renderAgentLog(c){
+  const data=await API('/api/agent-log?lines=200');const log=data?.log||'';
+  if(!log){c.innerHTML=`<div class="empty">${t('no_agent_log')}</div>`;return}
+  c.innerHTML=`<div class="card fade-in"><div class="card-title">${t('agent_log_title')}</div><pre style="font-size:11px;line-height:1.6;color:var(--text);white-space:pre-wrap;word-break:break-all;max-height:calc(100vh - 160px);overflow-y:auto">${escHtml(log)}</pre></div>`}
 
-  html += '<div class="card fade-in" style="margin-top:16px;animation-delay:.1s"><div class="card-title">Model Configs</div>';
-  if (models.length) {
-    html += '<table class="tbl"><thead><tr><th>ID</th><th>Provider</th><th>Model</th><th>API Key</th><th>Base URL</th><th></th></tr></thead><tbody>';
-    models.forEach(m => {
-      const isDef = m.id === defId;
-      html += `<tr><td>${m.id}${isDef?' <span class="pill pill-green">DEFAULT</span>':''}</td>
-        <td>${m.provider_name||''}</td><td>${m.model||''}</td>
-        <td class="cfg-val masked">${m.api_key||''}</td>
-        <td>${m.base_url||'(default)'}</td><td></td></tr>`;
-    });
-    html += '</tbody></table>';
-  } else {
-    html += '<div class="empty">No models configured</div>';
-  }
-  html += '</div>';
-  c.innerHTML = html;
-}
-
-// ── Sync ──
-async function renderSync(c) {
-  const sync = await API('/api/sync');
-  if (!Array.isArray(sync) || !sync.length) { c.innerHTML = '<div class="empty">No sync data</div>'; return; }
-  const now = Date.now();
-  c.innerHTML = `<div class="card fade-in"><div class="card-title">Supabase &rarr; SQLite Sync</div>
-    ${sync.map(s => {
-      let cls = 'none', label = 'Never synced';
-      if (s.last_synced_at) {
-        const age = (now - new Date(s.last_synced_at+'Z').getTime()) / 3600000;
-        cls = age < 8 ? 'ok' : 'stale';
-        label = s.last_synced_at;
-      }
-      return `<div class="sync-row">
-        <div class="sync-dot ${cls}"></div>
-        <div style="flex:1;font-weight:600">${s.table}</div>
-        <div style="color:var(--text2)">${s.row_count||0} rows</div>
-        <div style="color:var(--text-dim);font-size:11px;width:180px;text-align:right">${label}</div>
-      </div>`;
-    }).join('')}
-  </div>`;
-}
-
-// ── Chat Log ──
-let _chatSessionId = null;
-async function renderChatLog(c) {
-  if (_chatSessionId) return renderChatSession(c, _chatSessionId);
-  const sessions = await API('/api/chat-sessions');
-  if (!Array.isArray(sessions) || !sessions.length) { c.innerHTML = '<div class="empty">No chat sessions recorded</div>'; return; }
-  c.innerHTML = `<div class="tbl-wrap fade-in"><table class="tbl"><thead><tr>
-    <th>Session</th><th>Started</th><th>Ended</th><th>Messages</th><th>Tokens In</th><th>Tokens Out</th><th>Error</th><th></th>
-  </tr></thead><tbody>${sessions.map(s => {
-    const hasErr = s.last_error ? '<span class="pill pill-red">ERR</span>' : '<span class="pill pill-green">OK</span>';
-    return `<tr>
-      <td style="color:var(--accent);cursor:pointer" onclick="viewSession('${s.session_id}')">${s.session_id}</td>
-      <td>${s.started_at||''}</td><td>${s.ended_at||''}</td>
-      <td>${s.msg_count||0}</td><td>${(s.total_tokens_in||0).toLocaleString()}</td>
-      <td>${(s.total_tokens_out||0).toLocaleString()}</td><td>${hasErr}</td>
-      <td><span style="cursor:pointer;color:var(--accent)" onclick="viewSession('${s.session_id}')">VIEW</span></td>
-    </tr>`;
-  }).join('')}</tbody></table></div>`;
-}
-
-window.viewSession = function(sid) { _chatSessionId = sid; loadPage('chatlog'); };
-window.backToSessions = function() { _chatSessionId = null; loadPage('chatlog'); };
-
-async function renderChatSession(c, sid) {
-  const logs = await API('/api/chat-log/' + sid);
-  if (!Array.isArray(logs) || !logs.length) { c.innerHTML = '<div class="empty">No messages</div>'; return; }
-  const rolePill = r => {
-    const m = {user:'pill-blue',assistant:'pill-green',error:'pill-red',tool:'pill-dim'};
-    return `<span class="pill ${m[r]||'pill-dim'}">${r}</span>`;
-  };
-  c.innerHTML = `
-    <div style="margin-bottom:12px">
-      <span style="cursor:pointer;color:var(--accent)" onclick="backToSessions()">&larr; Back to sessions</span>
-      <span style="margin-left:12px;color:var(--text-dim)">Session: ${sid}</span>
-    </div>
-    <div class="tbl-wrap fade-in">${logs.map(l => `
-      <div class="mem-item">
-        <div style="flex:1">
-          <div style="margin-bottom:4px">
-            ${rolePill(l.role)}
-            <span style="color:var(--text-dim);font-size:10px;margin-left:8px">${l.created_at||''}</span>
-            ${l.model ? `<span style="color:var(--text-dim);font-size:10px;margin-left:8px">${l.model}</span>` : ''}
-            ${l.tokens_in || l.tokens_out ? `<span style="color:var(--text-dim);font-size:10px;margin-left:8px">↑${l.tokens_in||0} ↓${l.tokens_out||0}</span>` : ''}
-            ${l.elapsed_s ? `<span style="color:var(--text-dim);font-size:10px;margin-left:8px">${l.elapsed_s}s</span>` : ''}
-          </div>
-          ${l.error ? `<div style="color:var(--red);font-size:12px;margin-bottom:4px">${escHtml(l.error)}</div>` : ''}
-          <div class="mem-content">${escHtml(l.content)}</div>
-          ${l.tool_calls ? `<div style="color:var(--text-dim);font-size:10px;margin-top:4px">tools: ${escHtml(l.tool_calls)}</div>` : ''}
-        </div>
-      </div>`).join('')}</div>`;
-}
-
-// ── Agent Log ──
-async function renderAgentLog(c) {
-  const data = await API('/api/agent-log?lines=200');
-  const log = data?.log || '';
-  if (!log) { c.innerHTML = '<div class="empty">No agent log (~/.wyckoff/agent.log)</div>'; return; }
-  c.innerHTML = `<div class="card fade-in"><div class="card-title">Agent Log (last 200 lines)</div>
-    <pre style="font-size:11px;line-height:1.6;color:var(--text);white-space:pre-wrap;word-break:break-all;max-height:calc(100vh - 160px);overflow-y:auto">${escHtml(log)}</pre>
-  </div>`;
-}
-
-// Init
-loadPage('overview');
+// ═══ Init ═══
+applyI18n();loadPage('overview');
 </script>
 </body>
 </html>
