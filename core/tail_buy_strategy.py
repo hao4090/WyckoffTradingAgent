@@ -584,7 +584,7 @@ def build_tail_buy_markdown(
     route_line = " -> ".join(llm_route_plan) if llm_route_plan else "未启用"
     route_hits = ", ".join([f"{k}:{v}" for k, v in sorted(llm_route_stats.items())]) if llm_route_stats else "无"
     lines: list[str] = [
-        f"⏰ 尾盘买入扫描 {now_text}",
+        f"⏰ 尾盘策略 {now_text}",
         "",
         f"- 候选来源: signal_pending（signal_date={target_signal_date}, status in pending/confirmed）",
         f"- 扫描数量: {len(candidates)}",

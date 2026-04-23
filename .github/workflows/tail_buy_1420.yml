@@ -1,4 +1,4 @@
-name: Tail Buy 14:10
+name: 尾盘策略 14:10
 
 on:
   schedule:
@@ -92,7 +92,7 @@ jobs:
           payload = {
             'msg_type': 'interactive',
             'card': {
-              'header': {'title': {'tag': 'plain_text', 'content': '❌ 尾盘买入扫描任务失败'}},
+              'header': {'title': {'tag': 'plain_text', 'content': '❌ 尾盘策略任务失败'}},
               'elements': [{'tag': 'div', 'text': {'tag': 'lark_md', 'content': content}}]
             }
           }

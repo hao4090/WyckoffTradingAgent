@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-尾盘买入扫描任务（周一到周五 14:10）：
+尾盘策略任务（周一到周五 14:10）：
 - 输入：signal_pending（前一交易日 + pending/confirmed）
 - 判定：规则全量 + LLM TopN 二判
 - 输出：飞书 + Telegram 推送（不写交易表）
@@ -1013,7 +1013,7 @@ def main() -> int:
     holding_hard_stop_pct = max(_safe_float(os.getenv("TAIL_BUY_HOLDING_HARD_STOP_PCT", "7"), 7.0), 0.0)
     portfolio_id = str(args.portfolio_id or "USER_LIVE").strip() or "USER_LIVE"
 
-    _log("开始尾盘买入扫描任务", logs_path)
+    _log("开始尾盘策略任务", logs_path)
     _log(
         f"config: provider={provider}, model={model}, style={style}, "
         f"fetch_concurrency={fetch_concurrency}, llm_concurrency={llm_concurrency}, "
@@ -1030,7 +1030,7 @@ def main() -> int:
     )
 
     if not tickflow_api_key:
-        _log(f"缺少 TICKFLOW_API_KEY，尾盘买入扫描需要分钟级数据。{TICKFLOW_UPGRADE_HINT}", logs_path)
+        _log(f"缺少 TICKFLOW_API_KEY，尾盘策略需要分钟级数据。{TICKFLOW_UPGRADE_HINT}", logs_path)
         return 1
     if not feishu_webhook or not tg_bot_token or not tg_chat_id:
         _log("双通道推送未完整配置（需 FEISHU_WEBHOOK_URL + TG_BOT_TOKEN + TG_CHAT_ID）", logs_path)
@@ -1172,7 +1172,7 @@ def main() -> int:
     )
     _log_fetch_error_summary(merged, stage="最终输出", logs_path=logs_path)
 
-    title = f"⏰ 尾盘买入扫描 {started_at.strftime('%Y-%m-%d')}"
+    title = f"⏰ 尾盘策略 {started_at.strftime('%Y-%m-%d')}"
     report = build_tail_buy_markdown(
         now_text=_now_text(),
         target_signal_date=prev_trade_date,
