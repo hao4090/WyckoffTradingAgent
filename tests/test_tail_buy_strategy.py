@@ -251,3 +251,36 @@ def test_build_tail_buy_markdown_can_prepend_extra_sections():
         extra_sections_first=True,
     )
     assert md.find("持仓动作建议（加仓/减仓）") < md.find("## BUY（优先关注）")
+
+
+def test_build_tail_buy_markdown_truncates_error_items_over_limit():
+    items = []
+    for i in range(7):
+        items.append(
+            TailBuyCandidate(
+                code=f"60000{i}",
+                name=f"样本{i}",
+                signal_date="2026-04-20",
+                status="pending",
+                signal_type="sos",
+                signal_score=1.0,
+                rule_score=0.0,
+                rule_decision=DECISION_SKIP,
+                final_decision=DECISION_SKIP,
+                priority_score=-20.0,
+                fetch_error=f"ERR-{i}",
+                rule_reasons=[f"ERR-{i}"],
+            )
+        )
+    md = build_tail_buy_markdown(
+        now_text="2026-04-23 14:10:00",
+        target_signal_date="2026-04-22",
+        market_reminder="NORMAL/NORMAL",
+        candidates=items,
+        llm_total=0,
+        llm_success=0,
+        elapsed_seconds=10.0,
+        max_error_items_per_block=5,
+    )
+    assert md.count("ERR-") == 5
+    assert "其余 2 只报错标的已省略" in md

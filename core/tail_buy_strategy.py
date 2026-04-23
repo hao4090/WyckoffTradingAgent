@@ -578,6 +578,7 @@ def build_tail_buy_markdown(
     elapsed_seconds: float,
     extra_sections: list[str] | None = None,
     extra_sections_first: bool = False,
+    max_error_items_per_block: int = 5,
 ) -> str:
     counts = summarize_decision_counts(candidates)
     llm_route_plan = list(llm_route_plan or [])
@@ -606,7 +607,11 @@ def build_tail_buy_markdown(
             lines.append("- 无")
             lines.append("")
             return
-        for item in block:
+        max_error_items = max(int(max_error_items_per_block), 1)
+        error_items = [x for x in block if str(x.fetch_error or "").strip()]
+        normal_items = [x for x in block if not str(x.fetch_error or "").strip()]
+        show_items = normal_items + error_items[:max_error_items]
+        for item in show_items:
             reasons = "；".join(item.rule_reasons[:2]) if item.rule_reasons else "规则信号一般"
             llm_tag = ""
             if item.llm_decision:
@@ -618,6 +623,9 @@ def build_tail_buy_markdown(
                 f"rule={item.rule_decision}({item.rule_score:.1f}){llm_tag}"
                 f" | {reasons}{llm_reason}"
             )
+        omitted_errors = max(len(error_items) - max_error_items, 0)
+        if omitted_errors > 0:
+            lines.append(f"- ... 其余 {omitted_errors} 只报错标的已省略（详见日志 artifacts）")
         lines.append("")
 
     cleaned_sections: list[str] = []

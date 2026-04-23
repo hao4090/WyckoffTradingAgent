@@ -207,6 +207,36 @@ def _dedupe_texts(values: list[str], limit: int = 3) -> list[str]:
     return out
 
 
+def _is_tickflow_upgrade_related_error(err_or_text: Any) -> bool:
+    text = str(err_or_text or "").lower()
+    if not text:
+        return False
+    markers = (
+        "tickflow http 429",
+        "http 429",
+        "rate_limited",
+        "too many requests",
+        "限流",
+        "forbidden",
+        "套餐不支持",
+        "不支持日内批量查询",
+        "not support intraday batch",
+        "permission denied",
+    )
+    return any(m in text for m in markers)
+
+
+def _with_tickflow_upgrade_hint(message: str) -> str:
+    text = str(message or "").strip()
+    if not text:
+        return text
+    if TICKFLOW_UPGRADE_HINT in text:
+        return text
+    if _is_tickflow_upgrade_related_error(text):
+        return f"{text}（{TICKFLOW_UPGRADE_HINT}）"
+    return text
+
+
 def _normalize_effective_positions(raw_positions: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, int]]:
     positions: list[dict[str, Any]] = []
     stats = {
@@ -370,7 +400,7 @@ def _analyze_holdings_actions(
         except Exception as e:
             if is_tickflow_rate_limited_error(e):
                 tickflow_limit_hit = True
-            reason = f"TickFlow持仓分时拉取失败: {e}"
+            reason = _with_tickflow_upgrade_hint(f"TickFlow持仓分时拉取失败: {e}")
             for sym in chunk:
                 intraday_error_by_symbol[sym] = reason
 
@@ -559,10 +589,9 @@ def _build_holdings_markdown(
             reasons = "；".join(_dedupe_texts(item.reasons, limit=2)) or "结构中性"
             current = f"{item.current_price:.2f}" if item.current_price > 0 else "--"
             pnl = f"{item.pnl_pct:+.1f}%" if item.current_price > 0 and item.cost > 0 else "--"
-            suffix = f" | 数据:{item.fetch_error}" if item.fetch_error else ""
             lines.append(
                 f"- {item.code} {item.name} | 持仓={item.shares}股 | 现价={current} | "
-                f"浮盈={pnl} | 规则={item.rule_decision}({item.rule_score:.1f}) | {reasons}{suffix}"
+                f"浮盈={pnl} | 规则={item.rule_decision}({item.rule_score:.1f}) | {reasons}"
             )
         lines.append("")
 
@@ -645,7 +674,7 @@ def _scan_one_symbol(
     try:
         df_1m = client.get_intraday(symbol, period="1m", count=5000)
     except Exception as e:
-        candidate.fetch_error = f"TickFlow分钟数据拉取失败: {e}（{TICKFLOW_UPGRADE_HINT}）"
+        candidate.fetch_error = _with_tickflow_upgrade_hint(f"TickFlow分钟数据拉取失败: {e}")
         candidate.rule_reasons = [candidate.fetch_error]
         return candidate
     if df_1m is None or df_1m.empty:
@@ -775,7 +804,7 @@ def _run_rule_scan_batch(
         try:
             data_map = tickflow_client.get_intraday_batch(symbols, period="1m", count=5000)
         except Exception as e:
-            reason = f"TickFlow批量分时拉取失败: {e}（{TICKFLOW_UPGRADE_HINT}）"
+            reason = _with_tickflow_upgrade_hint(f"TickFlow批量分时拉取失败: {e}")
             batch_fail_symbols += len(chunk)
             if "429" in str(e) or "RATE_LIMITED" in str(e):
                 batch_rate_limited_symbols += len(chunk)
