@@ -16,9 +16,9 @@
 
 ---
 
-用自然语言和一位威科夫大师对话。他能调动 10 个量价工具，自主串联多步推理，给出"打还是不打"的结论。
+用自然语言和一位威科夫大师对话。他能调动 17 个工具，自主串联多步推理，给出"打还是不打"的结论。
 
-Web + CLI 双通道，Gemini / Claude / OpenAI 三选一，GitHub Actions 定时全自动。
+Web + CLI 双通道，Gemini / Claude / OpenAI 多模型切换，GitHub Actions 定时全自动。
 
 项目主页：**[youngcan-wang.github.io/wyckoff-homepage](https://youngcan-wang.github.io/wyckoff-homepage/)**
 
@@ -26,16 +26,19 @@ Web + CLI 双通道，Gemini / Claude / OpenAI 三选一，GitHub Actions 定时
 
 | 能力 | 说明 |
 |------|------|
-| 对话式 Agent | 用自然语言触发诊断、筛选、研报，LLM 自主编排工具调用；还能读写文件、执行命令、抓取网页，帮你操作电脑 |
-| 五层漏斗筛选 | 全市场 ~4500 股 → ~30 候选，六通道 + 板块共振 + 微观狙击 |
+| 对话式 Agent | 用自然语言触发诊断、筛选、研报，LLM 自主编排 17 个工具；还能读写文件、执行命令、抓取网页 |
+| 五层漏斗筛选 | 全市场 ~4500 股 → ~30 候选，六通道 + 板块共振 + 微观狙击。基于历史量价结构发现潜力标的，不构成投资建议 |
 | AI 三阵营研报 | 逻辑破产 / 储备营地 / 起跳板，LLM 独立审判 |
 | 持仓诊断 | 批量体检：均线结构、吸筹阶段、触发信号、止损状态 |
 | 私人决断 | 综合持仓 + 候选，输出 EXIT/TRIM/HOLD/PROBE/ATTACK 指令，Telegram 推送 |
+| 尾盘策略 | 盘中 14:00 执行，规则打分 + LLM 复判两阶段筛选尾盘买入标的 |
 | 信号确认池 | L4 触发信号经 1-3 天价格确认后才可操作 |
 | 推荐跟踪 | 历史推荐自动同步收盘价、计算累计收益 |
 | 日线回测 | 回放漏斗命中后 N 日收益，输出胜率/Sharpe/最大回撤 |
 | 盘中持仓监控 | TickFlow 实时行情驱动，止损穿破 / 跳空低开 / 放量滞涨 / VWAP 破位四维预警 |
 | 盘前风控 | A50 + VIX 监测，四档预警推送 |
+| 本地可视化面板 | `wyckoff dashboard` — 推荐、信号、持仓、Agent 记忆、对话日志，暗色/亮色主题，中英双语 |
+| Agent 记忆 | 跨会话记忆：自动提取对话结论，下次提问时注入相关上下文 |
 | 通用 Agent 能力 | 执行命令、读写文件、抓取网页 — 发一个 CSV 路径即可分析，不只是股票工具 |
 | 多通道推送 | 飞书 / 企微 / 钉钉 / Telegram |
 
@@ -100,6 +103,16 @@ wyckoff
 |:---:|:---:|
 | <img src="attach/cli-analysis.png" width="450" /> | <img src="attach/cli-result.png" width="450" /> |
 
+### 本地可视化面板
+
+```bash
+wyckoff dashboard
+```
+
+一条命令启动本地 HTTP 面板（默认端口 8765），自动打开浏览器。无需额外依赖。
+
+功能页面：AI 推荐、信号池、持仓、Agent 记忆、配置、对话日志、Agent 日志、同步状态。支持暗色/亮色主题切换，中英双语。
+
 ### Web
 
 ```bash
@@ -116,22 +129,25 @@ streamlit run streamlit_app.py
 |:---:|:---:|
 | <img src="attach/web-chat.png" width="450" /> | <img src="attach/web-export.png" width="450" /> |
 
-## 16 个工具
+## 17 个工具
 
-Agent 的武器库 — 12 个量价工具 + 4 个通用能力：
+Agent 的武器库 — 13 个量价工具 + 4 个通用能力：
 
 | 工具 | 能力 |
 |------|------|
 | `search_stock_by_name` | 名称 / 代码 / 拼音模糊搜索 |
 | `diagnose_stock` | 单股 Wyckoff 结构化诊断 |
+| `get_portfolio` | 查看持仓列表 + 可用资金 |
 | `diagnose_portfolio` | 批量持仓健康扫描 + 盘中实时信号 |
+| `update_portfolio` | 新增 / 修改 / 删除持仓、设置可用资金 |
 | `get_stock_price` | 近期 OHLCV 行情 |
 | `get_market_overview` | 大盘水温概览 |
-| `screen_stocks` | 五层漏斗全市场筛选 |
-| `generate_ai_report` | 三阵营 AI 深度研报 |
-| `generate_strategy_decision` | 持仓去留 + 新标买入决策 |
+| `screen_stocks` | 五层漏斗全市场筛选（⚡后台） |
+| `generate_ai_report` | 三阵营 AI 深度研报（⚡后台） |
+| `generate_strategy_decision` | 持仓去留 + 新标买入决策（⚡后台） |
 | `get_recommendation_tracking` | 历史推荐及后续表现 |
 | `get_signal_pending` | 信号确认池查询 |
+| `check_background_tasks` | 后台任务进度查询 |
 | `exec_command` | 执行本地 shell 命令 |
 | `read_file` | 读取本地文件（CSV/Excel 自动解析） |
 | `write_file` | 写入文件（导出报告/数据） |
@@ -156,9 +172,12 @@ Agent 的武器库 — 12 个量价工具 + 4 个通用能力：
 | 任务 | 时间（北京） | 说明 |
 |------|-------------|------|
 | 漏斗筛选 + AI 研报 + 私人决断 | 周日-周四 18:25 | 全自动，结果推送飞书/Telegram |
+| 尾盘策略 | 周一-周五 14:00 | 规则打分 + LLM 复判，筛选尾盘买入 |
+| 盘中持仓监控 | 周一-周五 10:00/11:00/13:30/14:30 | 止损/跳空/滞涨/VWAP 四维预警 |
 | 盘前风控 | 周一-周五 08:20 | A50 + VIX 预警 |
 | 涨停复盘 | 周一-周五 19:25 | 当日涨幅 ≥ 8% 复盘 |
 | 推荐跟踪重定价 | 周日-周四 23:00 | 同步收盘价 |
+| 回测网格 | 每月 1/15 日 04:00 | 18 并行参数格 → 聚合通知 |
 | 缓存维护 | 每天 23:05 | 清理过期行情缓存 |
 
 ## 模型支持
@@ -201,6 +220,10 @@ Agent 的武器库 — 12 个量价工具 + 4 个通用能力：
 | 支付宝 | 微信 |
 |:---:|:---:|
 | <img src="attach/支付宝收款码.jpg" width="200" /> | <img src="attach/微信收款码.png" width="200" /> |
+
+## 风险提示
+
+> **本工具基于历史量价结构发现潜力标的，过去表现不代表未来收益，所有筛选、推荐、回测结果均不构成任何投资建议。投资有风险，决策需自主。**
 
 ## License
 

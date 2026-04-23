@@ -154,6 +154,10 @@ Opcional: `TUSHARE_TOKEN` (datos avanzados), `FEISHU_WEBHOOK_URL` (push Feishu),
 
 Consulta la configuracion completa y los secretos de GitHub Actions en la [documentacion de arquitectura](ARCHITECTURE.md).
 
+## Aviso de riesgo
+
+> **Esta herramienta identifica potencial basandose en patrones historicos de volumen y precio. El rendimiento pasado no garantiza resultados futuros. Todos los resultados de filtrado, recomendacion y backtesting no constituyen asesoramiento de inversion. Invierta bajo su propia responsabilidad.**
+
 ## Licencia
 
 [AGPL-3.0](../LICENSE) &copy; 2024-2026 youngcan

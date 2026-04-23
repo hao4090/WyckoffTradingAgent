@@ -160,6 +160,10 @@ Lightweight reuse of the Wyckoff analysis capability: [`YoungCan-Wang/wyckoff_sk
 
 Ideal for giving any AI assistant a quick "Wyckoff lens."
 
+## Disclaimer
+
+> **This tool identifies potential based on historical volume-price patterns. Past performance does not guarantee future results. All screening, recommendation, and backtest outputs do not constitute investment advice. Invest at your own risk.**
+
 ## License
 
 [AGPL-3.0](../LICENSE) &copy; 2024-2026 youngcan

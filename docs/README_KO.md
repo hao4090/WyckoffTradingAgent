@@ -154,6 +154,10 @@ tushare → akshare → baostock → efinance
 
 전체 설정 항목 및 GitHub Actions Secrets 설명은 [아키텍처 문서](ARCHITECTURE.md)를 참조하세요.
 
+## 위험 경고
+
+> **이 도구는 과거 거래량-가격 패턴을 기반으로 잠재적 종목을 발견합니다. 과거 실적이 미래 수익을 보장하지 않으며, 모든 스크리닝, 추천, 백테스트 결과는 투자 조언을 구성하지 않습니다. 투자는 본인의 판단하에 진행하십시오.**
+
 ## License
 
 [AGPL-3.0](../LICENSE) &copy; 2024-2026 youngcan
