@@ -10,6 +10,7 @@ from core.tail_buy_strategy import (
     DECISION_SKIP,
     DECISION_WATCH,
     TailBuyCandidate,
+    build_tail_buy_markdown,
     compute_tail_features,
     evaluate_rule_decision,
     merge_rule_and_llm,
@@ -194,3 +195,31 @@ def test_compute_tail_features_handles_volume_lot_unit_for_vwap():
     assert feats["vwap_volume_scale"] == 100.0
     assert 8.0 < feats["vwap"] < 20.0
     assert feats["dist_vwap_pct"] > -20.0
+
+
+def test_build_tail_buy_markdown_can_append_extra_sections():
+    c = TailBuyCandidate(
+        code="301090",
+        name="华润材料",
+        signal_date="2026-04-20",
+        status="confirmed",
+        signal_type="spring",
+        signal_score=6.0,
+        rule_score=80.0,
+        rule_decision=DECISION_BUY,
+        final_decision=DECISION_BUY,
+        priority_score=90.0,
+        rule_reasons=["尾盘走强"],
+    )
+    md = build_tail_buy_markdown(
+        now_text="2026-04-23 14:10:00",
+        target_signal_date="2026-04-22",
+        market_reminder="NORMAL/NORMAL",
+        candidates=[c],
+        llm_total=1,
+        llm_success=1,
+        elapsed_seconds=10.0,
+        extra_sections=["## 持仓动作建议（加仓/减仓）\n- 持仓数量: 1"],
+    )
+    assert "持仓动作建议（加仓/减仓）" in md
+    assert "持仓数量: 1" in md

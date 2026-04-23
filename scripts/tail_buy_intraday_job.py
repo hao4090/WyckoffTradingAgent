@@ -10,8 +10,11 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout, as_completed
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from typing import Any
 from zoneinfo import ZoneInfo
 
 # Ensure project root is on sys.path for direct script invocation
@@ -20,13 +23,18 @@ if __name__ == "__main__" or not __package__:
 
 from core.constants import TABLE_SIGNAL_PENDING
 from core.tail_buy_strategy import (
+    DECISION_BUY,
+    DECISION_SKIP,
+    DECISION_WATCH,
     TailBuyCandidate,
     build_llm_prompt,
     build_tail_buy_markdown,
+    compute_tail_features,
     evaluate_rule_decision,
     merge_rule_and_llm,
     parse_llm_decision,
     pick_tail_candidates,
+    score_tail_features,
 )
 from integrations.fetch_a_share_csv import _resolve_trading_window
 from integrations.llm_client import DEFAULT_GEMINI_MODEL, OPENAI_COMPATIBLE_BASE_URLS, call_llm
@@ -35,7 +43,8 @@ from integrations.supabase_market_signal import (
     load_latest_market_signal_daily,
     load_market_signal_daily,
 )
-from integrations.tickflow_notice import TICKFLOW_LIMIT_HINT
+from integrations.supabase_portfolio import load_portfolio_state
+from integrations.tickflow_notice import TICKFLOW_LIMIT_HINT, is_tickflow_rate_limited_error
 from integrations.tickflow_client import TickFlowClient, normalize_cn_symbol
 from utils.feishu import send_feishu_notification
 from utils.notify import send_to_telegram
@@ -43,6 +52,25 @@ from utils.trading_clock import resolve_end_calendar_day
 
 TZ = ZoneInfo("Asia/Shanghai")
 TICKFLOW_UPGRADE_HINT = TICKFLOW_LIMIT_HINT
+HOLDING_ACTION_ADD = "ADD"
+HOLDING_ACTION_HOLD = "HOLD"
+HOLDING_ACTION_TRIM = "TRIM"
+
+
+@dataclass
+class HoldingAdvice:
+    code: str
+    name: str
+    shares: int = 0
+    cost: float = 0.0
+    current_price: float = 0.0
+    pnl_pct: float = 0.0
+    rule_score: float = 0.0
+    rule_decision: str = DECISION_SKIP
+    action: str = HOLDING_ACTION_HOLD
+    reasons: list[str] = field(default_factory=list)
+    fetch_error: str = ""
+    features: dict[str, Any] = field(default_factory=dict)
 
 
 def _now() -> datetime:
@@ -64,6 +92,22 @@ def _log(msg: str, logs_path: str | None = None) -> None:
 
 def _remaining_seconds(deadline_at: datetime) -> float:
     return (deadline_at - _now()).total_seconds()
+
+
+def _log_fetch_error_summary(
+    items: list[TailBuyCandidate],
+    *,
+    stage: str,
+    logs_path: str | None = None,
+) -> None:
+    reasons = [str(x.fetch_error or "").strip() for x in items if str(x.fetch_error or "").strip()]
+    if not reasons:
+        _log(f"{stage}失败汇总: 无", logs_path)
+        return
+    counter = Counter(reasons)
+    top = counter.most_common(5)
+    summary = " | ".join([f"{reason[:80]} x{cnt}" for reason, cnt in top])
+    _log(f"{stage}失败汇总: total={len(reasons)}, unique={len(counter)}, top={summary}", logs_path)
 
 
 def _env_flag(name: str, default: bool = False) -> bool:
@@ -98,9 +142,326 @@ def _plan_intraday_scan_budget(
     return to_scan, 0
 
 
-def _chunked(seq: list[TailBuyCandidate], chunk_size: int) -> list[list[TailBuyCandidate]]:
+def _chunked(seq: list[Any], chunk_size: int) -> list[list[Any]]:
     size = max(int(chunk_size), 1)
     return [seq[i : i + size] for i in range(0, len(seq), size)]
+
+
+def _safe_float(raw: Any, default: float = 0.0) -> float:
+    try:
+        if raw is None:
+            return default
+        text = str(raw).strip()
+        if not text:
+            return default
+        return float(text)
+    except Exception:
+        return default
+
+
+def _resolve_quote_price(quote: dict[str, Any] | None) -> float:
+    row = quote or {}
+    for key in ("close", "last", "price", "current", "open"):
+        value = _safe_float(row.get(key), 0.0)
+        if value > 0:
+            return value
+    return 0.0
+
+
+def _resolve_effective_stop(cost: float, stop_loss: Any, hard_stop_pct: float) -> float:
+    stops = []
+    explicit_stop = _safe_float(stop_loss, 0.0)
+    if explicit_stop > 0:
+        stops.append(explicit_stop)
+    if cost > 0 and hard_stop_pct > 0:
+        stops.append(cost * (1 - hard_stop_pct / 100.0))
+    if not stops:
+        return 0.0
+    return max(stops)
+
+
+def _dedupe_texts(values: list[str], limit: int = 3) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in values:
+        text = str(raw or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        out.append(text)
+        if len(out) >= max(int(limit), 1):
+            break
+    return out
+
+
+def _analyze_holdings_actions(
+    *,
+    tickflow_client: TickFlowClient,
+    portfolio_id: str,
+    signal_map: dict[str, TailBuyCandidate],
+    style: str,
+    intraday_batch_size: int,
+    hard_stop_pct: float,
+    deadline_at: datetime,
+    logs_path: str | None = None,
+) -> tuple[list[HoldingAdvice], bool, str]:
+    state = load_portfolio_state(portfolio_id)
+    if not isinstance(state, dict):
+        return [], False, f"组合 {portfolio_id} 不存在或不可读取"
+
+    raw_positions = list(state.get("positions") or [])
+    positions: list[dict[str, Any]] = []
+    for row in raw_positions:
+        if not isinstance(row, dict):
+            continue
+        code = "".join(ch for ch in str(row.get("code", "") or "").strip() if ch.isdigit()).zfill(6)
+        if len(code) != 6:
+            continue
+        shares = int(_safe_float(row.get("shares"), 0))
+        if shares <= 0:
+            continue
+        positions.append(
+            {
+                "code": code,
+                "name": str(row.get("name", "") or code).strip() or code,
+                "shares": shares,
+                "cost": _safe_float(row.get("cost"), 0.0),
+                "stop_loss": row.get("stop_loss"),
+            }
+        )
+
+    if not positions:
+        meta = f"portfolio={portfolio_id}, state_sig={state.get('state_signature', '-')}"
+        return [], False, meta
+
+    symbols = [normalize_cn_symbol(p["code"]) for p in positions]
+    symbol_set = sorted(set([s for s in symbols if s]))
+    _log(
+        f"持仓动作分析开始: portfolio={portfolio_id}, positions={len(positions)}, symbols={len(symbol_set)}",
+        logs_path,
+    )
+
+    tickflow_limit_hit = False
+    quotes: dict[str, dict[str, Any]] = {}
+    try:
+        quotes = tickflow_client.get_quotes(symbol_set)
+    except Exception as e:
+        if is_tickflow_rate_limited_error(e):
+            tickflow_limit_hit = True
+        _log(f"持仓动作分析: 批量实时行情失败: {e}", logs_path)
+
+    intraday_map: dict[str, Any] = {}
+    intraday_error_by_symbol: dict[str, str] = {}
+    for chunk in _chunked(symbol_set, max(min(int(intraday_batch_size), 200), 1)):
+        if _remaining_seconds(deadline_at) <= 5:
+            for sym in chunk:
+                intraday_error_by_symbol[sym] = "超出任务时限，未执行持仓分时分析"
+            break
+        try:
+            data_map = tickflow_client.get_intraday_batch(chunk, period="1m", count=5000)
+            intraday_map.update(data_map)
+            for sym in chunk:
+                if sym not in data_map:
+                    intraday_error_by_symbol[sym] = "TickFlow返回空分时"
+        except Exception as e:
+            if is_tickflow_rate_limited_error(e):
+                tickflow_limit_hit = True
+            reason = f"TickFlow持仓分时拉取失败: {e}"
+            for sym in chunk:
+                intraday_error_by_symbol[sym] = reason
+
+    out: list[HoldingAdvice] = []
+    add_count = 0
+    trim_count = 0
+    for p in positions:
+        code = p["code"]
+        name = p["name"]
+        sym = normalize_cn_symbol(code)
+        cost = _safe_float(p.get("cost"), 0.0)
+        shares = int(_safe_float(p.get("shares"), 0))
+        quote = quotes.get(sym) or {}
+        price = _resolve_quote_price(quote)
+        pnl_pct = ((price / cost - 1.0) * 100.0) if price > 0 and cost > 0 else 0.0
+        effective_stop = _resolve_effective_stop(cost, p.get("stop_loss"), hard_stop_pct)
+
+        advice = HoldingAdvice(
+            code=code,
+            name=name,
+            shares=shares,
+            cost=cost,
+            current_price=price,
+            pnl_pct=pnl_pct,
+        )
+
+        df_1m = intraday_map.get(sym)
+        fetch_error = str(intraday_error_by_symbol.get(sym, "") or "").strip()
+        if df_1m is None or getattr(df_1m, "empty", True):
+            advice.fetch_error = fetch_error or "持仓分时缺失"
+            advice.rule_decision = DECISION_WATCH
+            advice.rule_score = 0.0
+            advice.action = HOLDING_ACTION_HOLD
+            advice.reasons = _dedupe_texts(
+                [
+                    "分时数据缺失，先维持观察",
+                    advice.fetch_error,
+                ],
+                limit=2,
+            )
+            if price > 0 and effective_stop > 0 and price <= effective_stop:
+                advice.action = HOLDING_ACTION_TRIM
+                advice.reasons = _dedupe_texts(
+                    [
+                        f"现价{price:.2f}跌破风控位{effective_stop:.2f}",
+                        advice.fetch_error,
+                    ],
+                    limit=2,
+                )
+        else:
+            signal_item = signal_map.get(code)
+            signal_score = _safe_float(signal_item.signal_score, 0.0) if signal_item else 0.0
+            status = str(signal_item.status if signal_item else "pending")
+            features = compute_tail_features(df_1m)
+            score, decision, reasons = score_tail_features(
+                features,
+                signal_score=signal_score,
+                status=status,
+                style=style,
+            )
+            if advice.current_price <= 0:
+                advice.current_price = _safe_float(features.get("last_close"), 0.0)
+                advice.pnl_pct = (
+                    (advice.current_price / cost - 1.0) * 100.0
+                    if advice.current_price > 0 and cost > 0
+                    else 0.0
+                )
+            advice.rule_score = score
+            advice.rule_decision = decision
+            advice.features = features
+
+            dist_vwap_pct = _safe_float(features.get("dist_vwap_pct"), 0.0)
+            close_pos = _safe_float(features.get("close_pos"), 0.0)
+            last30_ret_pct = _safe_float(features.get("last30_ret_pct"), 0.0)
+            drop_from_high_pct = _safe_float(features.get("drop_from_high_pct"), 0.0)
+
+            base_reasons = _dedupe_texts(reasons, limit=2)
+            if advice.current_price > 0 and effective_stop > 0 and advice.current_price <= effective_stop:
+                advice.action = HOLDING_ACTION_TRIM
+                advice.reasons = _dedupe_texts(
+                    [
+                        f"现价{advice.current_price:.2f}跌破风控位{effective_stop:.2f}",
+                        *base_reasons,
+                    ],
+                    limit=3,
+                )
+            elif (
+                decision == DECISION_BUY
+                and dist_vwap_pct >= 0.15
+                and close_pos >= 0.68
+                and last30_ret_pct >= 0.2
+            ):
+                advice.action = HOLDING_ACTION_ADD
+                advice.reasons = _dedupe_texts(
+                    [
+                        "尾盘结构延续走强，可考虑小幅加仓",
+                        *base_reasons,
+                    ],
+                    limit=3,
+                )
+            elif (
+                decision == DECISION_SKIP
+                and (dist_vwap_pct <= -0.6 or close_pos < 0.42 or last30_ret_pct <= -0.8 or drop_from_high_pct <= -2.2)
+            ):
+                advice.action = HOLDING_ACTION_TRIM
+                advice.reasons = _dedupe_texts(
+                    [
+                        "尾盘结构转弱，优先减仓控制回撤",
+                        *base_reasons,
+                    ],
+                    limit=3,
+                )
+            else:
+                advice.action = HOLDING_ACTION_HOLD
+                advice.reasons = _dedupe_texts(
+                    [
+                        "结构中性，先持有观察",
+                        *base_reasons,
+                    ],
+                    limit=3,
+                )
+
+        if advice.action == HOLDING_ACTION_ADD:
+            add_count += 1
+        elif advice.action == HOLDING_ACTION_TRIM:
+            trim_count += 1
+        out.append(advice)
+
+    rank = {
+        HOLDING_ACTION_ADD: 0,
+        HOLDING_ACTION_TRIM: 1,
+        HOLDING_ACTION_HOLD: 2,
+    }
+    out.sort(key=lambda x: (rank.get(x.action, 9), -x.rule_score, x.code))
+    _log(
+        f"持仓动作分析完成: total={len(out)}, add={add_count}, trim={trim_count}, "
+        f"hold={len(out)-add_count-trim_count}, tickflow_limit_hit={tickflow_limit_hit}",
+        logs_path,
+    )
+    meta = f"portfolio={portfolio_id}, state_sig={state.get('state_signature', '-')}"
+    return out, tickflow_limit_hit, meta
+
+
+def _build_holdings_markdown(
+    *,
+    holdings: list[HoldingAdvice],
+    portfolio_meta: str,
+    tickflow_limit_hit: bool,
+) -> str:
+    lines: list[str] = ["## 持仓动作建议（加仓/减仓）"]
+    if portfolio_meta:
+        lines.append(f"- 持仓来源: {portfolio_meta}")
+
+    if not holdings:
+        lines.append("- 持仓数量: 0")
+        lines.append("- 动作分布: ADD=0 / HOLD=0 / TRIM=0")
+        lines.append("- 无可分析持仓（仅输出候选池结果）")
+        lines.append("")
+        lines.append("说明：持仓动作仅为盘中辅助建议，不自动下单。")
+        return "\n".join(lines)
+
+    counter = Counter([x.action for x in holdings])
+    lines.append(f"- 持仓数量: {len(holdings)}")
+    lines.append(
+        f"- 动作分布: ADD={counter.get(HOLDING_ACTION_ADD, 0)} / "
+        f"HOLD={counter.get(HOLDING_ACTION_HOLD, 0)} / "
+        f"TRIM={counter.get(HOLDING_ACTION_TRIM, 0)}"
+    )
+    if tickflow_limit_hit:
+        lines.append(f"- ⚠️ {TICKFLOW_UPGRADE_HINT}")
+    lines.append("")
+
+    def _append_block(title: str, action: str) -> None:
+        block = [x for x in holdings if x.action == action]
+        lines.append(f"### {title}")
+        if not block:
+            lines.append("- 无")
+            lines.append("")
+            return
+        for item in block:
+            reasons = "；".join(_dedupe_texts(item.reasons, limit=2)) or "结构中性"
+            current = f"{item.current_price:.2f}" if item.current_price > 0 else "--"
+            pnl = f"{item.pnl_pct:+.1f}%" if item.current_price > 0 and item.cost > 0 else "--"
+            suffix = f" | 数据:{item.fetch_error}" if item.fetch_error else ""
+            lines.append(
+                f"- {item.code} {item.name} | 持仓={item.shares}股 | 现价={current} | "
+                f"浮盈={pnl} | 规则={item.rule_decision}({item.rule_score:.1f}) | {reasons}{suffix}"
+            )
+        lines.append("")
+
+    _append_block("ADD（可考虑加仓）", HOLDING_ACTION_ADD)
+    _append_block("TRIM（可考虑减仓）", HOLDING_ACTION_TRIM)
+    _append_block("HOLD（继续持有）", HOLDING_ACTION_HOLD)
+    lines.append("说明：持仓动作仅为盘中辅助建议，不自动下单。")
+    return "\n".join(lines)
 
 
 def _resolve_trade_dates(logs_path: str | None = None) -> tuple[str, str]:
@@ -262,6 +623,7 @@ def _run_rule_scan(
         f"规则扫描完成: total={len(scanned)}, ok={ok_cnt}, fail={fail_cnt}, workers={max_workers}",
         logs_path,
     )
+    _log_fetch_error_summary(scanned, stage="规则扫描(single)", logs_path=logs_path)
     return scanned
 
 
@@ -284,8 +646,14 @@ def _run_rule_scan_batch(
     scanned: list[TailBuyCandidate] = []
     skipped_due_deadline = 0
     batch_fail_symbols = 0
+    batch_rate_limited_symbols = 0
 
-    for chunk in chunks:
+    for idx, chunk in enumerate(chunks, start=1):
+        _log(
+            f"规则扫描(batch): chunk={idx}/{len(chunks)}, size={len(chunk)}, "
+            f"time_left={_remaining_seconds(deadline_at):.1f}s",
+            logs_path,
+        )
         if _remaining_seconds(deadline_at) <= 5:
             skipped_due_deadline += len(chunk)
             for item in chunk:
@@ -300,12 +668,22 @@ def _run_rule_scan_batch(
         except Exception as e:
             reason = f"TickFlow批量分时拉取失败: {e}（{TICKFLOW_UPGRADE_HINT}）"
             batch_fail_symbols += len(chunk)
+            if "429" in str(e) or "RATE_LIMITED" in str(e):
+                batch_rate_limited_symbols += len(chunk)
             for item in chunk:
                 item.fetch_error = reason
                 item.rule_reasons = [reason]
                 scanned.append(item)
+            _log(
+                f"规则扫描(batch): chunk={idx}/{len(chunks)} failed, affected={len(chunk)}, err={e}",
+                logs_path,
+            )
             continue
 
+        _log(
+            f"规则扫描(batch): chunk={idx}/{len(chunks)} data_hit={len(data_map)}/{len(chunk)}",
+            logs_path,
+        )
         for item in chunk:
             sym = normalize_cn_symbol(item.code)
             df_1m = data_map.get(sym)
@@ -328,9 +706,11 @@ def _run_rule_scan_batch(
         _log(f"规则扫描(batch): 因 deadline 提前跳过 {skipped_due_deadline} 只", logs_path)
     _log(
         f"规则扫描(batch)完成: total={len(scanned)}, ok={ok_cnt}, fail={fail_cnt}, "
-        f"batch_size={max(min(int(batch_size), 200), 1)}, batch_fail_symbols={batch_fail_symbols}",
+        f"batch_size={max(min(int(batch_size), 200), 1)}, batch_fail_symbols={batch_fail_symbols}, "
+        f"batch_rate_limited_symbols={batch_rate_limited_symbols}",
         logs_path,
     )
+    _log_fetch_error_summary(scanned, stage="规则扫描(batch)", logs_path=logs_path)
     return scanned
 
 
@@ -345,8 +725,10 @@ def _fetch_depth_features(
     """并发获取五档行情，计算委比。返回 {code: {bid_total, ask_total, weibi}}"""
     top_codes = [c.code for c in candidates if not c.fetch_error][:max_symbols]
     if not top_codes:
+        _log("[depth] 跳过五档: 无可用候选", logs_path)
         return {}
     results: dict[str, dict] = {}
+    failed: list[str] = []
 
     def _one(code: str) -> tuple[str, dict | None]:
         try:
@@ -363,7 +745,13 @@ def _fetch_depth_features(
         for code, feat in ex.map(_one, top_codes):
             if feat:
                 results[code] = feat
-    _log(f"[depth] 五档获取完成: {len(results)}/{len(top_codes)} 成功", logs_path)
+            else:
+                failed.append(code)
+    sample = ",".join(failed[:8]) if failed else "-"
+    _log(
+        f"[depth] 五档获取完成: ok={len(results)}/{len(top_codes)}, fail={len(failed)}, sample_fail={sample}",
+        logs_path,
+    )
     return results
 
 
@@ -395,6 +783,7 @@ def _run_llm_overlay(
     ok = 0
     out: dict[str, dict] = {}
     route_hits: dict[str, int] = {}
+    llm_error_counter: Counter[str] = Counter()
     max_workers = max(1, int(llm_concurrency))
 
     def _judge_one(item: TailBuyCandidate) -> tuple[str, dict | None, str | None]:
@@ -443,8 +832,10 @@ def _run_llm_overlay(
                         route = str(payload.get("model_used", "") or "").strip() or "unknown"
                         route_hits[route] = route_hits.get(route, 0) + 1
                     elif err:
+                        llm_error_counter[str(err)] += 1
                         _log(f"LLM二判失败: {code}, err={err}", logs_path)
                 except Exception as e:
+                    llm_error_counter[f"FutureException:{type(e).__name__}"] += 1
                     _log(f"LLM二判异常: {code}, err={e}", logs_path)
         except FutureTimeout:
             _log("LLM 二判触发 deadline 保护：停止等待剩余结果。", logs_path)
@@ -452,7 +843,16 @@ def _run_llm_overlay(
                 if fut.done():
                     continue
                 fut.cancel()
+                llm_error_counter["deadline_cancelled"] += 1
                 _log(f"LLM二判取消: {code}", logs_path)
+
+    if llm_error_counter:
+        top_err = " | ".join([f"{k} x{v}" for k, v in llm_error_counter.most_common(5)])
+        _log(f"LLM二判失败汇总: {top_err}", logs_path)
+    _log(
+        f"LLM二判汇总: total={total}, ok={ok}, fail={total-ok}, route_hits={route_hits}",
+        logs_path,
+    )
 
     return out, total, ok, route_hits
 
@@ -560,6 +960,14 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Tail Buy Intraday Job")
     parser.add_argument("--max-llm-symbols", type=int, default=int(os.getenv("TAIL_BUY_LLM_TOP_N", "20")))
     parser.add_argument("--deadline-minute", type=int, default=int(os.getenv("TAIL_BUY_TASK_TIMEOUT_MIN", "25")))
+    parser.add_argument(
+        "--portfolio-id",
+        default=(
+            os.getenv("TAIL_BUY_PORTFOLIO_ID")
+            or os.getenv("MONITOR_PORTFOLIO_ID")
+            or "USER_LIVE"
+        ),
+    )
     parser.add_argument("--logs", default=None, help="日志路径")
     args = parser.parse_args()
 
@@ -602,12 +1010,15 @@ def main() -> int:
     tickflow_task_retries = max(int(os.getenv("TAIL_BUY_TICKFLOW_MAX_RETRIES", "1")), 1)
     use_batch_intraday = _env_flag("TAIL_BUY_USE_BATCH_INTRADAY", True)
     intraday_batch_size = max(min(int(os.getenv("TAIL_BUY_INTRADAY_BATCH_SIZE", "200")), 200), 1)
+    holding_hard_stop_pct = max(_safe_float(os.getenv("TAIL_BUY_HOLDING_HARD_STOP_PCT", "7"), 7.0), 0.0)
+    portfolio_id = str(args.portfolio_id or "USER_LIVE").strip() or "USER_LIVE"
 
     _log("开始尾盘买入扫描任务", logs_path)
     _log(
         f"config: provider={provider}, model={model}, style={style}, "
         f"fetch_concurrency={fetch_concurrency}, llm_concurrency={llm_concurrency}, "
         f"max_llm_symbols={max_llm_symbols}, deadline={deadline_min}m, "
+        f"portfolio_id={portfolio_id}, holding_hard_stop_pct={holding_hard_stop_pct}, "
         f"intraday_limit={intraday_limit_per_min}/min, max_over_limit={max_over_limit_symbols}, "
         f"force_over_limit={force_over_limit}, tickflow_retries={tickflow_task_retries}, "
         f"use_batch_intraday={use_batch_intraday}, intraday_batch_size={intraday_batch_size}",
@@ -633,126 +1044,133 @@ def main() -> int:
         return 1
 
     market_reminder = _resolve_market_reminder(today_trade_date)
-    if not pending_candidates:
-        report = build_tail_buy_markdown(
-            now_text=_now_text(),
-            target_signal_date=prev_trade_date,
-            market_reminder=market_reminder,
-            candidates=[],
-            llm_total=0,
-            llm_success=0,
-            llm_route_plan=[x["name"] for x in llm_routes],
-            llm_route_stats={},
-            elapsed_seconds=(_now() - started_at).total_seconds(),
-        )
-        title = f"⏰ 尾盘买入扫描 {started_at.strftime('%Y-%m-%d')}"
-        feishu_ok, tg_ok = _send_notifications(
-            feishu_webhook=feishu_webhook,
-            tg_bot_token=tg_bot_token,
-            tg_chat_id=tg_chat_id,
-            title=title,
-            report=report,
-            logs_path=logs_path,
-        )
-        _log(f"无候选结束: feishu_ok={feishu_ok}, tg_ok={tg_ok}", logs_path)
-        return 0 if (feishu_ok and tg_ok) else 1
 
     tickflow_client = TickFlowClient(
         api_key=tickflow_api_key,
         max_retries=tickflow_task_retries,
     )
     scored: list[TailBuyCandidate] = []
+    merged: list[TailBuyCandidate] = []
+    llm_total = 0
+    llm_success = 0
+    llm_route_stats: dict[str, int] = {}
 
-    if use_batch_intraday:
-        _log(
-            f"规则扫描模式: batch（batch_size={intraday_batch_size}, candidates={len(pending_candidates)}）",
-            logs_path,
-        )
-        scored = _run_rule_scan_batch(
-            pending_candidates,
-            tickflow_client=tickflow_client,
-            style=style,
-            batch_size=intraday_batch_size,
-            deadline_at=deadline_at,
-            logs_path=logs_path,
-        )
-        hard_batch_fail = sum(
-            1 for x in scored if "TickFlow批量分时拉取失败" in str(x.fetch_error or "")
-        )
-        if scored and hard_batch_fail >= len(scored):
-            _log("批量接口全部失败，降级到单标的限流模式。", logs_path)
-            scored = []
-
-    if not scored:
-        to_scan_count, planned_over_limit = _plan_intraday_scan_budget(
-            len(pending_candidates),
-            limit_per_min=intraday_limit_per_min,
-            max_over_limit_symbols=max_over_limit_symbols,
-            force_over_limit=force_over_limit,
-        )
-        to_scan = pending_candidates[:to_scan_count]
-        deferred = pending_candidates[to_scan_count:]
-        _log(
-            f"分时扫描预算(single): total={len(pending_candidates)}, to_scan={len(to_scan)}, "
-            f"deferred={len(deferred)}, limit={intraday_limit_per_min}/min, "
-            f"planned_over_limit={planned_over_limit}",
-            logs_path,
-        )
-        if deferred:
-            defer_reason = (
-                f"限流保护：本轮仅扫描前 {len(to_scan)} 只（TickFlow预算 {intraday_limit_per_min}/min，"
-                f"超限缓冲 <= {max_over_limit_symbols} 只）"
+    if pending_candidates:
+        if use_batch_intraday:
+            _log(
+                f"规则扫描模式: batch（batch_size={intraday_batch_size}, candidates={len(pending_candidates)}）",
+                logs_path,
             )
-            for item in deferred:
-                item.fetch_error = defer_reason
-                item.rule_reasons = [defer_reason]
+            scored = _run_rule_scan_batch(
+                pending_candidates,
+                tickflow_client=tickflow_client,
+                style=style,
+                batch_size=intraday_batch_size,
+                deadline_at=deadline_at,
+                logs_path=logs_path,
+            )
+            hard_batch_fail = sum(
+                1 for x in scored if "TickFlow批量分时拉取失败" in str(x.fetch_error or "")
+            )
+            if scored and hard_batch_fail >= len(scored):
+                _log("批量接口全部失败，降级到单标的限流模式。", logs_path)
+                scored = []
 
-        scored_scanned = _run_rule_scan(
-            to_scan,
-            tickflow_client=tickflow_client,
+        if not scored:
+            to_scan_count, planned_over_limit = _plan_intraday_scan_budget(
+                len(pending_candidates),
+                limit_per_min=intraday_limit_per_min,
+                max_over_limit_symbols=max_over_limit_symbols,
+                force_over_limit=force_over_limit,
+            )
+            to_scan = pending_candidates[:to_scan_count]
+            deferred = pending_candidates[to_scan_count:]
+            _log(
+                f"分时扫描预算(single): total={len(pending_candidates)}, to_scan={len(to_scan)}, "
+                f"deferred={len(deferred)}, limit={intraday_limit_per_min}/min, "
+                f"planned_over_limit={planned_over_limit}",
+                logs_path,
+            )
+            if deferred:
+                defer_reason = (
+                    f"限流保护：本轮仅扫描前 {len(to_scan)} 只（TickFlow预算 {intraday_limit_per_min}/min，"
+                    f"超限缓冲 <= {max_over_limit_symbols} 只）"
+                )
+                for item in deferred:
+                    item.fetch_error = defer_reason
+                    item.rule_reasons = [defer_reason]
+
+            scored_scanned = _run_rule_scan(
+                to_scan,
+                tickflow_client=tickflow_client,
+                style=style,
+                fetch_concurrency=fetch_concurrency,
+                deadline_at=deadline_at,
+                logs_path=logs_path,
+            )
+            scored = scored_scanned + deferred
+            scored.sort(key=lambda x: (-x.rule_score, x.code))
+
+        # ---- 五档行情过滤 ----
+        depth_map: dict[str, dict] = {}
+        if tickflow_client and _remaining_seconds(deadline_at) > 30:
+            depth_map = _fetch_depth_features(
+                tickflow_client,
+                sorted(
+                    [c for c in scored if not c.fetch_error],
+                    key=lambda x: (-x.rule_score, x.code),
+                ),
+                max_symbols=max_llm_symbols,
+                concurrency=4,
+                logs_path=logs_path,
+            )
+            skip_cnt = 0
+            for c in scored:
+                di = depth_map.get(c.code)
+                if di and di["weibi"] < DEPTH_WEIBI_SKIP_THRESHOLD and c.rule_decision != "SKIP":
+                    c.rule_decision = "SKIP"
+                    c.rule_reasons = (c.rule_reasons or []) + [f"五档委比={di['weibi']}%，卖压过重"]
+                    skip_cnt += 1
+            if skip_cnt:
+                _log(f"[depth] 委比过滤: {skip_cnt} 只标的被跳过（阈值<{DEPTH_WEIBI_SKIP_THRESHOLD}%）", logs_path)
+
+        llm_map, llm_total, llm_success, llm_route_stats = _run_llm_overlay(
+            scored,
+            llm_routes=llm_routes,
             style=style,
-            fetch_concurrency=fetch_concurrency,
+            max_llm_symbols=max_llm_symbols,
+            llm_concurrency=llm_concurrency,
             deadline_at=deadline_at,
+            depth_map=depth_map,
             logs_path=logs_path,
         )
-        scored = scored_scanned + deferred
-        scored.sort(key=lambda x: (-x.rule_score, x.code))
+        merged = merge_rule_and_llm(scored, llm_map)
+    else:
+        _log("候选池为空：本轮仅输出持仓动作建议。", logs_path)
 
-    # ---- 五档行情过滤 ----
-    depth_map: dict[str, dict] = {}
-    if tickflow_client and _remaining_seconds(deadline_at) > 30:
-        depth_map = _fetch_depth_features(
-            tickflow_client,
-            sorted(
-                [c for c in scored if not c.fetch_error],
-                key=lambda x: (-x.rule_score, x.code),
-            ),
-            max_symbols=max_llm_symbols,
-            concurrency=4,
-            logs_path=logs_path,
-        )
-        skip_cnt = 0
-        for c in scored:
-            di = depth_map.get(c.code)
-            if di and di["weibi"] < DEPTH_WEIBI_SKIP_THRESHOLD and c.rule_decision != "SKIP":
-                c.rule_decision = "SKIP"
-                c.rule_reasons = (c.rule_reasons or []) + [f"五档委比={di['weibi']}%，卖压过重"]
-                skip_cnt += 1
-        if skip_cnt:
-            _log(f"[depth] 委比过滤: {skip_cnt} 只标的被跳过（阈值<{DEPTH_WEIBI_SKIP_THRESHOLD}%）", logs_path)
-
-    llm_map, llm_total, llm_success, llm_route_stats = _run_llm_overlay(
-        scored,
-        llm_routes=llm_routes,
+    signal_map = {x.code: x for x in pending_candidates}
+    holdings, holdings_limit_hit, portfolio_meta = _analyze_holdings_actions(
+        tickflow_client=tickflow_client,
+        portfolio_id=portfolio_id,
+        signal_map=signal_map,
         style=style,
-        max_llm_symbols=max_llm_symbols,
-        llm_concurrency=llm_concurrency,
+        intraday_batch_size=intraday_batch_size,
+        hard_stop_pct=holding_hard_stop_pct,
         deadline_at=deadline_at,
-        depth_map=depth_map,
         logs_path=logs_path,
     )
-    merged = merge_rule_and_llm(scored, llm_map)
+    holdings_section = _build_holdings_markdown(
+        holdings=holdings,
+        portfolio_meta=portfolio_meta,
+        tickflow_limit_hit=holdings_limit_hit,
+    )
     elapsed = (_now() - started_at).total_seconds()
+    decision_counter = Counter([str(x.final_decision or "").strip() or "UNKNOWN" for x in merged])
+    _log(
+        "最终决策分布: " + ", ".join([f"{k}={v}" for k, v in sorted(decision_counter.items())]),
+        logs_path,
+    )
+    _log_fetch_error_summary(merged, stage="最终输出", logs_path=logs_path)
 
     title = f"⏰ 尾盘买入扫描 {started_at.strftime('%Y-%m-%d')}"
     report = build_tail_buy_markdown(
@@ -765,6 +1183,7 @@ def main() -> int:
         llm_route_plan=[x["name"] for x in llm_routes],
         llm_route_stats=llm_route_stats,
         elapsed_seconds=elapsed,
+        extra_sections=[holdings_section],
     )
     feishu_ok, tg_ok = _send_notifications(
         feishu_webhook=feishu_webhook,
@@ -782,8 +1201,6 @@ def main() -> int:
     )
 
     if not feishu_ok or not tg_ok:
-        return 1
-    if not merged:
         return 1
     return 0
 
