@@ -10,6 +10,7 @@ from core.tail_buy_strategy import (
     DECISION_SKIP,
     DECISION_WATCH,
     TailBuyCandidate,
+    _normalize_signal_score,
     build_tail_buy_markdown,
     compute_tail_features,
     evaluate_rule_decision,
@@ -306,6 +307,34 @@ def test_build_tail_buy_markdown_can_prepend_extra_sections():
         extra_sections_first=True,
     )
     assert md.find("持仓动作建议（加仓/减仓）") < md.find("## BUY（优先关注）")
+
+
+def test_normalize_signal_score_lps_inverted():
+    assert _normalize_signal_score(0.2, "lps") > 6.0
+    assert _normalize_signal_score(0.5, "lps") > 2.0
+    assert _normalize_signal_score(0.65, "lps") == 0.0
+
+
+def test_normalize_signal_score_sos_scales():
+    assert _normalize_signal_score(2.0, "sos") == 0.0
+    assert 4.5 < _normalize_signal_score(4.0, "sos") < 5.5
+    assert _normalize_signal_score(6.0, "sos") == 10.0
+
+
+def test_auto_style_selects_by_signal_type():
+    strong_df = _make_intraday_df(start=10.0, end=10.9, tail_boost=0.8, tail_volume_mult=2.0)
+    spring_c = TailBuyCandidate(
+        code="301090", name="T", signal_date="2026-04-20",
+        status="confirmed", signal_type="spring", signal_score=5.0,
+    )
+    sos_c = TailBuyCandidate(
+        code="002217", name="T", signal_date="2026-04-20",
+        status="confirmed", signal_type="sos", signal_score=4.0,
+    )
+    spring_out = evaluate_rule_decision(spring_c, strong_df)
+    sos_out = evaluate_rule_decision(sos_c, strong_df)
+    assert spring_out.rule_score > 0
+    assert sos_out.rule_score > 0
 
 
 def test_build_tail_buy_markdown_truncates_error_items_over_limit():

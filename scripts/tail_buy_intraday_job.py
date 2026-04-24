@@ -1149,7 +1149,7 @@ def main() -> int:
         primary_base_url=llm_base_url,
     )
     tickflow_api_key = os.getenv("TICKFLOW_API_KEY", "").strip()
-    style = os.getenv("TAIL_BUY_STYLE", "hybrid").strip().lower() or "hybrid"
+    style = os.getenv("TAIL_BUY_STYLE", "auto").strip().lower() or "auto"
     fetch_concurrency = max(int(os.getenv("TAIL_BUY_FETCH_CONCURRENCY", "8")), 1)
     llm_concurrency = max(int(os.getenv("TAIL_BUY_LLM_CONCURRENCY", "4")), 1)
     max_llm_symbols = max(int(args.max_llm_symbols or 20), 0)

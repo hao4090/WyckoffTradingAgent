@@ -268,24 +268,58 @@ def compute_tail_features(df_1m: pd.DataFrame) -> dict[str, Any]:
     }
 
 
+_SIGNAL_TYPE_STYLE: dict[str, str] = {
+    "sos": "trend",
+    "jac": "trend",
+    "spring": "pullback",
+    "lps": "pullback",
+    "evr": "hybrid",
+}
+
+
+def _normalize_signal_score(signal_score: float, signal_type: str) -> float:
+    """按信号类型归一化 score 到 0-10 统一量纲。"""
+    st = signal_type.strip().lower()
+    raw = max(signal_score, 0.0)
+    if st == "lps":
+        # LPS score 是缩量比，越小越好（0.2=极干, 0.65=阈值边界）
+        normalized = max(0.0, (0.65 - raw) / 0.65) * 10.0
+    elif st in ("sos", "jac"):
+        # SOS score 是放量倍数（2.5-8+），线性映射到 0-10
+        normalized = min((raw - 2.0) / 4.0, 1.0) * 10.0
+    elif st == "evr":
+        # EVR score 是放量倍数（1.3-5+），线性映射
+        normalized = min((raw - 1.0) / 3.0, 1.0) * 10.0
+    elif st == "spring":
+        # Spring score 是回升幅度%（0-10+），天然接近 0-10
+        normalized = raw
+    else:
+        normalized = raw
+    return min(max(normalized, 0.0), 10.0)
+
+
 def score_tail_features(
     features: dict[str, Any],
     *,
     signal_score: float = 0.0,
+    signal_type: str = "",
     status: str = "pending",
     style: str = "hybrid",
 ) -> tuple[float, str, list[str]]:
     """
     规则评分：输出 (分数, BUY/WATCH/SKIP, 理由列表)。
-    style 支持 trend / pullback / hybrid。
+    style 支持 trend / pullback / hybrid；传空则按 signal_type 自动选择。
     """
     bars = int(_safe_float(features.get("bars"), 0))
     if bars < 60:
         return 5.0, DECISION_SKIP, ["分时数据不足（<60根1m）"]
 
+    st_lower = signal_type.strip().lower()
+    style_norm = str(style or "").strip().lower()
+    if not style_norm or style_norm == "auto":
+        style_norm = _SIGNAL_TYPE_STYLE.get(st_lower, "hybrid")
     trend_bias = 1.0
     pullback_bias = 1.0
-    style_norm = str(style or "hybrid").strip().lower()
     if style_norm == "trend":
         trend_bias, pullback_bias = 1.2, 0.8
     elif style_norm in {"pullback", "reclaim"}:
@@ -294,10 +328,11 @@ def score_tail_features(
     score = 35.0
     reasons: list[str] = []
 
-    sig_boost = min(max(signal_score, 0.0), 10.0) * 1.6
+    norm_score = _normalize_signal_score(signal_score, st_lower)
+    sig_boost = norm_score * 1.6
     if sig_boost > 0:
         score += sig_boost
-        reasons.append(f"漏斗信号加分 +{sig_boost:.1f}")
+        reasons.append(f"漏斗信号加分({st_lower or '?'}) +{sig_boost:.1f}")
 
     if str(status).lower() == "confirmed":
         score += 6.0
@@ -388,12 +423,13 @@ def evaluate_rule_decision(
     candidate: TailBuyCandidate,
     df_1m: pd.DataFrame,
     *,
-    style: str = "hybrid",
+    style: str = "auto",
 ) -> TailBuyCandidate:
     features = compute_tail_features(df_1m)
     score, decision, reasons = score_tail_features(
         features,
         signal_score=candidate.signal_score,
+        signal_type=candidate.signal_type,
         status=candidate.status,
         style=style,
     )
