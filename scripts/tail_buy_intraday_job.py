@@ -8,6 +8,7 @@ Tail Buy 任务（周一到周五 14:00）：
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 from collections import Counter
@@ -1333,6 +1334,28 @@ def main() -> int:
         logs_path,
     )
     _log_fetch_error_summary(merged, stage="最终输出", logs_path=logs_path)
+
+    # 持久化 BUY/WATCH 到本地 SQLite
+    try:
+        from integrations.local_db import init_db, save_tail_buy_results
+        init_db()
+        persistable = [
+            {
+                "code": c.code, "name": c.name,
+                "run_date": started_at.strftime("%Y-%m-%d"),
+                "signal_date": c.signal_date, "signal_type": c.signal_type,
+                "status": c.status, "final_decision": c.final_decision,
+                "rule_score": c.rule_score, "priority_score": c.priority_score,
+                "rule_reasons": json.dumps(c.rule_reasons, ensure_ascii=False),
+                "llm_decision": c.llm_decision or "",
+                "llm_reason": c.llm_reason,
+            }
+            for c in merged if c.final_decision != "SKIP"
+        ]
+        saved = save_tail_buy_results(persistable)
+        _log(f"已写入 {saved} 条尾盘结果到本地 SQLite", logs_path)
+    except Exception as e:
+        _log(f"写入 SQLite 失败（不影响推送）: {e}", logs_path)
 
     title = f"⏰ Tail Buy {started_at.strftime('%Y-%m-%d')}"
     report = build_tail_buy_markdown(

@@ -18,7 +18,7 @@ from core.constants import LOCAL_DB_PATH
 _lock = threading.Lock()
 _conn: sqlite3.Connection | None = None
 
-_SCHEMA_VERSION = 2
+_SCHEMA_VERSION = 3
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -105,12 +105,31 @@ CREATE TABLE IF NOT EXISTS chat_log (
     created_at TEXT DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS tail_buy_history (
+    code TEXT NOT NULL,
+    name TEXT DEFAULT '',
+    run_date TEXT NOT NULL,
+    signal_date TEXT NOT NULL,
+    signal_type TEXT DEFAULT '',
+    status TEXT DEFAULT '',
+    final_decision TEXT NOT NULL,
+    rule_score REAL DEFAULT 0,
+    priority_score REAL DEFAULT 0,
+    rule_reasons TEXT DEFAULT '',
+    llm_decision TEXT DEFAULT '',
+    llm_reason TEXT DEFAULT '',
+    created_at TEXT DEFAULT (datetime('now')),
+    UNIQUE(code, run_date)
+);
+
 CREATE INDEX IF NOT EXISTS idx_rec_date ON recommendation_tracking(recommend_date);
 CREATE INDEX IF NOT EXISTS idx_sig_status ON signal_pending(status);
 CREATE INDEX IF NOT EXISTS idx_mem_type ON agent_memory(memory_type);
 CREATE INDEX IF NOT EXISTS idx_mem_codes ON agent_memory(codes);
 CREATE INDEX IF NOT EXISTS idx_chatlog_session ON chat_log(session_id);
 CREATE INDEX IF NOT EXISTS idx_chatlog_created ON chat_log(created_at);
+CREATE INDEX IF NOT EXISTS idx_tail_run_date ON tail_buy_history(run_date);
+CREATE INDEX IF NOT EXISTS idx_tail_decision ON tail_buy_history(final_decision);
 """
 
 
@@ -458,6 +477,69 @@ def load_chat_logs(*, session_id: str | None = None, limit: int = 200) -> list[d
         )
     return [dict(r) for r in cur.fetchall()]
 
+
+# ---------------------------------------------------------------------------
+# Tail-buy history
+# ---------------------------------------------------------------------------
+
+def save_tail_buy_results(rows: list[dict]) -> int:
+    if not rows:
+        return 0
+    conn = get_db()
+    with conn:
+        conn.executemany(
+            """INSERT OR REPLACE INTO tail_buy_history
+               (code, name, run_date, signal_date, signal_type, status,
+                final_decision, rule_score, priority_score, rule_reasons,
+                llm_decision, llm_reason, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))""",
+            [
+                (
+                    str(r.get("code", "")).strip(),
+                    str(r.get("name", "")).strip(),
+                    str(r.get("run_date", "")).strip(),
+                    str(r.get("signal_date", "")).strip(),
+                    str(r.get("signal_type", "")).strip(),
+                    str(r.get("status", "")).strip(),
+                    str(r.get("final_decision", "")).strip(),
+                    float(r.get("rule_score", 0) or 0),
+                    float(r.get("priority_score", 0) or 0),
+                    str(r.get("rule_reasons", "")).strip(),
+                    str(r.get("llm_decision", "")).strip(),
+                    str(r.get("llm_reason", "")).strip(),
+                )
+                for r in rows
+            ],
+        )
+    return len(rows)
+
+
+def load_tail_buy_history(
+    *,
+    run_date: str = "",
+    decision: str = "",
+    limit: int = 50,
+) -> list[dict]:
+    conn = get_db()
+    clauses: list[str] = []
+    params: list[Any] = []
+    if run_date:
+        clauses.append("run_date = ?")
+        params.append(run_date.strip())
+    if decision:
+        clauses.append("final_decision = ?")
+        params.append(decision.strip().upper())
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    cur = conn.execute(
+        f"SELECT * FROM tail_buy_history {where} ORDER BY run_date DESC, priority_score DESC LIMIT ?",
+        params + [min(max(limit, 1), 200)],
+    )
+    return [dict(r) for r in cur.fetchall()]
+
+
+# ---------------------------------------------------------------------------
+# Chat sessions
+# ---------------------------------------------------------------------------
 
 def list_chat_sessions(limit: int = 50) -> list[dict]:
     """返回最近的会话列表，每个会话的首条用户消息作为摘要。"""

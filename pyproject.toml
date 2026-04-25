@@ -42,10 +42,12 @@ streamlit = [
     "google-adk>=1.0.0",
     "litellm>=1.40.0",
 ]
+mcp = ["mcp>=1.0.0"]
 dev = ["pytest>=7.0"]
 
 [project.scripts]
 wyckoff = "cli.__main__:main"
+wyckoff-mcp = "mcp_server:main"
 
 [build-system]
 requires = ["setuptools>=68.0"]

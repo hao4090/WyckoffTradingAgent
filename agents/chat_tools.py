@@ -1158,7 +1158,142 @@ def update_portfolio(
 
 
 # ---------------------------------------------------------------------------
-# Tool 13-16: Agent 标准工具（仅 CLI，Web 端不暴露）
+# Tool 13: 尾盘买入历史查询
+# ---------------------------------------------------------------------------
+
+def get_tail_buy_history(run_date: str = "", decision: str = "", limit: int = 20) -> dict:
+    """查询尾盘买入策略的历史结果。
+
+    尾盘策略每个交易日 14:00 执行，对信号确认池中的候选做盘中分时评估，
+    输出 BUY / WATCH / SKIP 决策。本工具查询历史执行结果。
+
+    Args:
+        run_date: 指定日期（YYYY-MM-DD），空则返回最近记录
+        decision: 筛选决策类型：'BUY'/'WATCH'/空（全部）
+        limit: 返回记录数，默认 20，最大 200
+
+    Returns:
+        尾盘策略历史结果列表。
+    """
+    try:
+        limit = min(max(int(limit), 1), 200)
+        from integrations.local_db import load_tail_buy_history
+        records = load_tail_buy_history(
+            run_date=str(run_date or "").strip(),
+            decision=str(decision or "").strip(),
+            limit=limit,
+        )
+        if not records:
+            return {"message": "暂无尾盘策略记录", "records": []}
+        simplified = [
+            {
+                "code": str(r.get("code", "")),
+                "name": str(r.get("name", "")),
+                "run_date": str(r.get("run_date", "")),
+                "signal_type": str(r.get("signal_type", "")),
+                "final_decision": str(r.get("final_decision", "")),
+                "rule_score": r.get("rule_score", 0),
+                "priority_score": r.get("priority_score", 0),
+                "llm_decision": str(r.get("llm_decision", "")),
+                "llm_reason": str(r.get("llm_reason", "")),
+            }
+            for r in records
+        ]
+        return {"total": len(simplified), "records": simplified}
+    except Exception as e:
+        logger.exception("get_tail_buy_history error")
+        return {"error": str(e)}
+
+
+# ---------------------------------------------------------------------------
+# Tool 14: 回测
+# ---------------------------------------------------------------------------
+
+def run_backtest(
+    start: str = "",
+    end: str = "",
+    hold_days: int = 10,
+    top_n: int = 3,
+    board: str = "main_chinext",
+    stop_loss_pct: float = -7.0,
+    take_profit_pct: float = 18.0,
+    tool_context: ToolContext = None,
+) -> dict:
+    """回测威科夫五层漏斗策略的历史表现。耗时较长（3-10分钟），会在后台执行。
+
+    基于历史数据模拟漏斗筛选 + 信号触发 → 买入 → 止盈止损退出的完整流程，
+    输出胜率、Sharpe 比率、最大回撤等核心指标。
+
+    Args:
+        start: 开始日期（YYYY-MM-DD），默认 6 个月前
+        end: 结束日期（YYYY-MM-DD），默认昨天
+        hold_days: 最大持仓天数（5/10/15/30），默认 10
+        top_n: 每日最大候选数（0=不限），默认 3
+        board: 股票池 'main_chinext'/'main'/'chinext'/'all'
+        stop_loss_pct: 止损百分比（负数），默认 -7.0
+        take_profit_pct: 止盈百分比，默认 18.0
+
+    Returns:
+        回测结果摘要：胜率、Sharpe、最大回撤、交易笔数等。
+    """
+    try:
+        from datetime import date, timedelta
+        from core.backtester import run_backtest as _run_backtest
+
+        _ensure_tushare_token(tool_context)
+
+        if start:
+            start_dt = date.fromisoformat(str(start).strip()[:10])
+        else:
+            start_dt = date.today() - timedelta(days=180)
+        if end:
+            end_dt = date.fromisoformat(str(end).strip()[:10])
+        else:
+            end_dt = date.today() - timedelta(days=1)
+
+        hold_days = max(1, min(int(hold_days), 60))
+        top_n = max(0, min(int(top_n), 20))
+        stop_loss_pct = min(0.0, float(stop_loss_pct))
+        take_profit_pct = max(0.0, float(take_profit_pct))
+
+        _trades_df, summary = _run_backtest(
+            start_dt=start_dt,
+            end_dt=end_dt,
+            hold_days=hold_days,
+            top_n=top_n,
+            board=str(board or "main_chinext").strip(),
+            sample_size=0,
+            trading_days=320,
+            max_workers=8,
+            exit_mode="sltp",
+            stop_loss_pct=stop_loss_pct,
+            take_profit_pct=take_profit_pct,
+        )
+
+        return {
+            "period": f"{start_dt} ~ {end_dt}",
+            "hold_days": hold_days,
+            "top_n": top_n,
+            "board": board,
+            "stop_loss_pct": stop_loss_pct,
+            "take_profit_pct": take_profit_pct,
+            "trades": summary.get("trades", 0),
+            "win_rate_pct": summary.get("win_rate_pct"),
+            "avg_ret_pct": summary.get("avg_ret_pct"),
+            "median_ret_pct": summary.get("median_ret_pct"),
+            "sharpe_ratio": summary.get("sharpe_ratio"),
+            "max_drawdown_pct": summary.get("max_drawdown_pct"),
+            "portfolio_total_ret_pct": summary.get("portfolio_total_ret_pct"),
+            "portfolio_ann_ret_pct": summary.get("portfolio_ann_ret_pct"),
+            "max_consecutive_losses": summary.get("max_consecutive_losses"),
+        }
+    except Exception as e:
+        logger.exception("run_backtest error")
+        return {"error": str(e)}
+
+
+# ---------------------------------------------------------------------------
+# Tool 15-18: Agent 标准工具（仅 CLI，Web 端不暴露）
 # ---------------------------------------------------------------------------
 
 
@@ -1311,4 +1446,6 @@ WYCKOFF_TOOLS = [
     get_recommendation_tracking,
     get_signal_pending,
     update_portfolio,
+    get_tail_buy_history,
+    run_backtest,
 ]

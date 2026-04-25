@@ -368,3 +368,48 @@ def test_build_tail_buy_markdown_truncates_error_items_over_limit():
     )
     assert md.count("ERR-") == 5
     assert "其余 2 只报错标的已省略" in md
+
+
+def test_tail_buy_history_save_and_load(tmp_path, monkeypatch):
+    monkeypatch.setattr("core.constants.LOCAL_DB_PATH", tmp_path / "test.db")
+    from integrations import local_db
+    local_db._conn = None  # reset singleton
+    local_db.init_db()
+
+    from integrations.local_db import save_tail_buy_results, load_tail_buy_history
+
+    rows = [
+        {
+            "code": "301090", "name": "华润材料",
+            "run_date": "2026-04-25", "signal_date": "2026-04-24",
+            "signal_type": "spring", "status": "confirmed",
+            "final_decision": "BUY", "rule_score": 78.5,
+            "priority_score": 90.5, "rule_reasons": '["尾盘走强"]',
+            "llm_decision": "BUY", "llm_reason": "强势回踩",
+        },
+        {
+            "code": "002217", "name": "合力泰",
+            "run_date": "2026-04-25", "signal_date": "2026-04-24",
+            "signal_type": "sos", "status": "pending",
+            "final_decision": "WATCH", "rule_score": 55.0,
+            "priority_score": 58.0, "rule_reasons": '["量能一般"]',
+            "llm_decision": "WATCH", "llm_reason": "",
+        },
+    ]
+    saved = save_tail_buy_results(rows)
+    assert saved == 2
+
+    all_records = load_tail_buy_history()
+    assert len(all_records) == 2
+
+    buy_only = load_tail_buy_history(decision="BUY")
+    assert len(buy_only) == 1
+    assert buy_only[0]["code"] == "301090"
+
+    by_date = load_tail_buy_history(run_date="2026-04-25")
+    assert len(by_date) == 2
+
+    empty = load_tail_buy_history(run_date="2020-01-01")
+    assert len(empty) == 0
+
+    local_db._conn = None  # cleanup

@@ -18,7 +18,7 @@
 
 用自然语言和一位威科夫大师对话。他能调动 17 个工具，自主串联多步推理，给出"打还是不打"的结论。
 
-Web + CLI 双通道，Gemini / Claude / OpenAI 多模型切换，GitHub Actions 定时全自动。
+Web + CLI + MCP 三通道，Gemini / Claude / OpenAI 多模型切换，GitHub Actions 定时全自动。
 
 项目主页：**[youngcan-wang.github.io/wyckoff-homepage](https://youngcan-wang.github.io/wyckoff-homepage/)**
 
@@ -39,6 +39,7 @@ Web + CLI 双通道，Gemini / Claude / OpenAI 多模型切换，GitHub Actions 
 | 本地可视化面板 | `wyckoff dashboard` — 推荐、信号、持仓、Agent 记忆、对话日志，暗色/亮色主题，中英双语 |
 | Agent 记忆 | 跨会话记忆：自动提取对话结论，下次提问时注入相关上下文 |
 | 通用 Agent 能力 | 执行命令、读写文件、抓取网页 — 发一个 CSV 路径即可分析，不只是股票工具 |
+| MCP Server | 14 个工具通过 MCP 协议对外暴露，Claude Code / Cursor / 任何 MCP Client 即插即用 |
 | 多通道推送 | 飞书 / 企微 / 钉钉 / Telegram |
 
 ## 数据源
@@ -202,6 +203,36 @@ Agent 的武器库 — 13 个量价工具 + 4 个通用能力：
 > Tushare 注册推荐：[此链接注册](https://tushare.pro/weborder/#/login?reg=955650)，双方可提升数据权益。
 
 完整配置项和 GitHub Actions Secrets 说明见 [架构文档](docs/ARCHITECTURE.md)。
+
+## MCP Server
+
+将 Wyckoff 分析能力通过 [MCP 协议](https://modelcontextprotocol.io/) 对外暴露，让 Claude Code / Cursor / 任何 MCP Client 直接调用诊股、筛选、回测等 14 个工具。
+
+```bash
+# 安装 MCP 依赖
+uv pip install youngcan-wyckoff-analysis[mcp]
+
+# 注册到 Claude Code
+claude mcp add wyckoff -- wyckoff-mcp
+```
+
+或在 MCP Client 配置文件中手动添加：
+
+```json
+{
+  "mcpServers": {
+    "wyckoff": {
+      "command": "wyckoff-mcp",
+      "env": {
+        "TUSHARE_TOKEN": "your_token",
+        "TICKFLOW_API_KEY": "your_key"
+      }
+    }
+  }
+}
+```
+
+注册后在 Claude Code / Cursor 中直接问"帮我诊断 000001"即可调用 Wyckoff 工具。
 
 ## Wyckoff Skills
 

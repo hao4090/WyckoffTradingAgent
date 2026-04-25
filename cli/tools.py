@@ -182,6 +182,34 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "properties": {},
         },
     },
+    {
+        "name": "get_tail_buy_history",
+        "description": "查询尾盘买入策略的历史结果。尾盘策略每个交易日 14:00 执行，用户问'昨天尾盘推了什么''最近尾盘买入'时调用。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "run_date": {"type": "string", "description": "指定日期（YYYY-MM-DD），空则返回最近记录"},
+                "decision": {"type": "string", "description": "筛选决策：'BUY'/'WATCH'/空（全部）"},
+                "limit": {"type": "integer", "description": "返回记录数，默认 20"},
+            },
+        },
+    },
+    {
+        "name": "run_backtest",
+        "description": "回测威科夫五层漏斗策略的历史表现。耗时 3-10 分钟，后台执行。用户问'帮我回测''跑个回测'时调用。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "start": {"type": "string", "description": "开始日期 YYYY-MM-DD，默认 6 个月前"},
+                "end": {"type": "string", "description": "结束日期 YYYY-MM-DD，默认昨天"},
+                "hold_days": {"type": "integer", "description": "最大持仓天数（5/10/15/30），默认 10"},
+                "top_n": {"type": "integer", "description": "每日最大候选数，默认 3"},
+                "board": {"type": "string", "description": "股票池：'main_chinext'/'main'/'chinext'/'all'"},
+                "stop_loss_pct": {"type": "number", "description": "止损百分比（负数），默认 -7.0"},
+                "take_profit_pct": {"type": "number", "description": "止盈百分比，默认 18.0"},
+            },
+        },
+    },
     # ── Agent 标准工具 ──
     {
         "name": "exec_command",
@@ -234,7 +262,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
 ]
 
 # 后台执行的长任务工具
-BACKGROUND_TOOLS = {"screen_stocks", "generate_ai_report", "generate_strategy_decision"}
+BACKGROUND_TOOLS = {"screen_stocks", "generate_ai_report", "generate_strategy_decision", "run_backtest"}
 
 # 工具中文显示名，用于终端展示
 TOOL_DISPLAY_NAMES: dict[str, str] = {
@@ -250,6 +278,8 @@ TOOL_DISPLAY_NAMES: dict[str, str] = {
     "get_signal_pending": "信号确认池",
     "get_portfolio": "查看持仓",
     "update_portfolio": "调仓操作",
+    "get_tail_buy_history": "尾盘记录",
+    "run_backtest": "回测",
     "check_background_tasks": "任务状态",
     "exec_command": "执行命令",
     "read_file": "读取文件",
@@ -300,6 +330,8 @@ class ToolRegistry:
             get_recommendation_tracking,
             get_signal_pending,
             update_portfolio,
+            get_tail_buy_history,
+            run_backtest,
             exec_command,
             read_file,
             write_file,
@@ -318,6 +350,8 @@ class ToolRegistry:
             "get_recommendation_tracking": get_recommendation_tracking,
             "get_signal_pending": get_signal_pending,
             "update_portfolio": update_portfolio,
+            "get_tail_buy_history": get_tail_buy_history,
+            "run_backtest": run_backtest,
             "exec_command": exec_command,
             "read_file": read_file,
             "write_file": write_file,

@@ -15,9 +15,9 @@
 
 ---
 
-Talk to a Wyckoff master in natural language. He commands 10 quantitative tools, chains multi-step reasoning, and tells you whether to strike.
+Talk to a Wyckoff master in natural language. He commands 17 quantitative tools, chains multi-step reasoning, and tells you whether to strike.
 
-Web + CLI dual channel, Gemini / Claude / OpenAI pick one, GitHub Actions for fully automated daily runs.
+Web + CLI + MCP triple channel, Gemini / Claude / OpenAI pick one, GitHub Actions for fully automated daily runs.
 
 ## Features
 
@@ -32,6 +32,7 @@ Web + CLI dual channel, Gemini / Claude / OpenAI pick one, GitHub Actions for fu
 | Recommendation Tracking | Historical picks auto-sync closing prices and compute cumulative returns |
 | Daily-Bar Backtest | Replays post-funnel N-day returns; reports win rate / Sharpe / max drawdown |
 | Pre-Market Risk | A50 futures + VIX monitoring with four alert levels |
+| MCP Server | 14 tools exposed via MCP protocol — plug into Claude Code / Cursor / any MCP client |
 | Multi-Channel Notifications | Feishu / WeCom / DingTalk / Telegram |
 
 ## Quick Start
@@ -153,6 +154,36 @@ Copy `.env.example` to `.env`. Minimum required:
 Optional: `TICKFLOW_API_KEY` (TickFlow real-time/intraday), `TUSHARE_TOKEN` (premium data), `FEISHU_WEBHOOK_URL` (Feishu push), `TG_BOT_TOKEN` + `TG_CHAT_ID` (Telegram push).
 
 See the [Architecture doc](ARCHITECTURE.md) for the full config reference and GitHub Actions Secrets setup.
+
+## MCP Server
+
+Expose Wyckoff analysis capabilities via the [MCP protocol](https://modelcontextprotocol.io/), enabling Claude Code / Cursor / any MCP client to call 14 tools directly.
+
+```bash
+# Install MCP dependency
+uv pip install youngcan-wyckoff-analysis[mcp]
+
+# Register with Claude Code
+claude mcp add wyckoff -- wyckoff-mcp
+```
+
+Or add manually in your MCP client config:
+
+```json
+{
+  "mcpServers": {
+    "wyckoff": {
+      "command": "wyckoff-mcp",
+      "env": {
+        "TUSHARE_TOKEN": "your_token",
+        "TICKFLOW_API_KEY": "your_key"
+      }
+    }
+  }
+}
+```
+
+Once registered, just ask "diagnose 000001" in Claude Code / Cursor to invoke Wyckoff tools.
 
 ## Wyckoff Skills
 
