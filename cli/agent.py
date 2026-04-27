@@ -152,6 +152,8 @@ def run(
             assistant_msg: dict[str, Any] = {"role": "assistant", "tool_calls": tool_calls}
             if text_buf:
                 assistant_msg["content"] = text_buf
+            if thinking_buf:
+                assistant_msg["reasoning_content"] = thinking_buf
             messages.append(assistant_msg)
 
             for call in tool_calls:

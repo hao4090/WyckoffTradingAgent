@@ -178,6 +178,8 @@ class OpenAIProvider(LLMProvider):
                 oai_msg: dict[str, Any] = {"role": "assistant"}
                 if msg.get("content"):
                     oai_msg["content"] = msg["content"]
+                if msg.get("reasoning_content"):
+                    oai_msg["reasoning_content"] = msg["reasoning_content"]
                 if msg.get("tool_calls"):
                     oai_msg["tool_calls"] = [
                         {
