@@ -1,9 +1,14 @@
 # -*- coding: utf-8 -*-
-"""Shared guardrails for incomplete agent turns."""
+"""Shared guardrails and constants for the agent loop."""
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Iterable
+
+MAX_TOOL_ROUNDS = 15
+MAX_INCOMPLETE_TOOL_RETRIES = 2
+DOOM_LOOP_WINDOW = 6
+DOOM_LOOP_THRESHOLD = 3
 
 
 @dataclass(frozen=True)
@@ -179,3 +184,27 @@ def _looks_like_plan_only(text: str) -> bool:
     )
     numbered = any(token in normalized for token in ("1.", "1、", "2.", "2、", "3.", "3、"))
     return numbered and any(marker in normalized for marker in markers)
+
+
+# ---------------------------------------------------------------------------
+# Doom-loop detection
+# ---------------------------------------------------------------------------
+
+def check_doom_loop(
+    recent_calls: list[tuple[str, int]],
+    name: str,
+    args: dict[str, Any],
+) -> bool:
+    """Track a tool call and return True if a doom-loop is detected.
+
+    Mutates *recent_calls* in place: appends the new entry and trims to
+    ``DOOM_LOOP_WINDOW``.  Returns ``True`` when the same (name, args_hash)
+    appears >= ``DOOM_LOOP_THRESHOLD`` times in the window.
+    """
+    import json as _json
+
+    args_hash = hash(_json.dumps(args, sort_keys=True, ensure_ascii=False))
+    recent_calls.append((name, args_hash))
+    if len(recent_calls) > DOOM_LOOP_WINDOW:
+        recent_calls.pop(0)
+    return recent_calls.count((name, args_hash)) >= DOOM_LOOP_THRESHOLD

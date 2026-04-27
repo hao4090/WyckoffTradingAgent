@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from cli.loop_guard import resolve_turn_expectation
+from cli.loop_guard import check_doom_loop, resolve_turn_expectation
 from tests.helpers.agent_loop_harness import AgentLoopHarness
 
 
@@ -154,3 +154,75 @@ def test_agent_loop_warns_after_retry_budget_is_exhausted():
     assert "连续 2 次没有调用必需工具" in outcome["result"]["text"]
     assert outcome["tool_calls"] == []
     assert len(outcome["provider_calls"]) == 3
+
+
+# ---------------------------------------------------------------------------
+# Doom-loop detection
+# ---------------------------------------------------------------------------
+
+class TestCheckDoomLoop:
+    def test_no_trigger_below_threshold(self):
+        recent: list[tuple[str, int]] = []
+        assert not check_doom_loop(recent, "get_stock_price", {"code": "000001"})
+        assert not check_doom_loop(recent, "get_stock_price", {"code": "000001"})
+        assert len(recent) == 2
+
+    def test_triggers_at_threshold(self):
+        recent: list[tuple[str, int]] = []
+        check_doom_loop(recent, "get_stock_price", {"code": "000001"})
+        check_doom_loop(recent, "get_stock_price", {"code": "000001"})
+        assert check_doom_loop(recent, "get_stock_price", {"code": "000001"})
+
+    def test_different_args_no_trigger(self):
+        recent: list[tuple[str, int]] = []
+        check_doom_loop(recent, "get_stock_price", {"code": "000001"})
+        check_doom_loop(recent, "get_stock_price", {"code": "000002"})
+        assert not check_doom_loop(recent, "get_stock_price", {"code": "000001"})
+
+    def test_window_eviction(self):
+        recent: list[tuple[str, int]] = []
+        check_doom_loop(recent, "get_stock_price", {"code": "000001"})
+        check_doom_loop(recent, "get_stock_price", {"code": "000001"})
+        for i in range(5):
+            check_doom_loop(recent, "screen_stocks", {"idx": i})
+        assert not check_doom_loop(recent, "get_stock_price", {"code": "000001"})
+
+    def test_agent_loop_breaks_on_doom_loop(self):
+        harness = AgentLoopHarness(
+            rounds=[
+                [
+                    {
+                        "type": "tool_calls",
+                        "tool_calls": [{"id": "tc1", "name": "get_stock_price", "args": {"code": "000001"}}],
+                        "text": "",
+                    },
+                    {"type": "usage", "input_tokens": 10, "output_tokens": 3},
+                ],
+                [
+                    {
+                        "type": "tool_calls",
+                        "tool_calls": [{"id": "tc2", "name": "get_stock_price", "args": {"code": "000001"}}],
+                        "text": "",
+                    },
+                    {"type": "usage", "input_tokens": 10, "output_tokens": 3},
+                ],
+                [
+                    {
+                        "type": "tool_calls",
+                        "tool_calls": [{"id": "tc3", "name": "get_stock_price", "args": {"code": "000001"}}],
+                        "text": "",
+                    },
+                    {"type": "usage", "input_tokens": 10, "output_tokens": 3},
+                ],
+                [
+                    {"type": "text_delta", "text": "已中止。"},
+                    {"type": "usage", "input_tokens": 10, "output_tokens": 2},
+                ],
+            ],
+            tool_results={"get_stock_price": {"price": 10.5}},
+        )
+
+        outcome = harness.run_turn([{"role": "user", "content": "查一下 000001 价格"}])
+
+        doom_msgs = [m for m in outcome["messages"] if m.get("role") == "tool" and "doom-loop" in m.get("content", "")]
+        assert len(doom_msgs) == 1
