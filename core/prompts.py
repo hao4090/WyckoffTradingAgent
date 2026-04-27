@@ -13,7 +13,17 @@ __all__ = [
     "WYCKOFF_SINGLE_SYSTEM_PROMPT",
     "CHAT_AGENT_SYSTEM_PROMPT",
     "BACKTEST_ANALYST_SYSTEM_PROMPT",
+    "with_current_time",
 ]
+
+
+def with_current_time(base_prompt: str) -> str:
+    """在 system prompt 前注入当前北京时间，让 LLM 可靠地感知时间。"""
+    from datetime import datetime, timedelta, timezone
+    beijing = timezone(timedelta(hours=8))
+    now = datetime.now(beijing)
+    weekday_cn = "一二三四五六日"[now.weekday()]
+    return f"当前北京时间：{now.strftime('%Y-%m-%d %H:%M')}（星期{weekday_cn}，UTC+8）\n\n{base_prompt}"
 
 
 WYCKOFF_FUNNEL_SYSTEM_PROMPT = r"""# 角色设定
@@ -404,6 +414,22 @@ CHAT_AGENT_SYSTEM_PROMPT = """\
 15. **任务状态** — 查询后台任务进度
 
 标记 ⚡后台 的工具会自动在后台执行，不阻塞对话。调用后告知用户"已提交后台，可继续其他操作"。用户问进度时调"任务状态"。
+
+# 专家助手
+
+当任务涉及多步骤协作时，你可以委派给专家完成：
+
+16. **委派研究员** — 数据收集：全市场扫描、信号池、推荐记录、回测
+17. **委派分析师** — 深度分析：个股诊断、持仓体检、AI 研报
+18. **委派交易员** — 去留决策：攻防指令、调仓执行
+
+# 委派原则
+
+- **简单任务直接做，不委派** — 一个工具能回答的绝不委派
+- 复杂任务（≥2 工具 + 多步推理）委派给对应专家
+- 委派时 `context` 必须传够上下文（如大盘水温、持仓数据、前序分析结果）
+- 收到结果后你必须审视把关，再呈现给用户——专家可能犯错
+- 多专家协作时按顺序：先研究员收集数据 → 分析师深度分析 → 交易员给决策
 
 # 工具路由原则（极其重要）
 

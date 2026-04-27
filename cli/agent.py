@@ -1,11 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-Agent 核心循环 — 流式输出版本。
+Headless agent loop — 无 UI 依赖的 agent 循环。
 
-原理：
-    while True:
-        stream = llm.chat_stream(messages, tools)
-        逐 chunk 渲染文本 → 遇到 tool_calls → 执行 → 继续循环
+TUI 使用内联版本（与 Textual 渲染深度耦合），此模块为测试和非交互场景
+提供可独立运行的 agent loop，支持 Rich Live 流式渲染。
 """
 from __future__ import annotations
 
@@ -20,8 +18,11 @@ from rich.spinner import Spinner
 from rich.text import Text
 
 from cli.loop_guard import (
+    MAX_INCOMPLETE_TOOL_RETRIES,
+    MAX_TOOL_ROUNDS,
     build_retry_exhausted_warning,
     build_retry_user_message,
+    check_doom_loop,
     missing_required_tool,
     resolve_turn_expectation,
 )
@@ -31,9 +32,6 @@ from cli.tools import ToolRegistry
 logger = logging.getLogger(__name__)
 
 _THINKING_TEXT = Text.from_markup("  [dim]思考中…[/dim]")
-
-MAX_TOOL_ROUNDS = 15
-MAX_INCOMPLETE_TOOL_RETRIES = 2
 
 
 def run(
@@ -58,6 +56,7 @@ def run(
     expectation = resolve_turn_expectation(messages)
     incomplete_tool_retries = 0
     used_tools_this_turn: list[str] = []
+    _recent_calls: list[tuple[str, int]] = []
 
     for round_idx in range(MAX_TOOL_ROUNDS):
         text_buf = ""
@@ -160,6 +159,15 @@ def run(
                 args = call["args"]
                 call_id = call["id"]
                 used_tools_this_turn.append(name)
+
+                if check_doom_loop(_recent_calls, name, args):
+                    logger.warning("doom-loop detected: %s", name)
+                    messages.append({
+                        "role": "tool", "tool_call_id": call_id, "name": name,
+                        "content": json.dumps({"error": "doom-loop: 同参数重复调用3次，已中止"}, ensure_ascii=False),
+                    })
+                    tool_calls = None
+                    break
 
                 if on_tool_call:
                     on_tool_call(name, args)

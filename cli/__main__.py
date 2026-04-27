@@ -509,8 +509,9 @@ def _cmd_tui(_args=None):
 
     # 初始化本地 SQLite + 后台同步
     try:
-        from integrations.local_db import init_db
+        from integrations.local_db import init_db, prune_memories
         init_db()
+        prune_memories()
         from integrations.sync import sync_all_background
         sync_all_background()
     except Exception:
@@ -563,6 +564,9 @@ def _cmd_tui(_args=None):
                 state["provider"] = FallbackProvider(configs, default_id)
     except Exception:
         pass
+
+    if state["provider"]:
+        tools.set_provider(state["provider"])
 
     from cli.tui import WyckoffTUI
     app = WyckoffTUI(

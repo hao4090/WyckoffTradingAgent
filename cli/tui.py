@@ -27,6 +27,7 @@ from cli.loop_guard import (
     missing_required_tool,
     resolve_turn_expectation,
 )
+from core.prompts import with_current_time
 
 
 # ---------------------------------------------------------------------------
@@ -55,7 +56,7 @@ _COMPACTION_PROMPT = """请将以下对话历史总结为简洁的上下文摘�
 
 用中文输出，控制在 500 字以内。只输出摘要，不要其他内容。"""
 
-_MAX_INCOMPLETE_TOOL_RETRIES = 2
+from cli.loop_guard import MAX_INCOMPLETE_TOOL_RETRIES as _MAX_INCOMPLETE_TOOL_RETRIES
 
 
 def _pop_lines(log_widget, n: int) -> None:
@@ -270,6 +271,25 @@ class WyckoffTUI(App):
 
     # ----- 快捷键动作 -----
 
+    def _save_and_exit(self) -> None:
+        if self._messages and self._provider:
+            try:
+                from cli.memory import save_session_summary
+                import threading
+                t = threading.Thread(
+                    target=save_session_summary,
+                    args=(list(self._messages), self._provider),
+                    daemon=True,
+                )
+                t.start()
+                t.join(timeout=5)
+            except Exception:
+                pass
+        self.exit()
+
+    def action_quit(self) -> None:
+        self._save_and_exit()
+
     def action_smart_copy(self) -> None:
         """Ctrl+C: 有选中文本 → 复制；无选中 → 退出。"""
         text = self.screen.get_selected_text()
@@ -278,7 +298,7 @@ class WyckoffTUI(App):
             self.screen.clear_selection()
             self.notify("已复制", timeout=1)
         else:
-            self.exit()
+            self._save_and_exit()
 
     def action_switch_model(self) -> None:
         self._switch_model_selector()
@@ -397,7 +417,7 @@ class WyckoffTUI(App):
         log = self.query_one("#chat-log", ChatLog)
 
         if cmd in ("/quit", "/exit", "/q"):
-            self.exit()
+            self._save_and_exit()
         elif cmd == "/clear":
             self.action_clear_chat()
         elif cmd == "/new":
@@ -581,6 +601,8 @@ class WyckoffTUI(App):
             from cli.providers.fallback import FallbackProvider
             self._provider = FallbackProvider(configs, default_id)
         self._state.update(default_cfg)
+        if self._tools and self._provider:
+            self._tools.set_provider(self._provider)
         self._update_status()
 
     def _show_selector(self, options: list[tuple[str, str]], callback_id: str) -> None:
@@ -844,7 +866,7 @@ class WyckoffTUI(App):
         _chatlog_save = self._chatlog_save  # bound method ref
 
         try:
-            from cli.agent import MAX_TOOL_ROUNDS
+            from cli.loop_guard import MAX_TOOL_ROUNDS, check_doom_loop
 
             _COMPACT_THRESHOLD = 12000  # ~12K tokens 触发压缩
             _TAIL_KEEP = 4  # 保留最近 4 条消息原文
@@ -907,7 +929,7 @@ class WyckoffTUI(App):
                 for _retry in range(_MAX_STREAM_RETRIES):
                     try:
                         _stream = self._provider.chat_stream(
-                            self._messages, self._tools.schemas(), self._system_prompt
+                            self._messages, self._tools.schemas(), with_current_time(self._system_prompt)
                         )
                         break
                     except Exception as _stream_err:
@@ -1002,11 +1024,7 @@ class WyckoffTUI(App):
                         used_tools_this_turn.append(name)
 
                         # ── Doom-loop 检测 ──
-                        args_hash = hash(json.dumps(args, sort_keys=True, ensure_ascii=False))
-                        _recent_calls.append((name, args_hash))
-                        if len(_recent_calls) > 6:
-                            _recent_calls.pop(0)
-                        if _recent_calls.count((name, args_hash)) >= 3:
+                        if check_doom_loop(_recent_calls, name, args):
                             _write(Text.from_markup(
                                 f"  [yellow]⚠ 检测到重复调用 {display}，已中止循环[/yellow]"
                             ))
@@ -1014,7 +1032,7 @@ class WyckoffTUI(App):
                                 "role": "tool", "tool_call_id": call_id, "name": name,
                                 "content": json.dumps({"error": "doom-loop: 同参数重复调用3次，已中止"}, ensure_ascii=False),
                             })
-                            tool_calls = None  # 跳出 tool loop, 不 continue 到下一轮
+                            tool_calls = None
                             break
 
                         _spinner_start(display)

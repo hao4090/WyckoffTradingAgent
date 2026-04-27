@@ -23,10 +23,12 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 class ToolContext:
-    """最小化 ToolContext shim，只提供 .state 属性。"""
+    """最小化 ToolContext shim，提供 .state / .provider / .registry。"""
 
     def __init__(self, state: dict[str, Any] | None = None):
         self.state = state or {}
+        self.provider = None
+        self.registry = None
 
 
 # ---------------------------------------------------------------------------
@@ -222,6 +224,43 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "required": ["table", "codes"],
         },
     },
+    # ── 委派工具 ──
+    {
+        "name": "delegate_to_research",
+        "description": "委派研究员收集市场数据和情报。用于全市场扫描、信号查询、推荐记录、回测等数据收集任务。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "task": {"type": "string", "description": "研究任务描述"},
+                "context": {"type": "string", "description": "相关上下文信息（如持仓数据、大盘状态）"},
+            },
+            "required": ["task"],
+        },
+    },
+    {
+        "name": "delegate_to_analysis",
+        "description": "委派分析师做深度分析。用于个股诊断、持仓体检、AI 研报等需要 Wyckoff 框架深度分析的任务。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "task": {"type": "string", "description": "分析任务描述"},
+                "context": {"type": "string", "description": "相关上下文信息（如行情数据、大盘状态）"},
+            },
+            "required": ["task"],
+        },
+    },
+    {
+        "name": "delegate_to_trading",
+        "description": "委派交易员做去留决策。用于持仓去留判断、攻防指令、调仓执行等交易决策任务。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "task": {"type": "string", "description": "交易决策任务描述"},
+                "context": {"type": "string", "description": "相关上下文信息（如持仓列表、诊断结果）"},
+            },
+            "required": ["task"],
+        },
+    },
     # ── Agent 标准工具 ──
     {
         "name": "exec_command",
@@ -298,6 +337,9 @@ TOOL_DISPLAY_NAMES: dict[str, str] = {
     "read_file": "读取文件",
     "write_file": "写入文件",
     "web_fetch": "抓取网页",
+    "delegate_to_research": "委派研究员",
+    "delegate_to_analysis": "委派分析师",
+    "delegate_to_trading": "委派交易员",
 }
 
 
@@ -314,9 +356,14 @@ class ToolRegistry:
             "access_token": access_token,
             "refresh_token": refresh_token,
         })
+        self._tool_context.registry = self
         self._tools = self._register_tools()
         self._bg_manager = None
         self._on_bg_complete = None
+
+    def set_provider(self, provider):
+        """注入 LLM Provider，供委派工具启动 sub-agent。"""
+        self._tool_context.provider = provider
 
     def set_background_manager(self, bg_manager, on_complete=None):
         from cli.background import BackgroundTaskManager
@@ -351,6 +398,11 @@ class ToolRegistry:
             write_file,
             web_fetch,
         )
+        from cli.sub_agents import (
+            delegate_to_research,
+            delegate_to_analysis,
+            delegate_to_trading,
+        )
         return {
             "search_stock_by_name": search_stock_by_name,
             "diagnose_stock": diagnose_stock,
@@ -367,6 +419,9 @@ class ToolRegistry:
             "get_tail_buy_history": get_tail_buy_history,
             "delete_tracking_records": delete_tracking_records,
             "run_backtest": run_backtest,
+            "delegate_to_research": delegate_to_research,
+            "delegate_to_analysis": delegate_to_analysis,
+            "delegate_to_trading": delegate_to_trading,
             "exec_command": exec_command,
             "read_file": read_file,
             "write_file": write_file,
