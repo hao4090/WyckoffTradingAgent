@@ -17,6 +17,7 @@ from rich.markdown import Markdown
 from rich.spinner import Spinner
 from rich.text import Text
 
+from cli.compaction import compact_messages
 from cli.loop_guard import (
     MAX_INCOMPLETE_TOOL_RETRIES,
     MAX_TOOL_ROUNDS,
@@ -58,7 +59,11 @@ def run(
     used_tools_this_turn: list[str] = []
     _recent_calls: list[tuple[str, int]] = []
 
+    _model_name = getattr(provider, "name", "")
+
     for round_idx in range(MAX_TOOL_ROUNDS):
+        messages, _ = compact_messages(messages, provider, _model_name)
+
         text_buf = ""
         thinking_buf = ""
         tool_calls = None

@@ -36,28 +36,7 @@ from core.prompts import with_current_time
 # Widget
 # ---------------------------------------------------------------------------
 
-def _estimate_tokens(messages: list[dict]) -> int:
-    """粗略估算消息列表的 token 数（中文~2字/token，英文~4字符/token）。"""
-    total = 0
-    for m in messages:
-        content = m.get("content", "")
-        if isinstance(content, str):
-            total += max(len(content) // 2, len(content.encode("utf-8")) // 3)
-        # tool_calls 参数也占 token
-        for tc in m.get("tool_calls", []):
-            args_str = json.dumps(tc.get("args", {}), ensure_ascii=False)
-            total += len(args_str) // 3
-    return total
-
-
-_COMPACTION_PROMPT = """请将以下对话历史总结为简洁的上下文摘要，保留关键信息：
-1. 用户的目标和意图
-2. 已完成的操作和结果
-3. 重要的数据发现（股票代码、价格、信号等）
-4. 未完成的任务
-
-用中文输出，控制在 500 字以内。只输出摘要，不要其他内容。"""
-
+from cli.compaction import TAIL_KEEP as _TAIL_KEEP_DEFAULT, compact_messages, estimate_tokens
 from cli.loop_guard import MAX_INCOMPLETE_TOOL_RETRIES as _MAX_INCOMPLETE_TOOL_RETRIES
 
 
@@ -1016,35 +995,20 @@ class WyckoffTUI(App):
         try:
             from cli.loop_guard import MAX_TOOL_ROUNDS, check_doom_loop
 
-            _COMPACT_THRESHOLD = 12000  # ~12K tokens 触发压缩
-            _TAIL_KEEP = 4  # 保留最近 4 条消息原文
+            _model_name_for_compact = getattr(self._provider, "name", "") if self._provider else ""
 
             for round_idx in range(MAX_TOOL_ROUNDS):
                 # ── Context compaction ──
-                if len(self._messages) > _TAIL_KEEP + 2 and _estimate_tokens(self._messages) > _COMPACT_THRESHOLD:
-                    _spinner_start("压缩上下文")
-                    head = self._messages[:-_TAIL_KEEP]
-                    tail = self._messages[-_TAIL_KEEP:]
-                    head_text = "\n".join(
-                        f"[{m['role']}] {m.get('content', '') or json.dumps(m.get('tool_calls', []), ensure_ascii=False)[:200]}"
-                        for m in head
-                    )
-                    try:
-                        summary_chunks = list(self._provider.chat_stream(
-                            [{"role": "user", "content": head_text}],
-                            [],
-                            _COMPACTION_PROMPT,
-                        ))
-                        summary = "".join(c.get("text", "") for c in summary_chunks if c["type"] == "text_delta")
-                        if summary:
-                            self._messages = [{"role": "user", "content": f"[对话摘要]\n{summary}"},
-                                              {"role": "assistant", "content": "好的，我已了解之前的对话上下文，请继续。"}] + tail
-                            _write(Text.from_markup(
-                                f"  [dim]📦 上下文已压缩（{len(head)}条→摘要，保留最近{_TAIL_KEEP}条）[/dim]"
-                            ))
-                    except Exception:
-                        pass  # 压缩失败不影响主流程
-                    _spinner_stop()
+                _spinner_start("压缩上下文")
+                prev_len = len(self._messages)
+                self._messages, compacted = compact_messages(
+                    self._messages, self._provider, _model_name_for_compact,
+                )
+                _spinner_stop()
+                if compacted:
+                    _write(Text.from_markup(
+                        f"  [dim]📦 上下文已压缩（{prev_len - _TAIL_KEEP_DEFAULT}条→摘要，保留最近{_TAIL_KEEP_DEFAULT}条）[/dim]"
+                    ))
 
                 text_buf = ""
                 thinking_buf = ""
