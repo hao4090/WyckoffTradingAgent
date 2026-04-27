@@ -63,6 +63,30 @@ def _delete_memory(mem_id: int) -> bool:
         return False
 
 
+def _delete_recommendation(code: str) -> int:
+    try:
+        from integrations.local_db import delete_recommendations
+        return delete_recommendations([code])
+    except Exception:
+        return 0
+
+
+def _delete_signal(code: str) -> int:
+    try:
+        from integrations.local_db import delete_signals
+        return delete_signals([code])
+    except Exception:
+        return 0
+
+
+def _delete_chat_session(session_id: str) -> int:
+    try:
+        from integrations.local_db import delete_chat_session
+        return delete_chat_session(session_id)
+    except Exception:
+        return 0
+
+
 def _get_recommendations() -> list[dict]:
     try:
         from integrations.local_db import load_recommendations
@@ -184,7 +208,6 @@ class _Handler(BaseHTTPRequestHandler):
     def do_DELETE(self):
         parsed = urlparse(self.path)
         path = parsed.path.rstrip("/")
-        # DELETE /api/memory/123
         if path.startswith("/api/memory/"):
             try:
                 mem_id = int(path.split("/")[-1])
@@ -192,6 +215,18 @@ class _Handler(BaseHTTPRequestHandler):
                 self._json({"ok": ok})
             except ValueError:
                 self._json({"ok": False, "error": "invalid id"}, 400)
+        elif path.startswith("/api/recommendations/"):
+            code = path.split("/")[-1]
+            n = _delete_recommendation(code)
+            self._json({"ok": n > 0, "deleted": n})
+        elif path.startswith("/api/signals/"):
+            code = path.split("/")[-1]
+            n = _delete_signal(code)
+            self._json({"ok": n > 0, "deleted": n})
+        elif path.startswith("/api/chat-sessions/"):
+            sid = path.split("/")[-1]
+            n = _delete_chat_session(sid)
+            self._json({"ok": n > 0, "deleted": n})
         else:
             self._json({"error": "not found"}, 404)
 
@@ -368,6 +403,7 @@ zh:{
   view:'查看',back:'返回列表',session:'会话',no_messages:'暂无消息',
   agent_log_title:'Agent 日志（最近 200 行）',no_agent_log:'暂无日志 (~/.wyckoff/agent.log)',
   no_recs:'暂无推荐',no_signals:'暂无信号',
+  confirm_del_rec:'确认删除推荐记录：',confirm_del_sig:'确认删除信号记录：',confirm_del_session:'确认删除整个会话？会话 ID：',
 },
 en:{
   nav_overview:'Overview',nav_recommendations:'Recommendations',nav_signals:'Signals',nav_portfolio:'Portfolio',
@@ -391,6 +427,7 @@ en:{
   view:'VIEW',back:'Back to sessions',session:'Session',no_messages:'No messages',
   agent_log_title:'Agent Log (last 200 lines)',no_agent_log:'No agent log (~/.wyckoff/agent.log)',
   no_recs:'No recommendations',no_signals:'No signals',
+  confirm_del_rec:'Delete recommendation: ',confirm_del_sig:'Delete signal: ',confirm_del_session:'Delete entire session? ID: ',
 }};
 let _lang = localStorage.getItem('wk_lang') || 'zh';
 function t(k){return (I18N[_lang]||I18N.zh)[k]||k}
@@ -454,29 +491,31 @@ async function renderOverview(c){
       <div class="card"><div class="card-title">${t('card_memory')}</div><div class="card-value">${memCount}</div><div class="card-sub">${t('stored')}</div></div>
       <div class="card"><div class="card-title">${t('card_sync')}</div><div class="card-value">${syncOk}/${syncTotal}</div><div class="card-sub">${t('synced')}</div></div>
     </div>
-    <div style="margin-top:8px"><div class="card fade-in" style="animation-delay:.1s"><div class="card-title">${t('recent_recs')}</div>${renderRecTable(Array.isArray(recs)?recs.slice(0,8):[])}</div></div>`;
+    <div style="margin-top:8px"><div class="card fade-in" style="animation-delay:.1s"><div class="card-title">${t('recent_recs')}</div>${renderRecTable(Array.isArray(recs)?recs.slice(0,8):[],false)}</div></div>`;
 }
-function renderRecTable(recs){
+function renderRecTable(recs,showDel){
   if(!recs.length)return `<div class="empty">${t('no_data')}</div>`;
-  return `<table class="tbl"><thead><tr><th>${t('th_code')}</th><th>${t('th_name')}</th><th>${t('th_camp')}</th><th>${t('th_date')}</th><th>${t('th_init_price')}</th><th>${t('th_cur_price')}</th><th>${t('th_ai')}</th></tr></thead><tbody>${recs.map(r=>{
+  return `<table class="tbl"><thead><tr><th>${t('th_code')}</th><th>${t('th_name')}</th><th>${t('th_camp')}</th><th>${t('th_date')}</th><th>${t('th_init_price')}</th><th>${t('th_cur_price')}</th><th>${t('th_ai')}</th>${showDel?'<th></th>':''}</tr></thead><tbody>${recs.map(r=>{
     const code=String(r.code||'').padStart(6,'0');
     const ai=r.is_ai_recommended?'<span class="pill pill-green">AI</span>':'<span class="pill pill-dim">Manual</span>';
-    return `<tr><td>${code}</td><td>${r.name||''}</td><td>${r.camp||''}</td><td>${r.recommend_date||''}</td><td>${(r.initial_price||0).toFixed(2)}</td><td>${(r.current_price||0).toFixed(2)}</td><td>${ai}</td></tr>`}).join('')}</tbody></table>`}
+    return `<tr><td>${code}</td><td>${r.name||''}</td><td>${r.camp||''}</td><td>${r.recommend_date||''}</td><td>${(r.initial_price||0).toFixed(2)}</td><td>${(r.current_price||0).toFixed(2)}</td><td>${ai}</td>${showDel?`<td><button class="btn-del" onclick="delRec('${code}')">${t('del')}</button></td>`:''}</tr>`}).join('')}</tbody></table>`}
 
 // ═══ Recommendations ═══
 async function renderRecommendations(c){
   const recs=await API('/api/recommendations');
   if(!Array.isArray(recs)||!recs.length){c.innerHTML=`<div class="empty">${t('no_recs')}</div>`;return}
-  c.innerHTML=`<div class="tbl-wrap fade-in">${renderRecTable(recs)}</div>`}
+  c.innerHTML=`<div class="tbl-wrap fade-in">${renderRecTable(recs,true)}</div>`}
+window.delRec=async function(code){if(!confirm(t('confirm_del_rec')+code+'?'))return;await fetch('/api/recommendations/'+code,{method:'DELETE'});loadPage('recommendations')};
 
 // ═══ Signals ═══
 async function renderSignals(c){
   const sigs=await API('/api/signals');
   if(!Array.isArray(sigs)||!sigs.length){c.innerHTML=`<div class="empty">${t('no_signals')}</div>`;return}
   const statusPill=s=>{const m={pending:'pill-amber',confirmed:'pill-green',expired:'pill-red',rejected:'pill-red'};return `<span class="pill ${m[s]||'pill-dim'}">${s}</span>`};
-  c.innerHTML=`<div class="tbl-wrap fade-in"><table class="tbl"><thead><tr><th>${t('th_code')}</th><th>${t('th_name')}</th><th>${t('th_type')}</th><th>${t('th_status')}</th><th>${t('th_date')}</th><th>${t('th_score')}</th><th>${t('th_days')}</th><th>${t('th_regime')}</th><th>${t('th_industry')}</th></tr></thead><tbody>${sigs.map(s=>{
+  c.innerHTML=`<div class="tbl-wrap fade-in"><table class="tbl"><thead><tr><th>${t('th_code')}</th><th>${t('th_name')}</th><th>${t('th_type')}</th><th>${t('th_status')}</th><th>${t('th_date')}</th><th>${t('th_score')}</th><th>${t('th_days')}</th><th>${t('th_regime')}</th><th>${t('th_industry')}</th><th></th></tr></thead><tbody>${sigs.map(s=>{
     const code=String(s.code||'').padStart(6,'0');
-    return `<tr><td>${code}</td><td>${s.name||''}</td><td>${s.signal_type||''}</td><td>${statusPill(s.status||'')}</td><td>${s.signal_date||''}</td><td>${(s.signal_score||0).toFixed(2)}</td><td>${s.days_elapsed||0}</td><td>${s.regime||''}</td><td>${s.industry||''}</td></tr>`}).join('')}</tbody></table></div>`}
+    return `<tr><td>${code}</td><td>${s.name||''}</td><td>${s.signal_type||''}</td><td>${statusPill(s.status||'')}</td><td>${s.signal_date||''}</td><td>${(s.signal_score||0).toFixed(2)}</td><td>${s.days_elapsed||0}</td><td>${s.regime||''}</td><td>${s.industry||''}</td><td><button class="btn-del" onclick="delSig('${code}')">${t('del')}</button></td></tr>`}).join('')}</tbody></table></div>`}
+window.delSig=async function(code){if(!confirm(t('confirm_del_sig')+code+'?'))return;await fetch('/api/signals/'+code,{method:'DELETE'});loadPage('signals')};
 
 // ═══ Portfolio ═══
 async function renderPortfolio(c){
@@ -538,9 +577,10 @@ async function renderChatLog(c){
   if(!Array.isArray(sessions)||!sessions.length){c.innerHTML=`<div class="empty">${t('no_sessions')}</div>`;return}
   c.innerHTML=`<div class="tbl-wrap fade-in"><table class="tbl"><thead><tr><th>${t('th_session')}</th><th>${t('th_started')}</th><th>${t('th_ended')}</th><th>${t('th_messages')}</th><th>${t('th_tokens_in')}</th><th>${t('th_tokens_out')}</th><th>${t('th_error')}</th><th></th></tr></thead><tbody>${sessions.map(s=>{
     const hasErr=s.last_error?'<span class="pill pill-red">ERR</span>':'<span class="pill pill-green">OK</span>';
-    return `<tr><td style="color:var(--accent);cursor:pointer" onclick="viewSession('${s.session_id}')">${s.session_id}</td><td>${s.started_at||''}</td><td>${s.ended_at||''}</td><td>${s.msg_count||0}</td><td>${(s.total_tokens_in||0).toLocaleString()}</td><td>${(s.total_tokens_out||0).toLocaleString()}</td><td>${hasErr}</td><td><span style="cursor:pointer;color:var(--accent)" onclick="viewSession('${s.session_id}')">${t('view')}</span></td></tr>`}).join('')}</tbody></table></div>`}
+    return `<tr><td style="color:var(--accent);cursor:pointer" onclick="viewSession('${s.session_id}')">${s.session_id}</td><td>${s.started_at||''}</td><td>${s.ended_at||''}</td><td>${s.msg_count||0}</td><td>${(s.total_tokens_in||0).toLocaleString()}</td><td>${(s.total_tokens_out||0).toLocaleString()}</td><td>${hasErr}</td><td><span style="cursor:pointer;color:var(--accent);margin-right:8px" onclick="viewSession('${s.session_id}')">${t('view')}</span><button class="btn-del" onclick="delSession('${s.session_id}')">${t('del')}</button></td></tr>`}).join('')}</tbody></table></div>`}
 window.viewSession=function(sid){_chatSessionId=sid;loadPage('chatlog')};
 window.backToSessions=function(){_chatSessionId=null;loadPage('chatlog')};
+window.delSession=async function(sid){if(!confirm(t('confirm_del_session')+sid+'?'))return;await fetch('/api/chat-sessions/'+sid,{method:'DELETE'});_chatSessionId=null;loadPage('chatlog')};
 async function renderChatSession(c,sid){
   const logs=await API('/api/chat-log/'+sid);
   if(!Array.isArray(logs)||!logs.length){c.innerHTML=`<div class="empty">${t('no_messages')}</div>`;return}
