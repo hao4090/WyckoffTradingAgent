@@ -16,7 +16,7 @@
 
 ---
 
-用自然语言和一位威科夫大师对话。他能调动 17 个工具，自主串联多步推理，给出"打还是不打"的结论。
+用自然语言和一位威科夫大师对话。他能调动 20 个工具，自主串联多步推理，给出"打还是不打"的结论。
 
 Web + CLI + MCP 三通道，Gemini / Claude / OpenAI 多模型切换，GitHub Actions 定时全自动。
 
@@ -26,7 +26,9 @@ Web + CLI + MCP 三通道，Gemini / Claude / OpenAI 多模型切换，GitHub Ac
 
 | 能力 | 说明 |
 |------|------|
-| 对话式 Agent | 用自然语言触发诊断、筛选、研报，LLM 自主编排 17 个工具；还能读写文件、执行命令、抓取网页 |
+| 对话式 Agent | 用自然语言触发诊断、筛选、研报，LLM 自主编排 20 个工具；还能读写文件、执行命令、抓取网页 |
+| 上下文压缩 | 动态阈值（25% model context window）自动压缩，智能摘要保留工具关键数据，支持超长对话 |
+| 工具确认 | `exec_command`、`write_file`、`update_portfolio` 执行前弹窗确认，防止误操作 |
 | 五层漏斗筛选 | 全市场 ~4500 股 → ~30 候选，六通道 + 板块共振 + 微观狙击。基于历史量价结构发现潜力标的，不构成投资建议 |
 | AI 三阵营研报 | 逻辑破产 / 储备营地 / 起跳板，LLM 独立审判 |
 | 持仓诊断 | 批量体检：均线结构、吸筹阶段、触发信号、止损状态 |
@@ -39,7 +41,7 @@ Web + CLI + MCP 三通道，Gemini / Claude / OpenAI 多模型切换，GitHub Ac
 | 本地可视化面板 | `wyckoff dashboard` — 推荐、信号、持仓、Agent 记忆、对话日志，暗色/亮色主题，中英双语 |
 | Agent 记忆 | 跨会话记忆：自动提取对话结论，下次提问时注入相关上下文 |
 | 通用 Agent 能力 | 执行命令、读写文件、抓取网页 — 发一个 CSV 路径即可分析，不只是股票工具 |
-| MCP Server | 14 个工具通过 MCP 协议对外暴露，Claude Code / Cursor / 任何 MCP Client 即插即用 |
+| MCP Server | 15 个工具通过 MCP 协议对外暴露，Claude Code / Cursor / 任何 MCP Client 即插即用 |
 | 多通道推送 | 飞书 / 企微 / 钉钉 / Telegram |
 
 ## 数据源
@@ -141,9 +143,9 @@ streamlit run streamlit_app.py
 |:---:|:---:|
 | <img src="attach/web-chat.png" width="450" /> | <img src="attach/web-export.png" width="450" /> |
 
-## 17 个工具
+## 20 个工具
 
-Agent 的武器库 — 13 个量价工具 + 4 个通用能力：
+Agent 的武器库 — 15 个量价工具 + 5 个通用能力：
 
 | 工具 | 能力 |
 |------|------|
@@ -159,6 +161,9 @@ Agent 的武器库 — 13 个量价工具 + 4 个通用能力：
 | `generate_strategy_decision` | 持仓去留 + 新标买入决策（⚡后台） |
 | `get_recommendation_tracking` | 历史推荐及后续表现 |
 | `get_signal_pending` | 信号确认池查询 |
+| `get_tail_buy_history` | 尾盘策略历史结果 |
+| `run_backtest` | 漏斗策略历史回测（⚡后台） |
+| `delete_tracking_records` | 删除推荐/信号记录 |
 | `check_background_tasks` | 后台任务进度查询 |
 | `exec_command` | 执行本地 shell 命令 |
 | `read_file` | 读取本地文件（CSV/Excel 自动解析） |
@@ -214,7 +219,7 @@ Agent 的武器库 — 13 个量价工具 + 4 个通用能力：
 
 ## MCP Server
 
-将 Wyckoff 分析能力通过 [MCP 协议](https://modelcontextprotocol.io/) 对外暴露，让 Claude Code / Cursor / 任何 MCP Client 直接调用诊股、筛选、回测等 14 个工具。
+将 Wyckoff 分析能力通过 [MCP 协议](https://modelcontextprotocol.io/) 对外暴露，让 Claude Code / Cursor / 任何 MCP Client 直接调用诊股、筛选、回测等工具。
 
 ```bash
 # 安装 MCP 依赖

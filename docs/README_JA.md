@@ -15,24 +15,43 @@
 
 ---
 
-自然言語でワイコフの達人と対話しよう。彼は10個の定量ツールを操り、多段階推論を自律的に連鎖させ、「仕掛けるべきか否か」を教えてくれる。
+自然言語でワイコフの達人と対話しよう。彼は20個の定量ツールを操り、多段階推論を自律的に連鎖させ、「仕掛けるべきか否か」を教えてくれる。
 
-Web + CLI の二系統対応、Gemini / Claude / OpenAI から選択可能、GitHub Actions による完全自動化。
+Web + CLI + MCP の三系統対応、Gemini / Claude / OpenAI / DeepSeek から選択可能、GitHub Actions による完全自動化。
 
 ## 機能一覧
 
 | 機能 | 説明 |
 |------|------|
-| 対話型エージェント | 自然言語で診断・スクリーニング・レポートを起動、LLM がツール呼び出しを自律編成 |
+| 対話型エージェント | 自然言語で診断・スクリーニング・レポートを起動、LLM が20個のツール呼び出しを自律編成；ファイル読み書き・コマンド実行・Web取得も可能 |
 | 5層ファネルスクリーニング | 全市場 ~4,500 銘柄 → ~30 候補、6チャネル + セクター共鳴 + ミクロ狙撃 |
 | AI 3陣営レポート | ロジック破綻 / 備蓄キャンプ / 発射台 -- LLM が独立審判 |
 | ポートフォリオ診断 | 一括ヘルスチェック：移動平均構造、アキュムレーション段階、トリガーシグナル、ストップロス状態 |
 | プライベート判断 | 保有 + 候補を総合し EXIT/TRIM/HOLD/PROBE/ATTACK 指令を出力、Telegram プッシュ対応 |
+| 引け値買い戦略 | 13:50に実行、ルールスコアリング + LLM再評価の二段階で終盤エントリー対象を選別 |
 | シグナル確認プール | L4 トリガーシグナルを 1-3 日の価格確認後に操作可能 |
 | レコメンド追跡 | 過去の推奨銘柄の終値を自動同期、累積リターンを算出 |
 | 日足バックテスト | ファネルヒット後 N 日間のリターンをリプレイ、勝率 / シャープレシオ / 最大ドローダウンを出力 |
 | プレマーケットリスク管理 | A50 + VIX モニタリング、4段階アラートプッシュ |
+| ローカルダッシュボード | `wyckoff dashboard` — 推奨・シグナル・保有・Agent記憶・対話ログ、ダーク/ライトテーマ、日中バイリンガル |
+| Agent 記憶 | クロスセッション記憶：対話結論を自動抽出、次回クエリ時に関連コンテキストを注入；偏好記憶は永続 |
+| コンテキスト圧縮 | 動的閾値（モデルcontext windowの25%）で自動圧縮、ツール結果のスマート要約で重要データを保持 |
+| ツール確認 | `exec_command`、`write_file`、`update_portfolio` は実行前にユーザー承認が必要 |
+| MCP Server | MCP プロトコルで15個のツールを公開、Claude Code / Cursor / 任意のMCPクライアントに対応 |
 | マルチチャネル通知 | Feishu / WeCom / DingTalk / Telegram |
+
+## データソース
+
+個別銘柄の日足データは自動フォールバック：
+
+```
+tickflow → tushare → akshare → baostock → efinance
+```
+
+いずれかのソースが利用不可の場合、自動的に次へ切り替え。手動操作は不要。
+
+> **推奨：TickFlow接続でリアルタイム/分時データが強化されます**
+> 登録：[TickFlow登録リンク](https://tickflow.org/auth/register?ref=5N4NKTCPL4)
 
 ## クイックスタート
 
@@ -84,22 +103,32 @@ streamlit run streamlit_app.py
 
 オンラインデモ：**[wyckoff-analysis-youngcanphoenix.streamlit.app](https://wyckoff-analysis-youngcanphoenix.streamlit.app/)**
 
-## 10個のツール
+## 20個のツール
 
-エージェントの武器庫。すべて実際の出来高分析エンジンに接続：
+エージェントの武器庫 — 15個の量価ツール + 5個の汎用能力：
 
 | ツール | 機能 |
 |--------|------|
 | `search_stock_by_name` | 名前 / コード / ピンインによるあいまい検索 |
 | `diagnose_stock` | 単一銘柄のワイコフ構造診断 |
+| `get_portfolio` | 保有一覧 + 余剰資金の表示 |
 | `diagnose_portfolio` | ポートフォリオ一括ヘルスチェック |
+| `update_portfolio` | 保有の追加/変更/削除、余剰資金設定 |
 | `get_stock_price` | 直近の OHLCV 相場データ |
 | `get_market_overview` | 市場全体の温度感 |
-| `screen_stocks` | 5層ファネルによる全市場スクリーニング |
-| `generate_ai_report` | 3陣営 AI 詳細レポート |
-| `generate_strategy_decision` | 保有銘柄の去就 + 新規エントリー判断 |
+| `screen_stocks` | 5層ファネルによる全市場スクリーニング（⚡バックグラウンド） |
+| `generate_ai_report` | 3陣営 AI 詳細レポート（⚡バックグラウンド） |
+| `generate_strategy_decision` | 保有銘柄の去就 + 新規エントリー判断（⚡バックグラウンド） |
 | `get_recommendation_tracking` | 過去の推奨銘柄とその後のパフォーマンス |
 | `get_signal_pending` | シグナル確認プール照会 |
+| `get_tail_buy_history` | 引け値買い戦略の履歴結果 |
+| `run_backtest` | ファネル戦略のバックテスト（⚡バックグラウンド） |
+| `delete_tracking_records` | 推奨/シグナル記録の削除 |
+| `check_background_tasks` | バックグラウンドタスク進捗照会 |
+| `exec_command` | ローカルシェルコマンドの実行 |
+| `read_file` | ローカルファイルの読み取り（CSV/Excel自動解析） |
+| `write_file` | ファイルの書き込み（レポート/データのエクスポート） |
+| `web_fetch` | Webコンテンツの取得（金融ニュース/公告） |
 
 ツールの呼び出し順序と回数は LLM がリアルタイムに判断。事前編成は不要。
 
@@ -120,26 +149,18 @@ streamlit run streamlit_app.py
 | タスク | 時刻（北京時間） | 説明 |
 |--------|-----------------|------|
 | ファネル + AI レポート + プライベート判断 | 日-木 18:25 | 完全自動、結果を Feishu / Telegram にプッシュ |
+| 引け値買い戦略 | 月-金 13:50 | ルールスコアリング + LLM再評価 |
 | プレマーケットリスク管理 | 月-金 08:20 | A50 + VIX アラート |
 | ストップ高復習 | 月-金 19:25 | 当日騰落率 >= 8% の銘柄を復習 |
 | レコメンド追跡リプライシング | 日-木 23:00 | 終値を同期 |
+| バックテストグリッド | 毎月1日・15日 04:00 | 18並列パラメータ → 集約レポート |
 | キャッシュメンテナンス | 毎日 23:05 | 期限切れ相場キャッシュをクリーンアップ |
 
 ## モデル対応
 
-**CLI**：Gemini / Claude / OpenAI、`/model` でワンタッチ切替。任意の OpenAI 互換エンドポイントに対応。
+**CLI**：Gemini / Claude / OpenAI、`/model` でワンタッチ切替。任意の OpenAI 互換エンドポイントに対応（DeepSeek / Qwen / Kimi 等）。
 
 **Web / Pipeline**：Gemini / OpenAI / DeepSeek / Qwen / Kimi / Zhipu / Volcengine / Minimax -- 計8プロバイダー。
-
-## データソース
-
-個別銘柄の日足データは自動フォールバック：
-
-```
-tushare → akshare → baostock → efinance
-```
-
-いずれかのソースが利用不可の場合、自動的に次へ切り替え。手動操作は不要。
 
 ## 設定
 
@@ -150,9 +171,45 @@ tushare → akshare → baostock → efinance
 | `SUPABASE_URL` / `SUPABASE_KEY` | ログインとクラウド同期 |
 | `GEMINI_API_KEY`（または他プロバイダーの Key） | LLM 駆動用 |
 
-オプション：`TUSHARE_TOKEN`（高度なデータ）、`FEISHU_WEBHOOK_URL`（Feishu プッシュ）、`TG_BOT_TOKEN` + `TG_CHAT_ID`（Telegram プライベートプッシュ）。
+オプション：`TICKFLOW_API_KEY`（TickFlow リアルタイム/分時データ、日線主チェーン優先）、`TUSHARE_TOKEN`（高度なデータフォールバック）、`FEISHU_WEBHOOK_URL`（Feishu プッシュ）、`TG_BOT_TOKEN` + `TG_CHAT_ID`（Telegram プッシュ）。
 
 全設定項目と GitHub Actions Secrets の詳細は [アーキテクチャドキュメント](ARCHITECTURE.md) を参照。
+
+## MCP Server
+
+[MCP プロトコル](https://modelcontextprotocol.io/)経由でワイコフ分析機能を公開。Claude Code / Cursor / 任意のMCPクライアントから15個のツールを直接呼び出し可能。
+
+```bash
+# MCP依存のインストール
+uv pip install youngcan-wyckoff-analysis[mcp]
+
+# Claude Codeへの登録
+claude mcp add wyckoff -- wyckoff-mcp
+```
+
+または MCP クライアントの設定ファイルに手動追加：
+
+```json
+{
+  "mcpServers": {
+    "wyckoff": {
+      "command": "wyckoff-mcp",
+      "env": {
+        "TUSHARE_TOKEN": "your_token",
+        "TICKFLOW_API_KEY": "your_key"
+      }
+    }
+  }
+}
+```
+
+登録後、Claude Code / Cursor で「000001を診断して」と聞くだけでワイコフツールが呼び出されます。
+
+## Wyckoff Skills
+
+軽量なワイコフ分析機能の再利用：[`YoungCan-Wang/wyckoff_skill`](https://github.com/YoungCan-Wang/wyckoff_skill.git)
+
+AIアシスタントに「ワイコフ視点」を素早く装着するのに最適。
 
 ## リスク警告
 

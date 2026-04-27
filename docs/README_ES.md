@@ -15,24 +15,43 @@
 
 ---
 
-Conversa en lenguaje natural con un agente IA experto en el metodo Wyckoff. Despacha de forma autonoma 10 herramientas cuantitativas, encadena razonamientos de multiples pasos y te da conclusiones accionables de trading.
+Conversa en lenguaje natural con un agente IA experto en el metodo Wyckoff. Despacha de forma autonoma 20 herramientas cuantitativas, encadena razonamientos de multiples pasos y te da conclusiones accionables de trading.
 
-Web + CLI, compatible con Gemini / Claude / OpenAI, automatizacion completa via GitHub Actions.
+Web + CLI + MCP triple canal, compatible con Gemini / Claude / OpenAI / DeepSeek, automatizacion completa via GitHub Actions.
 
 ## Funcionalidades
 
 | Capacidad | Descripcion |
 |-----------|-------------|
-| Agente conversacional | Diagnosticos, filtros y reportes activados con lenguaje natural; el LLM orquesta las herramientas |
+| Agente conversacional | Diagnosticos, filtros y reportes activados con lenguaje natural; el LLM orquesta 20 herramientas; tambien lee/escribe archivos, ejecuta comandos y obtiene contenido web |
 | Embudo de 5 capas | ~4 500 acciones del mercado completo se reducen a ~30 candidatas mediante seis canales + resonancia sectorial + micro-disparo |
 | Reporte IA de 3 campamentos | Logica rota / Reserva / Plataforma de despegue — el LLM clasifica de forma independiente |
 | Diagnostico de cartera | Escaneo masivo: estructura de medias moviles, fase de acumulacion, senales de activacion, estado de stop-loss |
 | Rebalanceo privado | Combina posiciones + candidatas y emite ordenes EXIT / TRIM / HOLD / PROBE / ATTACK, con push a Telegram |
+| Estrategia de compra al cierre | Ejecuta a las 13:50, evaluacion en dos etapas (puntuacion por reglas + revision LLM) para entradas al final del dia |
 | Confirmacion de senales | Las senales L4 pasan por 1-3 dias de confirmacion de precio antes de ser accionables |
 | Seguimiento de recomendaciones | Sincroniza automaticamente el precio de cierre y calcula el rendimiento acumulado |
 | Backtesting | Simula rendimiento a N dias tras el filtrado del embudo: tasa de aciertos, Sharpe, drawdown maximo |
 | Riesgo pre-mercado | Monitoreo de A50 + VIX con cuatro niveles de alerta |
+| Panel local | `wyckoff dashboard` — recomendaciones, senales, cartera, memoria del agente, logs de chat; tema oscuro/claro, bilingue CN/EN |
+| Memoria del agente | Memoria entre sesiones: extrae conclusiones automaticamente, inyecta contexto relevante en la siguiente consulta; las preferencias nunca expiran |
+| Compresion de contexto | Umbral dinamico (25% de la ventana de contexto del modelo) para compresion automatica, resumen inteligente de resultados de herramientas |
+| Confirmacion de herramientas | `exec_command`, `write_file`, `update_portfolio` requieren aprobacion del usuario antes de ejecutarse |
+| MCP Server | 15 herramientas expuestas via protocolo MCP — compatible con Claude Code / Cursor / cualquier cliente MCP |
 | Notificaciones multicanal | Feishu / WeCom / DingTalk / Telegram |
+
+## Fuentes de datos
+
+La descarga de datos diarios se degrada automaticamente:
+
+```
+tickflow → tushare → akshare → baostock → efinance
+```
+
+Si una fuente no esta disponible, se cambia automaticamente a la siguiente sin intervencion manual.
+
+> **Recomendado: conectar TickFlow para capacidades mas fuertes en tiempo real / intradias**
+> Registro: [Enlace de registro TickFlow](https://tickflow.org/auth/register?ref=5N4NKTCPL4)
 
 ## Inicio rapido
 
@@ -84,22 +103,32 @@ streamlit run streamlit_app.py
 
 Demo en linea: **[wyckoff-analysis-youngcanphoenix.streamlit.app](https://wyckoff-analysis-youngcanphoenix.streamlit.app/)**
 
-## 10 Herramientas
+## 20 Herramientas
 
-Arsenal del agente — cada una conectada a un motor real de analisis de volumen y precio:
+Arsenal del agente — 15 herramientas cuantitativas + 5 capacidades generales:
 
 | Herramienta | Capacidad |
 |-------------|-----------|
 | `search_stock_by_name` | Busqueda difusa por nombre, codigo o pinyin |
 | `diagnose_stock` | Diagnostico estructurado Wyckoff de una accion |
+| `get_portfolio` | Ver posiciones + efectivo disponible |
 | `diagnose_portfolio` | Escaneo masivo de salud de la cartera |
+| `update_portfolio` | Agregar / modificar / eliminar posiciones, establecer efectivo |
 | `get_stock_price` | OHLCV reciente |
 | `get_market_overview` | Panorama general del mercado |
-| `screen_stocks` | Filtrado del mercado completo con embudo de 5 capas |
-| `generate_ai_report` | Reporte IA profundo en 3 campamentos |
-| `generate_strategy_decision` | Decision de permanencia / entrada en posiciones |
+| `screen_stocks` | Filtrado del mercado completo con embudo de 5 capas (⚡segundo plano) |
+| `generate_ai_report` | Reporte IA profundo en 3 campamentos (⚡segundo plano) |
+| `generate_strategy_decision` | Decision de permanencia / entrada en posiciones (⚡segundo plano) |
 | `get_recommendation_tracking` | Historial de recomendaciones y rendimiento posterior |
 | `get_signal_pending` | Consulta del pool de confirmacion de senales |
+| `get_tail_buy_history` | Resultados historicos de la estrategia de compra al cierre |
+| `run_backtest` | Backtest historico de la estrategia de embudo (⚡segundo plano) |
+| `delete_tracking_records` | Eliminar registros de recomendaciones / senales |
+| `check_background_tasks` | Consultar progreso de tareas en segundo plano |
+| `exec_command` | Ejecutar comandos de shell locales |
+| `read_file` | Leer archivos locales (CSV/Excel auto-parseados) |
+| `write_file` | Escribir archivos (exportar reportes/datos) |
+| `web_fetch` | Obtener contenido web (noticias financieras/anuncios) |
 
 El orden y la frecuencia de las llamadas los decide el LLM en tiempo real, sin orquestacion previa.
 
@@ -120,26 +149,18 @@ Tareas programadas con GitHub Actions integradas en el repositorio:
 | Tarea | Hora (Beijing) | Descripcion |
 |-------|---------------|-------------|
 | Embudo + Reporte IA + Rebalanceo | Dom-Jue 18:25 | Totalmente automatico; resultados enviados a Feishu / Telegram |
+| Estrategia de compra al cierre | Lun-Vie 13:50 | Puntuacion por reglas + revision LLM |
 | Riesgo pre-mercado | Lun-Vie 08:20 | Alerta A50 + VIX |
 | Resumen de limit-up | Lun-Vie 19:25 | Revision de acciones con alza diaria >= 8 % |
 | Repricing de recomendaciones | Dom-Jue 23:00 | Sincroniza precios de cierre |
+| Grid de backtest | 1 y 15 de cada mes 04:00 | 18 combos de parametros en paralelo → reporte agregado |
 | Mantenimiento de cache | Diario 23:05 | Limpia cache de cotizaciones expiradas |
 
 ## Soporte de modelos
 
-**CLI**: Gemini / Claude / OpenAI — cambia al instante con `/model`; compatible con cualquier endpoint compatible con OpenAI.
+**CLI**: Gemini / Claude / OpenAI — cambia al instante con `/model`; compatible con cualquier endpoint compatible con OpenAI (DeepSeek / Qwen / Kimi, etc.).
 
 **Web / Pipeline**: Gemini / OpenAI / DeepSeek / Qwen / Kimi / Zhipu / Volcengine / Minimax — 8 proveedores en total.
-
-## Fuentes de datos
-
-La descarga de datos diarios se degrada automaticamente:
-
-```
-tushare -> akshare -> baostock -> efinance
-```
-
-Si una fuente no esta disponible, se cambia automaticamente a la siguiente sin intervencion manual.
 
 ## Configuracion
 
@@ -150,9 +171,45 @@ Copia `.env.example` como `.env`. Configuracion minima:
 | `SUPABASE_URL` / `SUPABASE_KEY` | Login y sincronizacion en la nube |
 | `GEMINI_API_KEY` (u otra clave de proveedor) | Motor LLM |
 
-Opcional: `TUSHARE_TOKEN` (datos avanzados), `FEISHU_WEBHOOK_URL` (push Feishu), `TG_BOT_TOKEN` + `TG_CHAT_ID` (push Telegram).
+Opcional: `TICKFLOW_API_KEY` (TickFlow en tiempo real/intradias, cadena principal), `TUSHARE_TOKEN` (datos avanzados fallback), `FEISHU_WEBHOOK_URL` (push Feishu), `TG_BOT_TOKEN` + `TG_CHAT_ID` (push Telegram).
 
 Consulta la configuracion completa y los secretos de GitHub Actions en la [documentacion de arquitectura](ARCHITECTURE.md).
+
+## MCP Server
+
+Expone las capacidades de analisis Wyckoff a traves del [protocolo MCP](https://modelcontextprotocol.io/), permitiendo a Claude Code / Cursor / cualquier cliente MCP llamar a 15 herramientas directamente.
+
+```bash
+# Instalar dependencia MCP
+uv pip install youngcan-wyckoff-analysis[mcp]
+
+# Registrar en Claude Code
+claude mcp add wyckoff -- wyckoff-mcp
+```
+
+O agregar manualmente en la configuracion del cliente MCP:
+
+```json
+{
+  "mcpServers": {
+    "wyckoff": {
+      "command": "wyckoff-mcp",
+      "env": {
+        "TUSHARE_TOKEN": "your_token",
+        "TICKFLOW_API_KEY": "your_key"
+      }
+    }
+  }
+}
+```
+
+Una vez registrado, solo pregunta "diagnostica 000001" en Claude Code / Cursor para invocar las herramientas Wyckoff.
+
+## Wyckoff Skills
+
+Reutilizacion ligera de la capacidad de analisis Wyckoff: [`YoungCan-Wang/wyckoff_skill`](https://github.com/YoungCan-Wang/wyckoff_skill.git)
+
+Ideal para dar a cualquier asistente IA una rapida "perspectiva Wyckoff."
 
 ## Aviso de riesgo
 

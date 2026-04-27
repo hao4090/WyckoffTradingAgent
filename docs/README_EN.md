@@ -15,25 +15,44 @@
 
 ---
 
-Talk to a Wyckoff master in natural language. He commands 17 quantitative tools, chains multi-step reasoning, and tells you whether to strike.
+Talk to a Wyckoff master in natural language. He commands 20 quantitative tools, chains multi-step reasoning, and tells you whether to strike.
 
-Web + CLI + MCP triple channel, Gemini / Claude / OpenAI pick one, GitHub Actions for fully automated daily runs.
+Web + CLI + MCP triple channel, Gemini / Claude / OpenAI / DeepSeek multi-model switching, GitHub Actions for fully automated daily runs.
 
 ## Features
 
 | Capability | Description |
 |---|---|
-| Conversational Agent | Trigger diagnosis, screening, and reports in plain language; the LLM orchestrates tool calls autonomously |
+| Conversational Agent | Trigger diagnosis, screening, and reports in plain language; the LLM orchestrates 20 tools autonomously; also reads/writes files, executes commands, and fetches web pages |
 | Five-Layer Funnel | Full market ~4 500 stocks -> ~30 candidates via six channels + sector resonance + micro triggers |
 | AI Three-Camp Report | Logic Bankrupt / Reserve Camp / Springboard — LLM renders an independent verdict |
 | Portfolio Diagnosis | Batch health check: MA structure, accumulation phase, trigger signals, stop-loss status |
 | Private Rebalance | Synthesizes holdings + candidates, outputs EXIT / TRIM / HOLD / PROBE / ATTACK orders, pushes to Telegram |
+| Tail-Buy Strategy | Executes at 13:50, two-stage evaluation (rule scoring + LLM review) for end-of-day entries |
 | Signal Confirmation Pool | L4 trigger signals must pass 1-3 day price confirmation before becoming actionable |
 | Recommendation Tracking | Historical picks auto-sync closing prices and compute cumulative returns |
 | Daily-Bar Backtest | Replays post-funnel N-day returns; reports win rate / Sharpe / max drawdown |
 | Pre-Market Risk | A50 futures + VIX monitoring with four alert levels |
-| MCP Server | 14 tools exposed via MCP protocol — plug into Claude Code / Cursor / any MCP client |
+| Local Dashboard | `wyckoff dashboard` — recommendations, signals, portfolio, agent memory, chat logs; dark/light theme, bilingual CN/EN |
+| Agent Memory | Cross-session memory: auto-extracts session conclusions, injects relevant context on next query; preference memory never expires |
+| Context Compaction | Dynamic threshold (25% of model context window) auto-compresses long conversations, smart tool result summarization preserves key data |
+| Tool Confirmation | `exec_command`, `write_file`, `update_portfolio` require user approval before execution |
+| General Agent Capabilities | Execute commands, read/write files, fetch web pages — send a CSV path and it will analyze it |
+| MCP Server | 15 tools exposed via MCP protocol — plug into Claude Code / Cursor / any MCP client |
 | Multi-Channel Notifications | Feishu / WeCom / DingTalk / Telegram |
+
+## Data Sources
+
+Daily bar auto-fallback chain:
+
+```
+tickflow → tushare → akshare → baostock → efinance
+```
+
+When any source is unavailable the system silently falls back to the next — zero intervention required.
+
+> **Recommended: connect TickFlow for stronger real-time / intraday capabilities**
+> Register: [TickFlow Registration](https://tickflow.org/auth/register?ref=5N4NKTCPL4)
 
 ## Quick Start
 
@@ -93,24 +112,34 @@ streamlit run streamlit_app.py
 
 Live demo: **[wyckoff-analysis-youngcanphoenix.streamlit.app](https://wyckoff-analysis-youngcanphoenix.streamlit.app/)**
 
-## 10 Tools
+## 20 Tools
 
-The agent's arsenal — each one wired to a real volume-price engine:
+The agent's arsenal — 15 quant tools + 5 general capabilities:
 
 | Tool | Capability |
 |---|---|
 | `search_stock_by_name` | Fuzzy search by name, ticker, or pinyin |
 | `diagnose_stock` | Structured Wyckoff diagnosis for a single stock |
+| `get_portfolio` | View holdings + available cash |
 | `diagnose_portfolio` | Batch portfolio health scan |
+| `update_portfolio` | Add / modify / delete holdings, set available cash |
 | `get_stock_price` | Recent OHLCV quotes |
 | `get_market_overview` | Broad market temperature overview |
-| `screen_stocks` | Five-layer funnel full-market screening |
-| `generate_ai_report` | Three-camp AI deep research report |
-| `generate_strategy_decision` | Hold/exit existing positions + new buy decisions |
+| `screen_stocks` | Five-layer funnel full-market screening (⚡background) |
+| `generate_ai_report` | Three-camp AI deep research report (⚡background) |
+| `generate_strategy_decision` | Hold/exit existing positions + new buy decisions (⚡background) |
 | `get_recommendation_tracking` | Historical recommendations and follow-up performance |
 | `get_signal_pending` | Query the signal confirmation pool |
+| `get_tail_buy_history` | Tail-buy strategy historical results |
+| `run_backtest` | Funnel strategy historical backtest (⚡background) |
+| `delete_tracking_records` | Delete recommendation / signal records |
+| `check_background_tasks` | Background task progress query |
+| `exec_command` | Execute local shell commands |
+| `read_file` | Read local files (CSV/Excel auto-parsed) |
+| `write_file` | Write files (export reports/data) |
+| `web_fetch` | Fetch web content (financial news/announcements) |
 
-Tool call order and frequency are decided by the LLM at runtime — no pre-choreography needed.
+Tool call order and frequency are decided by the LLM at runtime — no pre-choreography needed. Send a CSV path and it reads it; say "install a package" and it executes.
 
 ## Five-Layer Funnel
 
@@ -129,26 +158,18 @@ Built-in GitHub Actions cron jobs:
 | Task | Schedule (Beijing Time) | Description |
 |---|---|---|
 | Funnel + AI Report + Rebalance | Sun–Thu 18:25 | Fully automated; results pushed to Feishu / Telegram |
+| Tail-Buy Strategy | Mon–Fri 13:50 | Rule scoring + LLM review, end-of-day entry screening |
 | Pre-Market Risk | Mon–Fri 08:20 | A50 + VIX alert |
 | Limit-Up Review | Mon–Fri 19:25 | Review stocks that rose >= 8% today |
 | Recommendation Reprice | Sun–Thu 23:00 | Sync closing prices |
+| Backtest Grid | 1st & 15th monthly 04:00 | 18 parallel parameter combos → aggregated report |
 | Cache Maintenance | Daily 23:05 | Purge stale quote caches |
 
 ## Model Support
 
-**CLI**: Gemini / Claude / OpenAI — switch with `/model`; any OpenAI-compatible endpoint works.
+**CLI**: Gemini / Claude / OpenAI — switch with `/model`; any OpenAI-compatible endpoint works (DeepSeek, Qwen, Kimi, etc.).
 
 **Web / Pipeline**: Gemini / OpenAI / DeepSeek / Qwen / Kimi / Zhipu / Volcengine / Minimax — 8 providers total.
-
-## Data Sources
-
-Daily bar auto-fallback chain:
-
-```
-tickflow → tushare → akshare → baostock → efinance
-```
-
-When any source is unavailable the system silently falls back to the next — zero intervention required.
 
 ## Configuration
 
@@ -159,13 +180,13 @@ Copy `.env.example` to `.env`. Minimum required:
 | `SUPABASE_URL` / `SUPABASE_KEY` | Auth and cloud sync |
 | `GEMINI_API_KEY` (or another provider's key) | Powers the LLM |
 
-Optional: `TICKFLOW_API_KEY` (TickFlow real-time/intraday), `TUSHARE_TOKEN` (premium data), `FEISHU_WEBHOOK_URL` (Feishu push), `TG_BOT_TOKEN` + `TG_CHAT_ID` (Telegram push).
+Optional: `TICKFLOW_API_KEY` (TickFlow real-time/intraday, primary data chain), `TUSHARE_TOKEN` (premium data fallback), `FEISHU_WEBHOOK_URL` (Feishu push), `TG_BOT_TOKEN` + `TG_CHAT_ID` (Telegram push).
 
 See the [Architecture doc](ARCHITECTURE.md) for the full config reference and GitHub Actions Secrets setup.
 
 ## MCP Server
 
-Expose Wyckoff analysis capabilities via the [MCP protocol](https://modelcontextprotocol.io/), enabling Claude Code / Cursor / any MCP client to call 14 tools directly.
+Expose Wyckoff analysis capabilities via the [MCP protocol](https://modelcontextprotocol.io/), enabling Claude Code / Cursor / any MCP client to call 15 tools directly.
 
 ```bash
 # Install MCP dependency
