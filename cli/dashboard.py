@@ -205,10 +205,77 @@ class _Handler(BaseHTTPRequestHandler):
         else:
             self._html(_DASHBOARD_HTML)
 
+    def _read_body(self) -> dict:
+        length = int(self.headers.get("Content-Length", 0))
+        if length <= 0:
+            return {}
+        return json.loads(self.rfile.read(length).decode("utf-8"))
+
+    def do_POST(self):
+        parsed = urlparse(self.path)
+        path = parsed.path.rstrip("/")
+        if path == "/api/models":
+            try:
+                body = self._read_body()
+                from cli.auth import save_model_entry
+                save_model_entry(body)
+                self._json({"ok": True})
+            except Exception as e:
+                self._json({"ok": False, "error": str(e)}, 400)
+        else:
+            self._json({"error": "not found"}, 404)
+
+    def do_PUT(self):
+        parsed = urlparse(self.path)
+        path = parsed.path.rstrip("/")
+        if path.startswith("/api/models/") and path.endswith("/default"):
+            model_id = path.split("/")[-2]
+            try:
+                from cli.auth import set_default_model
+                set_default_model(model_id)
+                self._json({"ok": True})
+            except Exception as e:
+                self._json({"ok": False, "error": str(e)}, 400)
+        elif path.startswith("/api/models/"):
+            model_id = path.split("/")[-1]
+            try:
+                body = self._read_body()
+                body["id"] = model_id
+                if not body.get("api_key"):
+                    from cli.auth import load_model_configs
+                    for m in load_model_configs():
+                        if m["id"] == model_id:
+                            body["api_key"] = m["api_key"]
+                            break
+                from cli.auth import save_model_entry
+                save_model_entry(body)
+                self._json({"ok": True})
+            except Exception as e:
+                self._json({"ok": False, "error": str(e)}, 400)
+        elif path.startswith("/api/config/"):
+            key = path.split("/")[-1]
+            try:
+                body = self._read_body()
+                from cli.auth import save_config_key
+                save_config_key(key, body.get("value", ""))
+                self._json({"ok": True})
+            except Exception as e:
+                self._json({"ok": False, "error": str(e)}, 400)
+        else:
+            self._json({"error": "not found"}, 404)
+
     def do_DELETE(self):
         parsed = urlparse(self.path)
         path = parsed.path.rstrip("/")
-        if path.startswith("/api/memory/"):
+        if path.startswith("/api/models/"):
+            model_id = path.split("/")[-1]
+            try:
+                from cli.auth import remove_model_entry
+                ok = remove_model_entry(model_id)
+                self._json({"ok": ok, "error": "" if ok else "cannot delete last model"})
+            except Exception as e:
+                self._json({"ok": False, "error": str(e)}, 400)
+        elif path.startswith("/api/memory/"):
             try:
                 mem_id = int(path.split("/")[-1])
                 ok = _delete_memory(mem_id)
@@ -344,6 +411,22 @@ body{background:var(--bg);color:var(--text);font-family:var(--font);line-height:
 .sync-dot.stale{background:var(--amber);box-shadow:0 0 6px var(--amber)}
 .sync-dot.none{background:var(--text-dim)}
 .empty{text-align:center;padding:40px;color:var(--text-dim);font-size:12px}
+.btn-accent{background:rgba(0,212,170,.1);border:1px solid var(--accent);color:var(--accent);cursor:pointer;font-size:11px;padding:4px 12px;border-radius:3px;font-family:var(--font);transition:all .15s}
+.btn-accent:hover{background:rgba(0,212,170,.2)}
+.btn-edit{background:none;border:1px solid var(--border);color:var(--blue);cursor:pointer;font-size:10px;padding:3px 8px;border-radius:3px;font-family:var(--font);margin-right:4px}
+.btn-edit:hover{background:rgba(59,130,246,.1);border-color:var(--blue)}
+.btn-default{background:none;border:1px solid var(--border);color:var(--amber);cursor:pointer;font-size:10px;padding:3px 8px;border-radius:3px;font-family:var(--font);margin-right:4px}
+.btn-default:hover{background:rgba(245,158,11,.1);border-color:var(--amber)}
+.model-form{background:var(--bg3);border:1px solid var(--border2);border-radius:4px;padding:16px;margin-top:12px}
+.form-row{display:flex;align-items:center;margin-bottom:10px;gap:8px}
+.form-row:last-child{margin-bottom:0}
+.form-label{width:80px;font-size:11px;color:var(--text2);text-align:right;flex-shrink:0}
+.form-input{flex:1;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:3px;font-family:var(--font);font-size:12px;outline:none}
+.form-input:focus{border-color:var(--accent)}
+.form-select{flex:1;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:3px;font-family:var(--font);font-size:12px;outline:none;-webkit-appearance:none}
+.form-select:focus{border-color:var(--accent)}
+.form-select option{background:var(--bg);color:var(--text)}
+.form-actions{display:flex;gap:8px;margin-top:12px;justify-content:flex-end}
 body::after{content:'';position:fixed;inset:0;pointer-events:none;z-index:9999;background:repeating-linear-gradient(0deg,transparent,transparent 2px,var(--scan-a) 2px,var(--scan-a) 4px)}
 @keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
 .fade-in{animation:fadeIn .3s ease both}
@@ -396,7 +479,9 @@ zh:{
   portfolio_id:'组合 ID',free_cash:'可用资金',no_portfolio:'暂无持仓数据',
   no_memory:'暂无记忆',del:'删除',confirm_del:'确认删除记忆 #',
   ds_config:'数据源配置',model_config:'模型配置',not_set:'未配置',no_config:'暂无配置',no_models:'暂无模型',
-  th_id:'ID',th_provider:'供应商',th_model:'模型',th_apikey:'API Key',th_baseurl:'Base URL',
+  add_model:'添加模型',edit:'编辑',save:'保存',cancel:'取消',set_default:'设为默认',confirm_del_model:'确认删除模型：',
+  model_alias:'别名',provider:'供应商',api_key_label:'API Key',model_name:'模型名',base_url_label:'Base URL',
+  th_id:'ID',th_provider:'供应商',th_model:'模型',th_apikey:'API Key',th_baseurl:'Base URL',th_actions:'操作',
   sync_title:'Supabase → SQLite 同步',never_synced:'从未同步',rows:'行',
   no_sessions:'暂无对话记录',th_session:'会话',th_started:'开始',th_ended:'结束',
   th_messages:'消息数',th_tokens_in:'输入 Token',th_tokens_out:'输出 Token',th_error:'状态',
@@ -420,7 +505,9 @@ en:{
   portfolio_id:'Portfolio ID',free_cash:'Free Cash',no_portfolio:'No portfolio data',
   no_memory:'No memories stored',del:'DEL',confirm_del:'Delete memory #',
   ds_config:'Data Source Config',model_config:'Model Configs',not_set:'not set',no_config:'No config',no_models:'No models configured',
-  th_id:'ID',th_provider:'Provider',th_model:'Model',th_apikey:'API Key',th_baseurl:'Base URL',
+  add_model:'Add Model',edit:'Edit',save:'Save',cancel:'Cancel',set_default:'Set Default',confirm_del_model:'Delete model: ',
+  model_alias:'Alias',provider:'Provider',api_key_label:'API Key',model_name:'Model',base_url_label:'Base URL',
+  th_id:'ID',th_provider:'Provider',th_model:'Model',th_apikey:'API Key',th_baseurl:'Base URL',th_actions:'Actions',
   sync_title:'Supabase → SQLite Sync',never_synced:'Never synced',rows:'rows',
   no_sessions:'No chat sessions recorded',th_session:'Session',th_started:'Started',th_ended:'Ended',
   th_messages:'Messages',th_tokens_in:'Tokens In',th_tokens_out:'Tokens Out',th_error:'Status',
@@ -546,19 +633,82 @@ async function renderMemory(c){
 window.delMemory=async function(id){if(!confirm(t('confirm_del')+id+'?'))return;await fetch('/api/memory/'+id,{method:'DELETE'});loadPage('memory')};
 
 // ═══ Config ═══
+let _editingModel=null;
+const _defaultModels={gemini:'gemini-2.5-flash',openai:'gpt-4o',claude:'claude-sonnet-4-20250514'};
+
+function _modelForm(m,isNew){
+  const id=m?.id||'';const prov=m?.provider_name||'gemini';const model=m?.model||'';const url=m?.base_url||'';
+  return `<div class="model-form" id="model-form">
+    <div class="form-row"><span class="form-label">${t('model_alias')}</span><input class="form-input" id="mf-id" value="${escHtml(id)}" ${isNew?'':'readonly style="opacity:.6;cursor:not-allowed"'} placeholder="e.g. gemini, longcat"></div>
+    <div class="form-row"><span class="form-label">${t('provider')}</span><select class="form-select" id="mf-provider">
+      <option value="gemini" ${prov==='gemini'?'selected':''}>Gemini (Google)</option>
+      <option value="openai" ${prov==='openai'?'selected':''}>OpenAI / Compatible</option>
+      <option value="claude" ${prov==='claude'?'selected':''}>Claude (Anthropic)</option>
+    </select></div>
+    <div class="form-row"><span class="form-label">${t('api_key_label')}</span><input class="form-input" id="mf-key" type="password" value="" placeholder="${isNew?'':'(unchanged) enter new key to update'}"></div>
+    <div class="form-row"><span class="form-label">${t('model_name')}</span><input class="form-input" id="mf-model" value="${escHtml(model)}" placeholder="${_defaultModels[prov]||''}"></div>
+    <div class="form-row"><span class="form-label">${t('base_url_label')}</span><input class="form-input" id="mf-url" value="${escHtml(url)}" placeholder="(optional)"></div>
+    <div class="form-actions">
+      <button class="btn-del" onclick="_cancelModelForm()">${t('cancel')}</button>
+      <button class="btn-accent" onclick="_saveModel(${isNew})">${t('save')}</button>
+    </div></div>`}
+
 async function renderConfig(c){
   const data=await API('/api/config');const cfg=data.config||{};const models=data.models||[];const defId=data.default_model||'';
+  // --- data source config ---
+  const editableKeys=['tushare_token','tickflow_api_key'];
   let html=`<div class="card fade-in"><div class="card-title">${t('ds_config')}</div>`;
-  const keys=Object.entries(cfg);
-  if(keys.length){keys.forEach(([k,v])=>{const isMasked=String(v||'').includes('****');html+=`<div class="cfg-row"><span class="cfg-key">${k}</span><span class="cfg-val${isMasked?' masked':''}">${v||`<span style="color:var(--text-dim)">${t('not_set')}</span>`}</span></div>`})}
+  const keys=Object.entries(cfg).filter(([k])=>k!=='models'&&k!=='default');
+  if(keys.length){keys.forEach(([k,v])=>{
+    const isMasked=String(v||'').includes('****');
+    const canEdit=editableKeys.includes(k);
+    html+=`<div class="cfg-row"><span class="cfg-key">${k}</span><span class="cfg-val${isMasked?' masked':''}" id="ds-val-${k}">${v||`<span style="color:var(--text-dim)">${t('not_set')}</span>`}</span>`;
+    if(canEdit)html+=`<button class="btn-edit" onclick="_editDsKey('${k}')">${t('edit')}</button>`;
+    html+=`</div>`})}
   else{html+=`<div class="empty">${t('no_config')}</div>`}
   html+='</div>';
-  html+=`<div class="card fade-in" style="margin-top:16px;animation-delay:.1s"><div class="card-title">${t('model_config')}</div>`;
+  // --- model config ---
+  html+=`<div class="card fade-in" style="margin-top:16px;animation-delay:.1s"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px"><div class="card-title" style="margin-bottom:0">${t('model_config')}</div><button class="btn-accent" onclick="_addModel()">${t('add_model')}</button></div>`;
   if(models.length){
-    html+=`<table class="tbl"><thead><tr><th>${t('th_id')}</th><th>${t('th_provider')}</th><th>${t('th_model')}</th><th>${t('th_apikey')}</th><th>${t('th_baseurl')}</th></tr></thead><tbody>`;
-    models.forEach(m=>{const isDef=m.id===defId;html+=`<tr><td>${m.id}${isDef?' <span class="pill pill-green">DEFAULT</span>':''}</td><td>${m.provider_name||''}</td><td>${m.model||''}</td><td class="cfg-val masked">${m.api_key||''}</td><td>${m.base_url||'(default)'}</td></tr>`});
+    html+=`<table class="tbl"><thead><tr><th>${t('th_id')}</th><th>${t('th_provider')}</th><th>${t('th_model')}</th><th>${t('th_apikey')}</th><th>${t('th_baseurl')}</th><th>${t('th_actions')}</th></tr></thead><tbody>`;
+    models.forEach(m=>{const isDef=m.id===defId;
+      html+=`<tr><td>${escHtml(m.id)}${isDef?' <span class="pill pill-green">DEFAULT</span>':''}</td><td>${escHtml(m.provider_name||'')}</td><td>${escHtml(m.model||'')}</td><td class="cfg-val masked">${m.api_key||''}</td><td>${escHtml(m.base_url||'(default)')}</td><td style="white-space:nowrap">`;
+      html+=`<button class="btn-edit" onclick="_editModel('${escHtml(m.id)}')">${t('edit')}</button>`;
+      if(!isDef)html+=`<button class="btn-default" onclick="_setDefault('${escHtml(m.id)}')">${t('set_default')}</button>`;
+      html+=`<button class="btn-del" onclick="_delModel('${escHtml(m.id)}')">${t('del')}</button></td></tr>`});
     html+='</tbody></table>'}else{html+=`<div class="empty">${t('no_models')}</div>`}
-  html+='</div>';c.innerHTML=html}
+  html+=`<div id="model-form-slot"></div></div>`;
+  c.innerHTML=html;
+  // restore form if editing
+  if(_editingModel==='__new__'){$('#model-form-slot').innerHTML=_modelForm(null,true)}
+}
+
+window._addModel=function(){_editingModel='__new__';const slot=$('#model-form-slot');if(slot)slot.innerHTML=_modelForm(null,true)};
+window._editModel=async function(id){_editingModel=id;const data=await API('/api/config');const m=(data.models||[]).find(x=>x.id===id);if(!m)return;const slot=$('#model-form-slot');if(slot)slot.innerHTML=_modelForm(m,false)};
+window._cancelModelForm=function(){_editingModel=null;const f=$('#model-form');if(f)f.remove()};
+window._saveModel=async function(isNew){
+  const id=$('#mf-id').value.trim();const prov=$('#mf-provider').value;const key=$('#mf-key').value;const model=$('#mf-model').value.trim();const url=$('#mf-url').value.trim();
+  if(!id){alert('ID required');return}
+  if(isNew&&!key){alert('API Key required');return}
+  const entry={id,provider_name:prov,model:model||_defaultModels[prov]||'',base_url:url};
+  if(key)entry.api_key=key;
+  try{
+    if(isNew){await fetch('/api/models',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(entry)})}
+    else{await fetch('/api/models/'+encodeURIComponent(id),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(entry)})}
+    _editingModel=null;loadPage('config');
+  }catch(e){alert('Error: '+e.message)}
+};
+window._delModel=async function(id){if(!confirm(t('confirm_del_model')+id+'?'))return;await fetch('/api/models/'+encodeURIComponent(id),{method:'DELETE'});loadPage('config')};
+window._setDefault=async function(id){await fetch('/api/models/'+encodeURIComponent(id)+'/default',{method:'PUT'});loadPage('config')};
+window._editDsKey=function(key){
+  const valEl=$('#ds-val-'+key);if(!valEl)return;
+  const cur=valEl.textContent.includes('****')?'':valEl.textContent;
+  valEl.innerHTML=`<input class="form-input" id="ds-input-${key}" type="password" value="${escHtml(cur)}" style="width:200px;display:inline-block" placeholder="enter new value"><button class="btn-accent" style="margin-left:8px" onclick="_saveDsKey('${key}')">${t('save')}</button><button class="btn-del" style="margin-left:4px" onclick="loadPage('config')">${t('cancel')}</button>`;
+  $(`#ds-input-${key}`).focus()};
+window._saveDsKey=async function(key){
+  const v=$(`#ds-input-${key}`).value.trim();if(!v)return;
+  await fetch('/api/config/'+encodeURIComponent(key),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({value:v})});
+  loadPage('config')}
 
 // ═══ Sync ═══
 async function renderSync(c){

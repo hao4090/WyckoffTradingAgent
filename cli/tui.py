@@ -79,32 +79,49 @@ class StatusBar(Static):
     """
 
 
-class FloatingSelector(OptionList):
-    """临时浮层选择器 — 上下键选择，Enter 确认，Esc 取消。"""
+class SelectorScreen(ModalScreen):
+    """模态选择器 — 上下键选择，Enter 确认，Esc 取消。"""
+
     DEFAULT_CSS = """
-    FloatingSelector {
-        dock: bottom;
-        height: auto;
-        max-height: 50%;
-        margin: 0 1;
-        border: round $accent;
+    SelectorScreen {
+        align: center middle;
+    }
+    #selector-box {
+        width: 60;
+        max-height: 16;
         background: $surface;
+        border: thick $accent;
+        padding: 1 2;
+    }
+    #selector-options {
+        height: auto;
+        max-height: 12;
     }
     """
 
-    def __init__(self, options: list[tuple[str, str]], callback_id: str, **kwargs):
-        """options: [(value, label), ...], callback_id: 回调标识。"""
+    BINDINGS = [Binding("escape", "cancel", show=False)]
+
+    def __init__(self, options: list[tuple[str, str]], callback_id: str):
+        super().__init__()
+        self._options = options
         self._values = [v for v, _ in options]
         self._callback_id = callback_id
-        super().__init__(*[Option(label, id=val) for val, label in options], **kwargs)
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="selector-box"):
+            yield OptionList(
+                *[Option(label, id=val) for val, label in self._options],
+                id="selector-options",
+            )
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
         value = self._values[event.option_index]
+        self.dismiss(None)
         self.app._on_selector_choice(self._callback_id, value)
 
-    def on_key(self, event) -> None:
-        if event.key == "escape":
-            self.app._on_selector_choice(self._callback_id, None)
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+        self.app._on_selector_choice(self._callback_id, None)
 
 
 _SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
@@ -733,22 +750,10 @@ class WyckoffTUI(App):
         self._update_status()
 
     def _show_selector(self, options: list[tuple[str, str]], callback_id: str) -> None:
-        """显示浮层选择器。options: [(value, label), ...]"""
-        # 移除已有的 selector
-        try:
-            old = self.query_one("#floating-selector", FloatingSelector)
-            old.remove()
-        except Exception:
-            pass
-        selector = FloatingSelector(options, callback_id, id="floating-selector")
-        self.mount(selector, before="#chat-input")
-        selector.focus()
+        """显示模态选择器。options: [(value, label), ...]"""
+        self.push_screen(SelectorScreen(options, callback_id))
 
     def _dismiss_selector(self) -> None:
-        try:
-            self.query_one("#floating-selector", FloatingSelector).remove()
-        except Exception:
-            pass
         self.query_one("#chat-input", Input).focus()
 
     def _on_selector_choice(self, callback_id: str, value: str | None) -> None:
