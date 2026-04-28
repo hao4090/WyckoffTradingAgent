@@ -986,6 +986,7 @@ class WyckoffTUI(App):
         total_output = 0
         t_start = time.monotonic()
         _recent_calls: list[tuple[str, str]] = []  # doom-loop: (name, args_hash)
+        _doom_break = False
 
         # 记录用户输入
         _user_text = self._messages[-1]["content"] if self._messages else ""
@@ -1152,6 +1153,7 @@ class WyckoffTUI(App):
                                 "content": json.dumps({"error": "doom-loop: 同参数重复调用3次，已中止"}, ensure_ascii=False),
                             })
                             tool_calls = None
+                            _doom_break = True
                             break
 
                         _spinner_start(display)
@@ -1215,10 +1217,11 @@ class WyckoffTUI(App):
                 if missing_required_tool(expectation, used_tools_this_turn):
                     warning = build_retry_exhausted_warning(expectation, incomplete_tool_retries)
                     text_buf = f"{warning}\n\n{text_buf}".strip()
-                _final_msg: dict[str, Any] = {"role": "assistant", "content": text_buf}
-                if thinking_buf:
-                    _final_msg["reasoning_content"] = thinking_buf
-                self._messages.append(_final_msg)
+                if not _doom_break:
+                    _final_msg: dict[str, Any] = {"role": "assistant", "content": text_buf}
+                    if thinking_buf:
+                        _final_msg["reasoning_content"] = thinking_buf
+                    self._messages.append(_final_msg)
                 if text_buf:
                     if not _streaming_started:
                         _write(Text.from_markup("  [dim]───[/dim]"))
