@@ -134,6 +134,35 @@ def _find_big_gainers(
     return codes
 
 
+def _find_big_gainers_from_spot(
+    spot_map: dict[str, dict],
+    name_map: dict[str, str],
+    threshold: float = 8.0,
+) -> tuple[list[str], int]:
+    """从全市场实时快照中找出涨幅 >= threshold% 的主板+创业板非ST股票。"""
+    codes: list[str] = []
+    usable = 0
+    for code, snap in (spot_map or {}).items():
+        code = str(code).strip()
+        if code not in name_map:
+            continue
+        if not _is_main_or_chinext(code):
+            continue
+        if "ST" in str(name_map.get(code, "")).upper():
+            continue
+        try:
+            pct = snap.get("pct_chg") if isinstance(snap, dict) else None
+            if pct is None:
+                continue
+            usable += 1
+            if float(pct) >= threshold:
+                codes.append(code)
+        except Exception:
+            continue
+    codes.sort()
+    return codes, usable
+
+
 def _blocked_exit_signal_map(exit_signals: dict[str, dict] | None) -> dict[str, dict]:
     blocked: dict[str, dict] = {}
     for code, raw in (exit_signals or {}).items():
@@ -181,7 +210,6 @@ def main() -> int:
     print("[review] 获取今日涨幅 ≥ 8% 股票...")
     from utils.trading_clock import resolve_end_calendar_day
     from integrations.fetch_a_share_csv import _resolve_trading_window, get_stocks_by_board
-    from tools.data_fetcher import fetch_all_ohlcv
     from datetime import timedelta
     
     end_calendar_day = resolve_end_calendar_day()
@@ -198,18 +226,41 @@ def main() -> int:
         if isinstance(item, dict) and str(item.get("code", "")).strip()
     }
     all_codes = sorted(name_map_today.keys())
-    today_df_map, today_fetch_stats = fetch_all_ohlcv(
-        symbols=all_codes,
-        window=today_window,
-        enforce_target_trade_date=True,
-    )
-    print(
-        "[review] 今日数据拉取完成: "
-        f"ok={today_fetch_stats.get('fetch_ok', len(today_df_map))}, "
-        f"fail={today_fetch_stats.get('fetch_fail', 0)}, "
-        f"target_trade_date={today_window.end_trade_date}"
-    )
-    review_codes = _find_big_gainers(today_df_map, name_map_today, threshold=8.0)
+    review_codes: list[str] = []
+    spot_usable = 0
+    try:
+        from integrations.data_source import _load_spot_snapshot_map
+
+        spot_map = _load_spot_snapshot_map(force_refresh=True)
+        review_codes, spot_usable = _find_big_gainers_from_spot(
+            spot_map=spot_map,
+            name_map=name_map_today,
+            threshold=8.0,
+        )
+        print(
+            "[review] 实时快照加载完成: "
+            f"symbols={len(spot_map or {})}, usable_pct={spot_usable}, "
+            f"big_gainers={len(review_codes)}"
+        )
+    except Exception as e:
+        print(f"[review] 实时快照加载失败，准备回退日线拉取: {e}")
+
+    if spot_usable <= 0:
+        from tools.data_fetcher import fetch_all_ohlcv
+
+        print("[review] 实时快照不可用，回退到一日 OHLCV 拉取")
+        today_df_map, today_fetch_stats = fetch_all_ohlcv(
+            symbols=all_codes,
+            window=today_window,
+            enforce_target_trade_date=True,
+        )
+        print(
+            "[review] 今日数据拉取完成: "
+            f"ok={today_fetch_stats.get('fetch_ok', len(today_df_map))}, "
+            f"fail={today_fetch_stats.get('fetch_fail', 0)}, "
+            f"target_trade_date={today_window.end_trade_date}"
+        )
+        review_codes = _find_big_gainers(today_df_map, name_map_today, threshold=8.0)
     
     if not review_codes:
         print("[review] 今日无涨幅 ≥ 8% 的股票，跳过")
