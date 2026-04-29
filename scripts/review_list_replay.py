@@ -179,29 +179,36 @@ def main() -> int:
 
     # 1. 先获取今日涨幅 ≥ 8% 的股票（使用今日数据）
     print("[review] 获取今日涨幅 ≥ 8% 股票...")
-    from utils.data_loader import load_daily_data
     from utils.trading_clock import resolve_end_calendar_day
+    from integrations.fetch_a_share_csv import _resolve_trading_window, get_stocks_by_board
+    from tools.data_fetcher import fetch_all_ohlcv
     from datetime import timedelta
     
-    today = resolve_end_calendar_day()
+    end_calendar_day = resolve_end_calendar_day()
+    today_window = _resolve_trading_window(end_calendar_day=end_calendar_day, trading_days=1)
+    today = today_window.end_trade_date
     yesterday = today - timedelta(days=1)
     
     # 获取今日数据找涨停股
     print(f"[review] 今日: {today}, 前一日: {yesterday}")
-    from utils.data_loader import get_all_stock_codes
-    all_codes = get_all_stock_codes()
-    
-    today_df_map = {}
-    for code in all_codes:
-        try:
-            df = load_daily_data(code, start_date=today.strftime("%Y%m%d"), end_date=today.strftime("%Y%m%d"))
-            if df is not None and not df.empty:
-                today_df_map[code] = df
-        except Exception:
-            pass
-    
-    from utils.data_loader import get_stock_name_map
-    name_map_today = get_stock_name_map()
+    stock_items = get_stocks_by_board("main_chinext")
+    name_map_today = {
+        str(item.get("code", "")).strip(): str(item.get("name", "")).strip()
+        for item in stock_items
+        if isinstance(item, dict) and str(item.get("code", "")).strip()
+    }
+    all_codes = sorted(name_map_today.keys())
+    today_df_map, today_fetch_stats = fetch_all_ohlcv(
+        symbols=all_codes,
+        window=today_window,
+        enforce_target_trade_date=True,
+    )
+    print(
+        "[review] 今日数据拉取完成: "
+        f"ok={today_fetch_stats.get('fetch_ok', len(today_df_map))}, "
+        f"fail={today_fetch_stats.get('fetch_fail', 0)}, "
+        f"target_trade_date={today_window.end_trade_date}"
+    )
     review_codes = _find_big_gainers(today_df_map, name_map_today, threshold=8.0)
     
     if not review_codes:

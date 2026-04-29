@@ -487,6 +487,7 @@ def run_funnel_job(
         "by_trigger": {k: len(v) for k, v in triggers.items()},
         "benchmark_context": benchmark_context,
         "latest_close_map": latest_close_map,
+        "min_funnel_score": float(getattr(cfg, "min_funnel_score", 0.0) or 0.0),
         # 阶段识别和退出信号
         "markup_symbols": markup_symbols,
         "accum_stage_map": accum_stage_map,
@@ -638,12 +639,13 @@ def run(
         )
         selected_for_ai = trend_selected + accum_selected
 
-    if score_map and cfg.min_funnel_score > 0:
+    min_funnel_score = float(metrics.get("min_funnel_score", 0.0) or 0.0)
+    if score_map and min_funnel_score > 0:
         before = len(selected_for_ai)
-        selected_for_ai = [c for c in selected_for_ai if score_map.get(c, 0.0) >= cfg.min_funnel_score]
+        selected_for_ai = [c for c in selected_for_ai if score_map.get(c, 0.0) >= min_funnel_score]
         dropped = before - len(selected_for_ai)
         if dropped:
-            print(f"[funnel] min_funnel_score={cfg.min_funnel_score} 过滤掉 {dropped} 只低质量候选")
+            print(f"[funnel] min_funnel_score={min_funnel_score} 过滤掉 {dropped} 只低质量候选")
 
     if use_legacy_card and use_legacy_selection:
         bench_line = "未知"
