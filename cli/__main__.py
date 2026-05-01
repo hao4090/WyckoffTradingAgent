@@ -96,6 +96,36 @@ def _get_version() -> str:
         return "dev"
 
 
+def _check_update_async() -> None:
+    """后台检查 PyPI 最新版本，有新版则打印提示。"""
+    import threading
+
+    def _check():
+        try:
+            import urllib.request
+            local_ver = _get_version()
+            if local_ver == "dev":
+                return
+            url = "https://pypi.org/pypi/youngcan-wyckoff-analysis/json"
+            req = urllib.request.Request(url, headers={"Accept": "application/json"})
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                data = json.loads(resp.read())
+            latest = data.get("info", {}).get("version", "")
+            if not latest or latest == local_ver:
+                return
+            local_parts = tuple(int(x) for x in local_ver.split("."))
+            latest_parts = tuple(int(x) for x in latest.split("."))
+            if latest_parts > local_parts:
+                print(
+                    f"\033[33m⬆ 新版本可用: {latest}（当前 {local_ver}），"
+                    f"运行 wyckoff update 升级\033[0m"
+                )
+        except Exception:
+            pass
+
+    threading.Thread(target=_check, daemon=True).start()
+
+
 def _mask(val: str) -> str:
     if len(val) > 8:
         return val[:4] + "****" + val[-4:]
@@ -485,6 +515,8 @@ def _cmd_sync(_args=None):
 # ---------------------------------------------------------------------------
 
 def _cmd_tui(_args=None):
+    _check_update_async()
+
     from cli.tools import ToolRegistry
     tools = ToolRegistry()
 
