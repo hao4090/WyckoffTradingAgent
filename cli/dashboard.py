@@ -510,7 +510,6 @@ body::after{content:'';position:fixed;inset:0;pointer-events:none;z-index:9999;b
     <div class="nav-item" data-page="tailbuy" data-i18n="nav_tailbuy"></div>
     <div class="nav-item" data-page="portfolio" data-i18n="nav_portfolio"></div>
     <div class="nav-item" data-page="memory" data-i18n="nav_memory"></div>
-    <div class="nav-item" data-page="config" data-i18n="nav_config"></div>
     <div class="nav-item" data-page="bgtasks" data-i18n="nav_bgtasks"></div>
     <div class="nav-item" data-page="chatlog" data-i18n="nav_chatlog"></div>
     <div class="nav-item" data-page="agentlog" data-i18n="nav_agentlog"></div>
@@ -561,6 +560,7 @@ zh:{
   agent_log_title:'Agent 日志（最近 200 行）',no_agent_log:'暂无日志 (~/.wyckoff/agent.log)',
   no_recs:'暂无推荐',no_signals:'暂无信号',
   confirm_del_rec:'确认删除推荐记录：',confirm_del_sig:'确认删除信号记录：',confirm_del_session:'确认删除整个会话？会话 ID：',
+  buy_links:'购买 API Key',buy_tickflow:'数据源（TickFlow）',buy_llm:'大模型（1Route）',
 },
 en:{
   nav_overview:'Overview',nav_recommendations:'Recommendations',nav_signals:'Signals',nav_tailbuy:'Tail Buy',nav_portfolio:'Portfolio',
@@ -589,6 +589,7 @@ en:{
   agent_log_title:'Agent Log (last 200 lines)',no_agent_log:'No agent log (~/.wyckoff/agent.log)',
   no_recs:'No recommendations',no_signals:'No signals',
   confirm_del_rec:'Delete recommendation: ',confirm_del_sig:'Delete signal: ',confirm_del_session:'Delete entire session? ID: ',
+  buy_links:'Get API Keys',buy_tickflow:'Data Source (TickFlow)',buy_llm:'LLM API (1Route)',
 }};
 let _lang = localStorage.getItem('wk_lang') || 'zh';
 function t(k){return (I18N[_lang]||I18N.zh)[k]||k}
@@ -627,7 +628,7 @@ async function loadPage(page){
     switch(page){
       case 'overview':return renderOverview(c);case 'recommendations':return renderRecommendations(c);
       case 'signals':return renderSignals(c);case 'tailbuy':return renderTailBuy(c);case 'portfolio':return renderPortfolio(c);
-      case 'memory':return renderMemory(c);case 'config':return renderConfig(c);
+      case 'memory':return renderMemory(c);
       case 'bgtasks':return renderBgTasks(c);
       case 'chatlog':return renderChatLog(c);case 'agentlog':return renderAgentLog(c);
       case 'sync':return renderSync(c);
@@ -639,22 +640,55 @@ function escHtml(s){const d=document.createElement('div');d.textContent=s||'';re
 
 // ═══ Overview ═══
 async function renderOverview(c){
-  const [recs,sigs,port,sync,mem]=await Promise.all([API('/api/recommendations'),API('/api/signals'),API('/api/portfolio'),API('/api/sync'),API('/api/memory')]);
+  const [recs,sigs,port,sync,mem,cfgData]=await Promise.all([API('/api/recommendations'),API('/api/signals'),API('/api/portfolio'),API('/api/sync'),API('/api/memory'),API('/api/config')]);
   const pendingSigs=Array.isArray(sigs)?sigs.filter(s=>s.status==='pending').length:0;
   const totalSigs=Array.isArray(sigs)?sigs.length:0;
   const posCount=port?.positions?.length||0;const cash=port?.free_cash||0;
   const memCount=Array.isArray(mem)?mem.length:0;
   const syncOk=Array.isArray(sync)?sync.filter(s=>s.last_synced_at).length:0;
   const syncTotal=Array.isArray(sync)?sync.length:0;
-  c.innerHTML=`
+  // config data
+  const cfg=cfgData.config||{};const models=cfgData.models||[];const defId=cfgData.default_model||'';const fbId=cfgData.fallback_model||'';
+  let html=`
     <div class="grid fade-in">
       <div class="card"><div class="card-title">${t('card_recs')}</div><div class="card-value">${Array.isArray(recs)?recs.length:0}</div><div class="card-sub">${t('tracked')}</div></div>
       <div class="card"><div class="card-title">${t('card_signals')}</div><div class="card-value">${totalSigs}</div><div class="card-sub">${pendingSigs} ${t('pending_confirm')}</div></div>
       <div class="card"><div class="card-title">${t('card_portfolio')}</div><div class="card-value">${posCount}</div><div class="card-sub">${t('positions')} · ${t('cash')}: &yen;${cash.toLocaleString('zh-CN',{minimumFractionDigits:2})}</div></div>
       <div class="card"><div class="card-title">${t('card_memory')}</div><div class="card-value">${memCount}</div><div class="card-sub">${t('stored')}</div></div>
       <div class="card"><div class="card-title">${t('card_sync')}</div><div class="card-value">${syncOk}/${syncTotal}</div><div class="card-sub">${t('synced')}</div></div>
-    </div>
-    <div style="margin-top:8px"><div class="card fade-in" style="animation-delay:.1s"><div class="card-title">${t('recent_recs')}</div>${renderRecTable(Array.isArray(recs)?recs.slice(0,8):[],false)}</div></div>`;
+    </div>`;
+  // --- purchase links ---
+  html+=`<div class="card fade-in" style="margin-top:12px;animation-delay:.05s"><div class="card-title">${t('buy_links')}</div><div style="display:flex;gap:12px;flex-wrap:wrap">
+    <a href="https://tickflow.org/auth/register?ref=5N4NKTCPL4" target="_blank" rel="noopener" class="btn-accent" style="text-decoration:none">🔗 ${t('buy_tickflow')}</a>
+    <a href="https://www.1route.dev/register?aff=359904261" target="_blank" rel="noopener" class="btn-accent" style="text-decoration:none;border-color:#a78bfa;color:#a78bfa">🔗 ${t('buy_llm')}</a>
+  </div></div>`;
+  // --- data source config ---
+  const editableKeys=['tushare_token','tickflow_api_key'];
+  html+=`<div class="card fade-in" style="margin-top:12px;animation-delay:.1s"><div class="card-title">${t('ds_config')}</div>`;
+  const keys=Object.entries(cfg).filter(([k])=>k!=='models'&&k!=='default'&&k!=='fallback');
+  if(keys.length){keys.forEach(([k,v])=>{
+    const isMasked=String(v||'').includes('****');const canEdit=editableKeys.includes(k);
+    html+=`<div class="cfg-row"><span class="cfg-key">${k}</span><span class="cfg-val${isMasked?' masked':''}" id="ds-val-${k}">${v||`<span style="color:var(--text-dim)">${t('not_set')}</span>`}</span>`;
+    if(canEdit)html+=`<button class="btn-edit" onclick="_editDsKey('${k}')">${t('edit')}</button>`;
+    html+=`</div>`})}
+  else{html+=`<div class="empty">${t('no_config')}</div>`}
+  html+='</div>';
+  // --- model config ---
+  html+=`<div class="card fade-in" style="margin-top:12px;animation-delay:.15s"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px"><div class="card-title" style="margin-bottom:0">${t('model_config')}</div><button class="btn-accent" onclick="_addModel()">${t('add_model')}</button></div>`;
+  if(models.length){
+    html+=`<table class="tbl"><thead><tr><th>${t('th_id')}</th><th>${t('th_provider')}</th><th>${t('th_model')}</th><th>${t('th_apikey')}</th><th>${t('th_baseurl')}</th><th>${t('th_actions')}</th></tr></thead><tbody>`;
+    models.forEach(m=>{const isDef=m.id===defId;const isFb=m.id===fbId;
+      html+=`<tr><td>${escHtml(m.id)}${isDef?' <span class="pill pill-green">DEFAULT</span>':''}${isFb?' <span class="pill pill-yellow">FALLBACK</span>':''}</td><td>${escHtml(m.provider_name||'')}</td><td>${escHtml(m.model||'')}</td><td class="cfg-val masked">${m.api_key||''}</td><td>${escHtml(m.base_url||'(default)')}</td><td style="white-space:nowrap">`;
+      html+=`<button class="btn-edit" onclick="_editModel('${escHtml(m.id)}')">${t('edit')}</button>`;
+      if(!isDef)html+=`<button class="btn-default" onclick="_setDefault('${escHtml(m.id)}')">${t('set_default')}</button>`;
+      if(!isFb&&!isDef)html+=`<button class="btn-fallback" onclick="_setFallback('${escHtml(m.id)}')">⚡Fallback</button>`;
+      html+=`<button class="btn-del" onclick="_delModel('${escHtml(m.id)}')">${t('del')}</button></td></tr>`});
+    html+='</tbody></table>'}else{html+=`<div class="empty">${t('no_models')}</div>`}
+  html+=`<div id="model-form-slot"></div></div>`;
+  // --- recent recs ---
+  html+=`<div class="card fade-in" style="margin-top:12px;animation-delay:.2s"><div class="card-title">${t('recent_recs')}</div>${renderRecTable(Array.isArray(recs)?recs.slice(0,8):[],false)}</div>`;
+  c.innerHTML=html;
+  if(_editingModel==='__new__'){$('#model-form-slot').innerHTML=_modelForm(null,true)}
 }
 function renderRecTable(recs,showDel){
   if(!recs.length)return `<div class="empty">${t('no_data')}</div>`;
@@ -739,36 +773,7 @@ function _modelForm(m,isNew){
       <button class="btn-accent" onclick="_saveModel(${isNew})">${t('save')}</button>
     </div></div>`}
 
-async function renderConfig(c){
-  const data=await API('/api/config');const cfg=data.config||{};const models=data.models||[];const defId=data.default_model||'';const fbId=data.fallback_model||'';
-  // --- data source config ---
-  const editableKeys=['tushare_token','tickflow_api_key'];
-  let html=`<div class="card fade-in"><div class="card-title">${t('ds_config')}</div>`;
-  const keys=Object.entries(cfg).filter(([k])=>k!=='models'&&k!=='default'&&k!=='fallback');
-  if(keys.length){keys.forEach(([k,v])=>{
-    const isMasked=String(v||'').includes('****');
-    const canEdit=editableKeys.includes(k);
-    html+=`<div class="cfg-row"><span class="cfg-key">${k}</span><span class="cfg-val${isMasked?' masked':''}" id="ds-val-${k}">${v||`<span style="color:var(--text-dim)">${t('not_set')}</span>`}</span>`;
-    if(canEdit)html+=`<button class="btn-edit" onclick="_editDsKey('${k}')">${t('edit')}</button>`;
-    html+=`</div>`})}
-  else{html+=`<div class="empty">${t('no_config')}</div>`}
-  html+='</div>';
-  // --- model config ---
-  html+=`<div class="card fade-in" style="margin-top:16px;animation-delay:.1s"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px"><div class="card-title" style="margin-bottom:0">${t('model_config')}</div><button class="btn-accent" onclick="_addModel()">${t('add_model')}</button></div>`;
-  if(models.length){
-    html+=`<table class="tbl"><thead><tr><th>${t('th_id')}</th><th>${t('th_provider')}</th><th>${t('th_model')}</th><th>${t('th_apikey')}</th><th>${t('th_baseurl')}</th><th>${t('th_actions')}</th></tr></thead><tbody>`;
-    models.forEach(m=>{const isDef=m.id===defId;const isFb=m.id===fbId;
-      html+=`<tr><td>${escHtml(m.id)}${isDef?' <span class="pill pill-green">DEFAULT</span>':''}${isFb?' <span class="pill pill-yellow">FALLBACK</span>':''}</td><td>${escHtml(m.provider_name||'')}</td><td>${escHtml(m.model||'')}</td><td class="cfg-val masked">${m.api_key||''}</td><td>${escHtml(m.base_url||'(default)')}</td><td style="white-space:nowrap">`;
-      html+=`<button class="btn-edit" onclick="_editModel('${escHtml(m.id)}')">${t('edit')}</button>`;
-      if(!isDef)html+=`<button class="btn-default" onclick="_setDefault('${escHtml(m.id)}')">${t('set_default')}</button>`;
-      if(!isFb&&!isDef)html+=`<button class="btn-fallback" onclick="_setFallback('${escHtml(m.id)}')">⚡Fallback</button>`;
-      html+=`<button class="btn-del" onclick="_delModel('${escHtml(m.id)}')">${t('del')}</button></td></tr>`});
-    html+='</tbody></table>'}else{html+=`<div class="empty">${t('no_models')}</div>`}
-  html+=`<div id="model-form-slot"></div></div>`;
-  c.innerHTML=html;
-  // restore form if editing
-  if(_editingModel==='__new__'){$('#model-form-slot').innerHTML=_modelForm(null,true)}
-}
+
 
 window._addModel=function(){_editingModel='__new__';const slot=$('#model-form-slot');if(slot)slot.innerHTML=_modelForm(null,true)};
 window._editModel=async function(id){_editingModel=id;const data=await API('/api/config');const m=(data.models||[]).find(x=>x.id===id);if(!m)return;const slot=$('#model-form-slot');if(slot)slot.innerHTML=_modelForm(m,false)};
@@ -782,21 +787,21 @@ window._saveModel=async function(isNew){
   try{
     if(isNew){await fetch('/api/models',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(entry)})}
     else{await fetch('/api/models/'+encodeURIComponent(id),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(entry)})}
-    _editingModel=null;loadPage('config');
+    _editingModel=null;loadPage('overview');
   }catch(e){alert('Error: '+e.message)}
 };
-window._delModel=async function(id){if(!confirm(t('confirm_del_model')+id+'?'))return;await fetch('/api/models/'+encodeURIComponent(id),{method:'DELETE'});loadPage('config')};
-window._setDefault=async function(id){await fetch('/api/models/'+encodeURIComponent(id)+'/default',{method:'PUT'});loadPage('config')};
-window._setFallback=async function(id){await fetch('/api/models/'+encodeURIComponent(id)+'/fallback',{method:'PUT'});loadPage('config')};
+window._delModel=async function(id){if(!confirm(t('confirm_del_model')+id+'?'))return;await fetch('/api/models/'+encodeURIComponent(id),{method:'DELETE'});loadPage('overview')};
+window._setDefault=async function(id){await fetch('/api/models/'+encodeURIComponent(id)+'/default',{method:'PUT'});loadPage('overview')};
+window._setFallback=async function(id){await fetch('/api/models/'+encodeURIComponent(id)+'/fallback',{method:'PUT'});loadPage('overview')};
 window._editDsKey=function(key){
   const valEl=$('#ds-val-'+key);if(!valEl)return;
   const cur=valEl.textContent.includes('****')?'':valEl.textContent;
-  valEl.innerHTML=`<input class="form-input" id="ds-input-${key}" type="password" value="${escHtml(cur)}" style="width:200px;display:inline-block" placeholder="enter new value"><button class="btn-accent" style="margin-left:8px" onclick="_saveDsKey('${key}')">${t('save')}</button><button class="btn-del" style="margin-left:4px" onclick="loadPage('config')">${t('cancel')}</button>`;
+  valEl.innerHTML=`<input class="form-input" id="ds-input-${key}" type="password" value="${escHtml(cur)}" style="width:200px;display:inline-block" placeholder="enter new value"><button class="btn-accent" style="margin-left:8px" onclick="_saveDsKey('${key}')">${t('save')}</button><button class="btn-del" style="margin-left:4px" onclick="loadPage('overview')">${t('cancel')}</button>`;
   $(`#ds-input-${key}`).focus()};
 window._saveDsKey=async function(key){
   const v=$(`#ds-input-${key}`).value.trim();if(!v)return;
   await fetch('/api/config/'+encodeURIComponent(key),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({value:v})});
-  loadPage('config')}
+  loadPage('overview')}
 
 // ═══ Sync ═══
 async function renderSync(c){
