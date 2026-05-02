@@ -166,24 +166,24 @@ with content_col:
                     st.session_state.get("chat_provider", "1router")
                 ) if st.session_state.get("chat_provider", "1router") in SUPPORTED_PROVIDERS else 0,
                 format_func=lambda x: PROVIDER_LABELS.get(x, x),
-                help="选择驱动读盘室对话的大模型供应商。默认 1Router，支持 GPT/Claude/Gemini 全系模型。",
+                help="选择驱动读盘室对话的大模型供应商。默认 1Route，支持 GPT/Claude/Gemini 全系模型。",
             )
 
             st.markdown("---")
-            st.markdown("**[1Router（推荐）](https://www.1route.dev/register?aff=359904261)** — 一个 Key 用全部大模型")
+            st.markdown("**[1Route（推荐）](https://www.1route.dev/register?aff=359904261)**")
             new_1router_key = st.text_input(
-                "1Router API Key",
+                "1Route API Key",
                 value=st.session_state.get("1router_api_key", ""),
                 type="password",
                 placeholder="sk-...",
             )
             new_1router_model = st.text_input(
-                "1Router 默认模型",
+                "1Route 默认模型",
                 value=st.session_state.get("1router_model", ""),
                 placeholder="gpt-5.5",
             )
             new_1router_base_url = st.text_input(
-                "1Router Base URL",
+                "1Route Base URL",
                 value=st.session_state.get("1router_base_url", "https://www.1route.dev/v1"),
                 placeholder="https://www.1route.dev/v1",
                 disabled=True,
