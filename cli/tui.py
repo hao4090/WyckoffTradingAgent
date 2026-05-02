@@ -421,7 +421,12 @@ class WyckoffTUI(App):
         self.query_one("#chat-input", Input).focus()
 
     def _build_status_text(self) -> str:
-        parts = ["Wyckoff CLI"]
+        from importlib.metadata import version as _ver
+        try:
+            ver = _ver("youngcan-wyckoff-analysis")
+        except Exception:
+            ver = "?"
+        parts = [f"Wyckoff CLI v{ver}"]
         prov = self._state.get("provider_name", "")
         model = self._state.get("model", "")
         if prov and model:

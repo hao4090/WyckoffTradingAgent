@@ -40,6 +40,8 @@ def _get_config() -> dict:
             ak = str(mc.get("api_key", "") or "")
             mc["api_key"] = (ak[:4] + "****" + ak[-4:]) if len(ak) > 8 else ("****" if ak else "")
             safe_models.append(mc)
+        for k in ("models", "default", "fallback"):
+            safe.pop(k, None)
         return {"config": safe, "models": safe_models, "default_model": default_id, "fallback_model": fallback_id}
     except Exception as e:
         return {"config": {}, "models": [], "default_model": "", "error": str(e)}
@@ -457,7 +459,7 @@ body{background:var(--bg);color:var(--text);font-family:var(--font);line-height:
 .pill-green{background:rgba(16,185,129,.12);color:var(--green);border:1px solid rgba(16,185,129,.2)}
 .pill-red{background:rgba(255,71,87,.12);color:var(--red);border:1px solid rgba(255,71,87,.2)}
 .pill-amber{background:rgba(245,158,11,.12);color:var(--amber);border:1px solid rgba(245,158,11,.2)}
-.pill-yellow{background:rgba(234,179,8,.12);color:#eab308;border:1px solid rgba(234,179,8,.25)}
+.pill-yellow{background:rgba(167,139,250,.12);color:#a78bfa;border:1px solid rgba(167,139,250,.25)}
 .pill-blue{background:rgba(59,130,246,.12);color:var(--blue);border:1px solid rgba(59,130,246,.2)}
 .pill-dim{background:var(--bg3);color:var(--text-dim);border:1px solid var(--border)}
 
@@ -481,6 +483,8 @@ body{background:var(--bg);color:var(--text);font-family:var(--font);line-height:
 .btn-edit:hover{background:rgba(59,130,246,.1);border-color:var(--blue)}
 .btn-default{background:none;border:1px solid var(--border);color:var(--amber);cursor:pointer;font-size:10px;padding:3px 8px;border-radius:3px;font-family:var(--font);margin-right:4px}
 .btn-default:hover{background:rgba(245,158,11,.1);border-color:var(--amber)}
+.btn-fallback{background:none;border:1px solid var(--border);color:#a78bfa;cursor:pointer;font-size:10px;padding:3px 8px;border-radius:3px;font-family:var(--font);margin-right:4px}
+.btn-fallback:hover{background:rgba(167,139,250,.1);border-color:#a78bfa}
 .model-form{background:var(--bg3);border:1px solid var(--border2);border-radius:4px;padding:16px;margin-top:12px}
 .form-row{display:flex;align-items:center;margin-bottom:10px;gap:8px}
 .form-row:last-child{margin-bottom:0}
@@ -740,7 +744,7 @@ async function renderConfig(c){
   // --- data source config ---
   const editableKeys=['tushare_token','tickflow_api_key'];
   let html=`<div class="card fade-in"><div class="card-title">${t('ds_config')}</div>`;
-  const keys=Object.entries(cfg).filter(([k])=>k!=='models'&&k!=='default');
+  const keys=Object.entries(cfg).filter(([k])=>k!=='models'&&k!=='default'&&k!=='fallback');
   if(keys.length){keys.forEach(([k,v])=>{
     const isMasked=String(v||'').includes('****');
     const canEdit=editableKeys.includes(k);
@@ -757,7 +761,7 @@ async function renderConfig(c){
       html+=`<tr><td>${escHtml(m.id)}${isDef?' <span class="pill pill-green">DEFAULT</span>':''}${isFb?' <span class="pill pill-yellow">FALLBACK</span>':''}</td><td>${escHtml(m.provider_name||'')}</td><td>${escHtml(m.model||'')}</td><td class="cfg-val masked">${m.api_key||''}</td><td>${escHtml(m.base_url||'(default)')}</td><td style="white-space:nowrap">`;
       html+=`<button class="btn-edit" onclick="_editModel('${escHtml(m.id)}')">${t('edit')}</button>`;
       if(!isDef)html+=`<button class="btn-default" onclick="_setDefault('${escHtml(m.id)}')">${t('set_default')}</button>`;
-      if(!isFb&&!isDef)html+=`<button class="btn-default" onclick="_setFallback('${escHtml(m.id)}')">⚡Fallback</button>`;
+      if(!isFb&&!isDef)html+=`<button class="btn-fallback" onclick="_setFallback('${escHtml(m.id)}')">⚡Fallback</button>`;
       html+=`<button class="btn-del" onclick="_delModel('${escHtml(m.id)}')">${t('del')}</button></td></tr>`});
     html+='</tbody></table>'}else{html+=`<div class="empty">${t('no_models')}</div>`}
   html+=`<div id="model-form-slot"></div></div>`;
