@@ -123,7 +123,7 @@ class TickFlowClient:
         self.max_retries = max(int(self.max_retries), 1)
         self.retry_backoff_seconds = max(float(self.retry_backoff_seconds), 0.1)
         if not self.api_key:
-            raise ValueError("TICKFLOW_API_KEY 未配置")
+            raise ValueError("TICKFLOW_API_KEY 未配置，购买: https://tickflow.org/auth/register?ref=5N4NKTCPL4")
 
     def _request(self, path: str, *, params: dict[str, Any] | None = None) -> dict[str, Any]:
         last_err: Exception | None = None

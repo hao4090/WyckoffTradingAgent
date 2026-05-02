@@ -73,11 +73,11 @@ tickflow → tushare → akshare → baostock → efinance
 
 任一源不可用时自动切换，无需干预。
 
-> **推荐接入 TickFlow（实时/分时/高频能力更强）**  
-> 注册链接：[TickFlow 注册](https://tickflow.org/auth/register?ref=5N4NKTCPL4)
+> **数据源 API Key（解锁实时行情 + 分钟K线 + 盘中监控）**  
+> 购买链接：[TickFlow 注册](https://tickflow.org/auth/register?ref=5N4NKTCPL4)
 >
-> **Tushare（日线/财务数据）**  
-> 注册链接：[Tushare 注册](https://tushare.pro/register?reg=671776)
+> **大模型 API Key（支持 Gemini / Claude / OpenAI / DeepSeek 等）**  
+> 购买链接：[1Route 注册](https://www.1route.dev/register?aff=359904261)
 
 ## 快速开始
 
@@ -219,7 +219,7 @@ Agent 的武器库 — 10 个量价工具 + 5 个通用能力：
 | `FEISHU_WEBHOOK_URL` | 飞书推送 | 可选 |
 | `TG_BOT_TOKEN` + `TG_CHAT_ID` | Telegram 推送 | 可选 |
 
-> Tushare 注册推荐：[此链接注册](https://tushare.pro/weborder/#/login?reg=955650)，双方可提升数据权益。
+> 数据源购买：[TickFlow →](https://tickflow.org/auth/register?ref=5N4NKTCPL4) ｜ 大模型购买：[1Route →](https://www.1route.dev/register?aff=359904261)
 
 完整配置项和 GitHub Actions Secrets 说明见 [架构文档](docs/ARCHITECTURE.md)。
 

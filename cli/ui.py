@@ -218,7 +218,7 @@ def configure_model(state: dict) -> dict | None:
         console.print(f"  [green]+[/green] {env_key} [dim]({masked})[/dim]")
         api_key = env_val
     else:
-        api_key = _prompt_secret(f"输入 {env_key}")
+        api_key = _prompt_secret(f"输入 {env_key} (购买: https://www.1route.dev/register?aff=359904261)")
         if not api_key:
             print_error("API Key 不能为空。")
             return None

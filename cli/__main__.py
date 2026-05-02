@@ -243,7 +243,7 @@ def _cmd_model(args):
             print(f"✗ 不支持: {provider}")
             sys.exit(1)
         import getpass
-        api_key = getpass.getpass("API Key: ").strip()
+        api_key = getpass.getpass("API Key (购买: https://www.1route.dev/register?aff=359904261): ").strip()
         if not api_key:
             print("已取消")
             return

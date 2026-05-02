@@ -698,7 +698,7 @@ def _fetch_stock_tickflow(
     """
     client = _get_tickflow_client()
     if client is None:
-        raise RuntimeError("TICKFLOW_API_KEY 未配置")
+        raise RuntimeError("TICKFLOW_API_KEY 未配置，购买: https://tickflow.org/auth/register?ref=5N4NKTCPL4")
 
     try:
         start_d = datetime.strptime(start, "%Y%m%d").date()

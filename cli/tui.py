@@ -723,8 +723,8 @@ class WyckoffTUI(App):
     # ----- /config 交互 -----
 
     _CONFIG_KEYS = {
-        "tushare_token": ("Tushare Token", "TUSHARE_TOKEN", "https://tushare.pro 注册获取"),
-        "tickflow_api_key": ("TickFlow API Key", "TICKFLOW_API_KEY", "https://tickflow.org 注册获取"),
+        "tushare_token": ("Tushare Token", "TUSHARE_TOKEN", ""),
+        "tickflow_api_key": ("TickFlow API Key", "TICKFLOW_API_KEY", "购买: https://tickflow.org/auth/register?ref=5N4NKTCPL4"),
     }
 
     def _show_config(self) -> None:
@@ -870,7 +870,7 @@ class WyckoffTUI(App):
         elif callback_id == "model_provider":
             self._input_buf["provider"] = value
             log.write(Text.from_markup(f"  供应商: {value}"))
-            log.write(Text.from_markup("  输入 API Key："))
+            log.write(Text.from_markup("  输入 API Key（购买: [link=https://www.1route.dev/register?aff=359904261]1route.dev[/link]）："))
             inp.placeholder = "API Key..."
             inp.password = True
             self._input_mode = _InputState.MODEL_KEY
@@ -992,7 +992,7 @@ class WyckoffTUI(App):
                 return
             self._input_buf["provider"] = prov
             log.write(Text.from_markup(f"  供应商: {prov}"))
-            log.write(Text.from_markup("  输入 API Key："))
+            log.write(Text.from_markup("  输入 API Key（购买: [link=https://www.1route.dev/register?aff=359904261]1route.dev[/link]）："))
             inp.placeholder = "API Key..."
             inp.password = True
             self._input_mode = _InputState.MODEL_KEY
