@@ -1362,11 +1362,18 @@ class WyckoffTUI(App):
                     if executed_tool_summaries
                     else ""
                 )
+                _metadata = {
+                    "cache_read": round_usage.get("cache_read_tokens", 0),
+                    "cache_write": round_usage.get("cache_write_tokens", 0),
+                    "stop_reason": round_usage.get("stop_reason", "stop"),
+                    "rounds": round_idx + 1,
+                }
                 _chatlog_save(
                     "assistant", text_buf,
                     model=_model_name, provider=_provider_name,
                     tokens_in=total_input, tokens_out=total_output,
                     elapsed_s=round(elapsed, 2), tool_calls_json=_tc_json,
+                    metadata_json=json.dumps(_metadata, ensure_ascii=False),
                 )
                 self._agent_log.info(
                     "session=%s done in=%.1fs tokens=%d/%d",

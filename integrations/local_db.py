@@ -18,7 +18,7 @@ from core.constants import LOCAL_DB_PATH
 _lock = threading.Lock()
 _conn: sqlite3.Connection | None = None
 
-_SCHEMA_VERSION = 6
+_SCHEMA_VERSION = 7
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -103,6 +103,7 @@ CREATE TABLE IF NOT EXISTS chat_log (
     elapsed_s REAL DEFAULT 0,
     error TEXT DEFAULT '',
     tool_calls TEXT DEFAULT '',
+    metadata TEXT DEFAULT '',
     created_at TEXT DEFAULT (datetime('now'))
 );
 
@@ -199,6 +200,11 @@ def init_db() -> None:
         _backfill_background_tasks_from_chat_log(conn)
     if current < 6:
         _migrate_fts5_memory(conn)
+    if current < 7:
+        try:
+            conn.execute("ALTER TABLE chat_log ADD COLUMN metadata TEXT DEFAULT ''")
+        except Exception:
+            pass
     if current < _SCHEMA_VERSION:
         conn.execute(
             "INSERT OR REPLACE INTO schema_version(version) VALUES(?)",
@@ -729,16 +735,17 @@ def save_chat_log(
     elapsed_s: float = 0,
     error: str = "",
     tool_calls_json: str = "",
+    metadata_json: str = "",
 ) -> int:
     conn = get_db()
     with conn:
         cur = conn.execute(
             """INSERT INTO chat_log
                (session_id, role, content, model, provider,
-                tokens_in, tokens_out, elapsed_s, error, tool_calls)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                tokens_in, tokens_out, elapsed_s, error, tool_calls, metadata)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (session_id, role, content, model, provider,
-             tokens_in, tokens_out, elapsed_s, error, tool_calls_json),
+             tokens_in, tokens_out, elapsed_s, error, tool_calls_json, metadata_json),
         )
         return cur.lastrowid or 0
 

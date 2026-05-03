@@ -837,25 +837,46 @@ async function renderBgTaskDetail(c,taskId){
 // ═══ Chat Log (Opik-style Tracing UI) ═══
 let _chatSessionId=null;
 let _chatSelectedIdx=0;
+let _chatViewMode='pretty';
+function toYaml(obj,indent=0){
+  if(obj==null)return 'null';
+  if(typeof obj==='string')return obj.includes('\n')?`|\n${obj.split('\n').map(l=>' '.repeat(indent+2)+l).join('\n')}`:obj;
+  if(typeof obj==='number'||typeof obj==='boolean')return String(obj);
+  if(Array.isArray(obj))return obj.length===0?'[]':'\n'+obj.map(v=>' '.repeat(indent)+'- '+toYaml(v,indent+2)).join('\n');
+  if(typeof obj==='object'){const keys=Object.keys(obj);if(!keys.length)return '{}';return '\n'+keys.map(k=>' '.repeat(indent)+k+': '+toYaml(obj[k],indent+2)).join('\n')}
+  return String(obj);
+}
+function fmtContent(raw,structured,mode){
+  if(mode==='json')return escHtml(JSON.stringify(structured,null,2));
+  if(mode==='yaml')return escHtml(toYaml(structured).trimStart());
+  return escHtml(raw||'—');
+}
+function viewTabs(id){
+  const modes=['pretty','json','yaml'];
+  return modes.map(m=>`<button onclick="_chatViewMode='${m}';loadPage('chatlog')" style="font-size:10px;padding:2px 8px;border-radius:3px;border:1px solid ${_chatViewMode===m?'var(--accent)':'var(--border)'};background:${_chatViewMode===m?'var(--accent-dim)':'transparent'};color:${_chatViewMode===m?'var(--accent)':'var(--text-dim)'};cursor:pointer">${m.toUpperCase()}</button>`).join('');
+}
 async function renderChatLog(c){
   if(_chatSessionId)return renderChatSession(c,_chatSessionId);
   const sessions=await API('/api/chat-sessions');
   if(!Array.isArray(sessions)||!sessions.length){c.innerHTML=`<div class="empty">${t('no_sessions')}</div>`;return}
   const total=sessions.length;
   const totalTokens=sessions.reduce((a,s)=>(a+(s.total_tokens_in||0)+(s.total_tokens_out||0)),0);
+  const totalTraces=sessions.reduce((a,s)=>(a+Math.ceil((s.msg_count||0)/2)),0);
   const errCount=sessions.filter(s=>s.last_error).length;
   const errRate=total?(errCount/total*100).toFixed(1):'0';
   c.innerHTML=`<div class="fade-in">
     <div style="display:flex;gap:24px;margin-bottom:16px;padding:12px 16px;background:var(--card);border-radius:8px;border:1px solid var(--border)">
       <div><span style="font-size:11px;color:var(--text-dim)">Threads</span><div style="font-size:18px;font-weight:600">${total}</div></div>
+      <div><span style="font-size:11px;color:var(--text-dim)">Traces</span><div style="font-size:18px;font-weight:600">${totalTraces}</div></div>
       <div><span style="font-size:11px;color:var(--text-dim)">Error Rate</span><div style="font-size:18px;font-weight:600">${errRate}%</div></div>
       <div><span style="font-size:11px;color:var(--text-dim)">Total Tokens</span><div style="font-size:18px;font-weight:600">${totalTokens.toLocaleString()}</div></div>
     </div>
-    <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Start time</th><th>First message</th><th>#</th><th>Tokens</th><th>Model</th><th>Status</th><th></th></tr></thead><tbody>${sessions.map(s=>{
+    <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Start time</th><th>First message</th><th>Traces</th><th>Tokens</th><th>Model</th><th>Status</th><th></th></tr></thead><tbody>${sessions.map(s=>{
     const hasErr=s.last_error?'<span class="pill pill-red">ERR</span>':'<span class="pill pill-green">OK</span>';
     const firstMsg=(s.first_user_msg||'').slice(0,60)+(s.first_user_msg&&s.first_user_msg.length>60?'...':'');
     const tokens=((s.total_tokens_in||0)+(s.total_tokens_out||0)).toLocaleString();
-    return `<tr style="cursor:pointer" onclick="viewSession('${s.session_id}')"><td style="white-space:nowrap">${localTime(s.started_at)}</td><td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text)">${escHtml(firstMsg)||'<span style="color:var(--text-dim)">—</span>'}</td><td>${s.msg_count||0}</td><td>${tokens}</td><td style="font-size:11px;color:var(--text-dim)">${s.model||'—'}</td><td>${hasErr}</td><td><button class="btn-del" onclick="event.stopPropagation();delSession('${s.session_id}')">${t('del')}</button></td></tr>`}).join('')}</tbody></table></div></div>`}
+    const traceCount=Math.ceil((s.msg_count||0)/2);
+    return `<tr style="cursor:pointer" onclick="viewSession('${s.session_id}')"><td style="white-space:nowrap">${localTime(s.started_at)}</td><td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text)">${escHtml(firstMsg)||'<span style="color:var(--text-dim)">—</span>'}</td><td>${traceCount}</td><td>${tokens}</td><td style="font-size:11px;color:var(--text-dim)">${s.model||'—'}</td><td>${hasErr}</td><td><button class="btn-del" onclick="event.stopPropagation();delSession('${s.session_id}')">${t('del')}</button></td></tr>`}).join('')}</tbody></table></div></div>`}
 window.viewSession=function(sid){_chatSessionId=sid;_chatSelectedIdx=0;loadPage('chatlog')};
 window.backToSessions=function(){_chatSessionId=null;loadPage('chatlog')};
 window.delSession=async function(sid){if(!confirm(t('confirm_del_session')+sid+'?'))return;await fetch('/api/chat-sessions/'+sid,{method:'DELETE'});_chatSessionId=null;loadPage('chatlog')};
@@ -863,7 +884,6 @@ window.selectTrace=function(idx){_chatSelectedIdx=idx;loadPage('chatlog')};
 async function renderChatSession(c,sid){
   const logs=await API('/api/chat-log/'+sid);
   if(!Array.isArray(logs)||!logs.length){c.innerHTML=`<div class="empty">${t('no_messages')}</div>`;return}
-  // Group into traces: each user msg + following assistant msg = one trace
   const traces=[];let cur=null;
   for(const l of logs){
     if(l.role==='user'){if(cur)traces.push(cur);cur={user:l,assistant:null,spans:[]};}
@@ -875,14 +895,24 @@ async function renderChatSession(c,sid){
   const sel=Math.min(_chatSelectedIdx,traces.length-1);
   const selTrace=traces[sel];
   const selLog=selTrace?.assistant||selTrace?.user;
-  // Parse tool_calls JSON
   let toolSpans=[];
   if(selTrace?.assistant?.tool_calls){try{const tc=JSON.parse(selTrace.assistant.tool_calls);if(Array.isArray(tc))toolSpans=tc;else if(typeof tc==='string')toolSpans=[{name:tc}];}catch(e){toolSpans=[{name:selTrace.assistant.tool_calls}];}}
+  let meta={};
+  if(selTrace?.assistant?.metadata){try{meta=JSON.parse(selTrace.assistant.metadata)||{};}catch(e){}}
+  const totalSpans=traces.reduce((a,tr)=>{try{const tc=tr.assistant?.tool_calls?JSON.parse(tr.assistant.tool_calls):[];return a+(Array.isArray(tc)?tc.length:0)}catch(e){return a}},0);
+  const inputStruct={role:'user',content:selTrace?.user?.content||''};
+  const outputStruct={role:'assistant',content:selTrace?.assistant?.content||'',model:selLog?.model||'',provider:selLog?.provider||'',usage:{input:selLog?.tokens_in||0,output:selLog?.tokens_out||0,cache_read:meta.cache_read||0,cache_write:meta.cache_write||0,total:(selLog?.tokens_in||0)+(selLog?.tokens_out||0)+(meta.cache_read||0)},elapsed_s:selLog?.elapsed_s||0,stop_reason:meta.stop_reason||'stop',rounds:meta.rounds||1};
+  if(toolSpans.length)outputStruct.tool_calls=toolSpans.map(s=>({name:s.name||s.tool||'tool',status:s.status||'ok'}));
   c.innerHTML=`<div class="fade-in" style="display:flex;height:calc(100vh - 120px);gap:0">
-    <!-- Left: Spans Tree -->
+    <!-- Left: Traces + Spans Tree -->
     <div style="width:380px;min-width:320px;border-right:1px solid var(--border);overflow-y:auto;padding:12px">
-      <div style="margin-bottom:12px"><span style="cursor:pointer;color:var(--accent)" onclick="backToSessions()">&larr; ${t('back')}</span></div>
-      <div style="font-size:11px;color:var(--text-dim);margin-bottom:8px">Traces ${traces.length}</div>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+        <span style="cursor:pointer;color:var(--accent)" onclick="backToSessions()">&larr; ${t('back')}</span>
+        <div style="display:flex;gap:8px;font-size:10px;color:var(--text-dim)">
+          <span>Traces <b>${traces.length}</b></span>
+          <span>Spans <b>${totalSpans}</b></span>
+        </div>
+      </div>
       ${traces.map((tr,i)=>{
         const isActive=i===sel;
         const bg=isActive?'background:var(--accent-dim);border-left:3px solid var(--accent)':'border-left:3px solid transparent';
@@ -891,49 +921,67 @@ async function renderChatSession(c,sid){
         const time=localTime(tr.user?.created_at||tr.assistant?.created_at);
         const dur=tr.assistant?.elapsed_s?tr.assistant.elapsed_s+'s':'';
         const tIn=tr.assistant?.tokens_in||0;const tOut=tr.assistant?.tokens_out||0;
-        const hasTools=tr.assistant?.tool_calls?true:false;
-        return `<div onclick="selectTrace(${i})" style="padding:8px 10px;margin-bottom:4px;border-radius:6px;cursor:pointer;${bg}">
+        let trToolSpans=[];
+        if(tr.assistant?.tool_calls){try{const tc=JSON.parse(tr.assistant.tool_calls);if(Array.isArray(tc))trToolSpans=tc;}catch(e){}}
+        return `<div onclick="selectTrace(${i})" style="padding:8px 10px;margin-bottom:2px;border-radius:6px;cursor:pointer;${bg}">
           <div style="display:flex;align-items:center;gap:6px;margin-bottom:3px">
             <span style="font-size:10px;color:var(--text-dim)">${time}</span>
-            ${dur?`<span style="font-size:10px;color:var(--text-dim)">⏱ ${dur}</span>`:''}
-            ${hasTools?'<span class="pill pill-dim" style="font-size:9px">tools</span>':''}
+            ${dur?`<span style="font-size:10px;color:var(--text-dim)">${dur}</span>`:''}
+            ${trToolSpans.length?`<span class="pill pill-dim" style="font-size:9px">${trToolSpans.length} spans</span>`:''}
           </div>
           <div style="font-size:12px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHtml(uContent)}</div>
           ${aContent?`<div style="font-size:11px;color:var(--text-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px">→ ${escHtml(aContent)}</div>`:''}
           ${tIn||tOut?`<div style="font-size:10px;color:var(--text-dim);margin-top:2px">⇄ ${tIn}/${tOut}</div>`:''}
+          ${trToolSpans.length&&isActive?`<div style="margin-top:4px;padding-left:8px;border-left:2px solid var(--border)">${trToolSpans.map((sp,si)=>{
+            const statusColor=sp.status==='error'?'var(--red)':sp.status==='background'?'cyan':'var(--accent)';
+            return `<div style="font-size:10px;padding:2px 0;color:var(--text-dim)"><span style="color:${statusColor}">${sp.status==='error'?'✗':sp.status==='background'?'↗':'✓'}</span> ${escHtml(sp.name||sp.tool||'tool')} <span style="opacity:0.5">${escHtml(sp.args_brief||'')}</span></div>`}).join('')}</div>`:''}
         </div>`}).join('')}
     </div>
     <!-- Right: Detail Panel -->
     <div style="flex:1;overflow-y:auto;padding:16px 20px">
-      <div style="display:flex;align-items:center;gap:16px;margin-bottom:16px;padding-bottom:12px;border-bottom:1px solid var(--border)">
-        <span style="font-size:12px;color:var(--text-dim)">📅 ${localTime(selLog?.created_at)}</span>
-        ${selLog?.elapsed_s?`<span style="font-size:12px;color:var(--text-dim)">⏱ ${selLog.elapsed_s}s</span>`:''}
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;padding-bottom:12px;border-bottom:1px solid var(--border);flex-wrap:wrap">
+        <span style="font-size:12px;color:var(--text-dim)">${localTime(selLog?.created_at)}</span>
+        ${selLog?.elapsed_s?`<span style="font-size:12px;color:var(--text-dim)">${selLog.elapsed_s}s</span>`:''}
         ${selLog?.model?`<span style="font-size:11px;padding:2px 8px;border-radius:4px;background:var(--accent-dim);color:var(--accent)">${selLog.model}</span>`:''}
+        ${selLog?.provider?`<span style="font-size:10px;padding:2px 6px;border-radius:3px;background:var(--card);border:1px solid var(--border);color:var(--text-dim)">${selLog.provider}</span>`:''}
         ${selLog?.tokens_in||selLog?.tokens_out?`<span style="font-size:12px;color:var(--text-dim)"># ${(selLog.tokens_in||0)+(selLog.tokens_out||0)}</span>`:''}
+        ${meta.rounds&&meta.rounds>1?`<span style="font-size:10px;color:var(--text-dim)">${meta.rounds} rounds</span>`:''}
       </div>
       ${selLog?.error?`<div style="background:var(--red-bg,rgba(255,0,0,0.1));border-radius:6px;padding:8px 12px;margin-bottom:12px;font-size:12px;color:var(--red)">${escHtml(selLog.error)}</div>`:''}
       <!-- Input Section -->
-      <details open style="margin-bottom:12px"><summary style="font-size:13px;font-weight:600;cursor:pointer;padding:8px 0;border-bottom:1px solid var(--border)">Input</summary>
-        <pre style="font-size:12px;line-height:1.5;color:var(--text);white-space:pre-wrap;word-break:break-all;padding:12px 0;max-height:200px;overflow-y:auto">${escHtml(selTrace?.user?.content||'—')}</pre>
+      <details open style="margin-bottom:12px"><summary style="font-size:13px;font-weight:600;cursor:pointer;padding:8px 0;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between">
+        <span>Input</span><span style="display:flex;gap:4px">${viewTabs('input')}</span>
+      </summary>
+        <pre style="font-size:12px;line-height:1.5;color:var(--text);white-space:pre-wrap;word-break:break-all;padding:12px 0;max-height:200px;overflow-y:auto">${fmtContent(selTrace?.user?.content,inputStruct,_chatViewMode)}</pre>
       </details>
       <!-- Output Section -->
-      <details open style="margin-bottom:12px"><summary style="font-size:13px;font-weight:600;cursor:pointer;padding:8px 0;border-bottom:1px solid var(--border)">Output</summary>
-        <pre style="font-size:12px;line-height:1.5;color:var(--text);white-space:pre-wrap;word-break:break-all;padding:12px 0;max-height:300px;overflow-y:auto">${escHtml(selTrace?.assistant?.content||'—')}</pre>
+      <details open style="margin-bottom:12px"><summary style="font-size:13px;font-weight:600;cursor:pointer;padding:8px 0;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between">
+        <span>Output</span><span style="display:flex;gap:4px">${viewTabs('output')}</span>
+      </summary>
+        <pre style="font-size:12px;line-height:1.5;color:var(--text);white-space:pre-wrap;word-break:break-all;padding:12px 0;max-height:300px;overflow-y:auto">${fmtContent(selTrace?.assistant?.content,outputStruct,_chatViewMode)}</pre>
       </details>
-      <!-- Tool Calls Section -->
-      ${toolSpans.length?`<details style="margin-bottom:12px"><summary style="font-size:13px;font-weight:600;cursor:pointer;padding:8px 0;border-bottom:1px solid var(--border)">Tool Calls (${toolSpans.length})</summary>
-        <div style="padding:12px 0">${toolSpans.map(sp=>`<div style="padding:6px 10px;margin-bottom:6px;border-radius:6px;background:var(--card);border:1px solid var(--border)">
-          <span class="pill pill-dim" style="font-size:10px">${escHtml(sp.name||sp.tool||'tool')}</span>
-          ${sp.args?`<pre style="font-size:11px;color:var(--text-dim);margin-top:4px;white-space:pre-wrap;max-height:100px;overflow-y:auto">${escHtml(typeof sp.args==='string'?sp.args:JSON.stringify(sp.args,null,2))}</pre>`:''}
+      <!-- Tool Calls / Spans Section -->
+      ${toolSpans.length?`<details open style="margin-bottom:12px"><summary style="font-size:13px;font-weight:600;cursor:pointer;padding:8px 0;border-bottom:1px solid var(--border)">Spans (${toolSpans.length})</summary>
+        <div style="padding:12px 0">${toolSpans.map((sp,si)=>{
+          const statusIcon=sp.status==='error'?'<span style="color:var(--red)">✗</span>':sp.status==='background'?'<span style="color:cyan">↗</span>':'<span style="color:var(--accent)">✓</span>';
+          return `<div style="padding:8px 10px;margin-bottom:6px;border-radius:6px;background:var(--card);border:1px solid var(--border)">
+          <div style="display:flex;align-items:center;gap:8px">${statusIcon}<span class="pill pill-dim" style="font-size:10px">${escHtml(sp.name||sp.tool||'tool')}</span>${sp.status?`<span style="font-size:10px;color:var(--text-dim)">${sp.status}</span>`:''}</div>
+          ${sp.args||sp.args_brief?`<pre style="font-size:11px;color:var(--text-dim);margin-top:4px;white-space:pre-wrap;max-height:100px;overflow-y:auto">${escHtml(typeof sp.args==='string'?sp.args:sp.args?JSON.stringify(sp.args,null,2):sp.args_brief||'')}</pre>`:''}
           ${sp.result?`<pre style="font-size:11px;color:var(--text);margin-top:4px;white-space:pre-wrap;max-height:100px;overflow-y:auto">${escHtml(typeof sp.result==='string'?sp.result:JSON.stringify(sp.result,null,2))}</pre>`:''}
-        </div>`).join('')}</div></details>`:''}
+          ${sp.error?`<pre style="font-size:11px;color:var(--red);margin-top:4px">${escHtml(sp.error)}</pre>`:''}
+        </div>`}).join('')}</div></details>`:''}
       <!-- Token Usage Section -->
       ${selLog?.tokens_in||selLog?.tokens_out?`<details style="margin-bottom:12px"><summary style="font-size:13px;font-weight:600;cursor:pointer;padding:8px 0;border-bottom:1px solid var(--border)">Token Usage</summary>
         <div style="padding:12px 0;font-size:12px;font-family:monospace;line-height:2">
-          <div><span style="color:var(--accent)">prompt_tokens</span>: ${selLog.tokens_in||0}</div>
-          <div><span style="color:var(--accent)">completion_tokens</span>: ${selLog.tokens_out||0}</div>
-          <div><span style="color:var(--accent)">total_tokens</span>: ${(selLog.tokens_in||0)+(selLog.tokens_out||0)}</div>
+          <div><span style="color:var(--accent)">prompt_tokens</span>: ${(selLog.tokens_in||0).toLocaleString()}</div>
+          <div><span style="color:var(--accent)">completion_tokens</span>: ${(selLog.tokens_out||0).toLocaleString()}</div>
+          ${meta.cache_read?`<div><span style="color:var(--accent)">cache_read</span>: ${(meta.cache_read||0).toLocaleString()}</div>`:''}
+          ${meta.cache_write?`<div><span style="color:var(--accent)">cache_write</span>: ${(meta.cache_write||0).toLocaleString()}</div>`:''}
+          <div><span style="color:var(--accent)">total_tokens</span>: ${((selLog.tokens_in||0)+(selLog.tokens_out||0)+(meta.cache_read||0)).toLocaleString()}</div>
         </div></details>`:''}
+      <!-- Metadata Section -->
+      ${Object.keys(meta).length?`<details style="margin-bottom:12px"><summary style="font-size:13px;font-weight:600;cursor:pointer;padding:8px 0;border-bottom:1px solid var(--border)">Metadata</summary>
+        <pre style="font-size:11px;line-height:1.6;color:var(--text-dim);padding:12px 0;white-space:pre-wrap">${escHtml(JSON.stringify(meta,null,2))}</pre></details>`:''}
     </div>
   </div>`}
 
