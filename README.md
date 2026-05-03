@@ -144,7 +144,7 @@ wyckoff dashboard
 | 能力 | 说明 |
 |------|------|
 | 对话式 Agent | 用自然语言触发诊断、筛选、研报，LLM 自主编排工具；还能读写文件、执行命令、抓取网页 |
-| Skills | 内置斜杠命令（`/screen`、`/checkup`、`/report`、`/strategy`、`/backtest`）一键复合工作流；用户可通过 `~/.wyckoff/skills/*.md` 扩展 |
+| Skills | 内置斜杠命令（`/screen`、`/checkup`、`/report`、`/strategy`、`/backtest`）一键复合工作流；用户可通过 `~/.wyckoff/skills/*.md` 扩展（如 DCF 估值） |
 | 上下文压缩 | 动态阈值（25% model context window）自动压缩，智能摘要保留工具关键数据，支持超长对话 |
 | 工具确认 | `exec_command`、`write_file`、`update_portfolio` 执行前弹窗确认，防止误操作 |
 | 五层漏斗筛选 | 全市场 ~4500 股 → ~30 候选，六通道 + 板块共振 + 微观狙击。基于历史量价结构发现潜力标的，不构成投资建议 |
@@ -157,7 +157,7 @@ wyckoff dashboard
 | 日线回测 | 回放漏斗命中后 N 日收益，输出胜率/Sharpe/最大回撤 |
 | 盘前风控 | A50 + VIX 监测，四档预警推送 |
 | 本地可视化面板 | `wyckoff dashboard` — 推荐、信号、持仓、Agent 记忆、对话日志，暗色/亮色主题，中英双语 |
-| Agent 记忆 | 跨会话记忆：自动提取对话结论，下次提问时注入相关上下文 |
+| Agent 记忆 | 跨会话记忆：FTS5 全文检索 + 时间衰减混合召回，自动提取对话结论，压缩前 Memory Flush 保护用户偏好 |
 | 通用 Agent 能力 | 执行命令、读写文件、抓取网页 — 发一个 CSV 路径即可分析，不只是股票工具 |
 | MCP Server | 10 个工具通过 MCP 协议对外暴露，Claude Code / Cursor / 任何 MCP Client 即插即用 |
 | 多通道推送 | 飞书 / 企微 / 钉钉 / Telegram |

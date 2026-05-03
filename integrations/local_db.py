@@ -18,7 +18,7 @@ from core.constants import LOCAL_DB_PATH
 _lock = threading.Lock()
 _conn: sqlite3.Connection | None = None
 
-_SCHEMA_VERSION = 5
+_SCHEMA_VERSION = 6
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -145,6 +145,26 @@ CREATE INDEX IF NOT EXISTS idx_tail_run_date ON tail_buy_history(run_date);
 CREATE INDEX IF NOT EXISTS idx_tail_decision ON tail_buy_history(final_decision);
 CREATE INDEX IF NOT EXISTS idx_bg_task_session ON background_task_result(session_id);
 CREATE INDEX IF NOT EXISTS idx_bg_task_created ON background_task_result(created_at);
+
+-- FTS5 全文检索索引（记忆系统 hybrid search）
+CREATE VIRTUAL TABLE IF NOT EXISTS agent_memory_fts USING fts5(
+    content,
+    content=agent_memory,
+    content_rowid=id,
+    tokenize='unicode61'
+);
+
+-- 保持 FTS5 与 agent_memory 同步的触发器
+CREATE TRIGGER IF NOT EXISTS trg_mem_ai AFTER INSERT ON agent_memory BEGIN
+    INSERT INTO agent_memory_fts(rowid, content) VALUES (new.id, new.content);
+END;
+CREATE TRIGGER IF NOT EXISTS trg_mem_ad AFTER DELETE ON agent_memory BEGIN
+    INSERT INTO agent_memory_fts(agent_memory_fts, rowid, content) VALUES ('delete', old.id, old.content);
+END;
+CREATE TRIGGER IF NOT EXISTS trg_mem_au AFTER UPDATE ON agent_memory BEGIN
+    INSERT INTO agent_memory_fts(agent_memory_fts, rowid, content) VALUES ('delete', old.id, old.content);
+    INSERT INTO agent_memory_fts(rowid, content) VALUES (new.id, new.content);
+END;
 """
 
 
@@ -177,6 +197,8 @@ def init_db() -> None:
             pass
     if current < 5:
         _backfill_background_tasks_from_chat_log(conn)
+    if current < 6:
+        _migrate_fts5_memory(conn)
     if current < _SCHEMA_VERSION:
         conn.execute(
             "INSERT OR REPLACE INTO schema_version(version) VALUES(?)",
@@ -223,6 +245,38 @@ def _backfill_background_tasks_from_chat_log(conn: sqlite3.Connection) -> None:
                 row["created_at"],
             ),
         )
+
+
+def _migrate_fts5_memory(conn: sqlite3.Connection) -> None:
+    """为已有 agent_memory 数据创建 FTS5 索引。"""
+    try:
+        conn.executescript("""
+            CREATE VIRTUAL TABLE IF NOT EXISTS agent_memory_fts USING fts5(
+                content, content=agent_memory, content_rowid=id, tokenize='unicode61'
+            );
+            CREATE TRIGGER IF NOT EXISTS trg_mem_ai AFTER INSERT ON agent_memory BEGIN
+                INSERT INTO agent_memory_fts(rowid, content) VALUES (new.id, new.content);
+            END;
+            CREATE TRIGGER IF NOT EXISTS trg_mem_ad AFTER DELETE ON agent_memory BEGIN
+                INSERT INTO agent_memory_fts(agent_memory_fts, rowid, content) VALUES ('delete', old.id, old.content);
+            END;
+            CREATE TRIGGER IF NOT EXISTS trg_mem_au AFTER UPDATE ON agent_memory BEGIN
+                INSERT INTO agent_memory_fts(agent_memory_fts, rowid, content) VALUES ('delete', old.id, old.content);
+                INSERT INTO agent_memory_fts(rowid, content) VALUES (new.id, new.content);
+            END;
+        """)
+        # 回填已有数据
+        rows = conn.execute("SELECT id, content FROM agent_memory").fetchall()
+        for row in rows:
+            try:
+                conn.execute(
+                    "INSERT INTO agent_memory_fts(rowid, content) VALUES (?, ?)",
+                    (row["id"], row["content"]),
+                )
+            except Exception:
+                pass
+    except Exception:
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -530,6 +584,88 @@ def search_memory_by_keywords(keywords: list[str], limit: int = 5) -> list[dict]
         params + [limit],
     )
     return [dict(r) for r in cur.fetchall()]
+
+
+def search_memory_fts(query: str, limit: int = 10) -> list[dict]:
+    """FTS5 全文检索记忆。"""
+    conn = get_db()
+    try:
+        cur = conn.execute(
+            """SELECT m.*, bm25(agent_memory_fts) AS rank
+               FROM agent_memory_fts fts
+               JOIN agent_memory m ON m.id = fts.rowid
+               WHERE agent_memory_fts MATCH ?
+               ORDER BY rank
+               LIMIT ?""",
+            (query, limit),
+        )
+        return [dict(r) for r in cur.fetchall()]
+    except Exception:
+        return []
+
+
+def search_memory_hybrid(
+    *,
+    query_text: str,
+    codes: list[str] | None = None,
+    keywords: list[str] | None = None,
+    limit: int = 8,
+    decay_half_life_days: float = 30.0,
+) -> list[dict]:
+    """Hybrid search: FTS5 全文 + 代码匹配 + 关键词 LIKE + 时间衰减加权。
+
+    返回按综合得分排序的记忆列表，每条带 _score 字段。
+    """
+    import math
+    from datetime import datetime
+
+    candidates: dict[int, dict] = {}
+
+    def _merge(items: list[dict], source_weight: float) -> None:
+        for m in items:
+            mid = m["id"]
+            if mid not in candidates:
+                m["_score"] = source_weight
+                candidates[mid] = m
+            else:
+                candidates[mid]["_score"] = max(candidates[mid].get("_score", 0), source_weight)
+
+    # 1. FTS5 全文检索（最高权重）
+    if query_text and len(query_text.strip()) >= 2:
+        fts_results = search_memory_fts(query_text, limit=limit * 2)
+        _merge(fts_results, 1.0)
+
+    # 2. 股票代码精确匹配
+    if codes:
+        code_results = search_memory(codes=codes, limit=limit * 2)
+        _merge(code_results, 0.85)
+
+    # 3. 关键词 LIKE 检索
+    if keywords:
+        kw_results = search_memory_by_keywords(keywords, limit=limit * 2)
+        _merge(kw_results, 0.6)
+
+    # 4. 时间衰减加权
+    now = datetime.utcnow()
+    for m in candidates.values():
+        created = m.get("created_at", "")
+        if created:
+            try:
+                dt = datetime.fromisoformat(str(created))
+                age_days = max((now - dt).total_seconds() / 86400, 0)
+                decay = math.pow(2, -age_days / decay_half_life_days)
+            except (ValueError, TypeError):
+                decay = 0.5
+        else:
+            decay = 0.5
+        # 偏好记忆不衰减
+        if m.get("memory_type") == "preference":
+            decay = 1.0
+        m["_score"] = m.get("_score", 0.5) * decay
+
+    # 按得分排序
+    ranked = sorted(candidates.values(), key=lambda x: x.get("_score", 0), reverse=True)
+    return ranked[:limit]
 
 
 def prune_memories(keep_days: int = 90) -> int:

@@ -34,6 +34,93 @@ logger = logging.getLogger(__name__)
 
 _THINKING_TEXT = Text.from_markup("  [dim]思考中…[/dim]")
 
+# 只读工具 — 可安全并行执行
+_READ_ONLY_TOOLS = frozenset({
+    "search_stock_by_name",
+    "analyze_stock",
+    "portfolio",
+    "get_market_overview",
+    "query_history",
+})
+
+
+class _DoomFlag:
+    """Mutable flag for doom-loop detection in concurrent batch."""
+    __slots__ = ("val",)
+    def __init__(self) -> None:
+        self.val = False
+
+
+def _partition_tool_calls(tool_calls: list[dict]) -> list[dict[str, Any]]:
+    """将工具调用分批：连续只读工具归入并行批次，其余串行。"""
+    batches: list[dict[str, Any]] = []
+    for call in tool_calls:
+        is_safe = call["name"] in _READ_ONLY_TOOLS
+        if is_safe and batches and batches[-1]["concurrent"]:
+            batches[-1]["calls"].append(call)
+        else:
+            batches.append({"concurrent": is_safe, "calls": [call]})
+    return batches
+
+
+def _execute_concurrent_batch(
+    calls: list[dict],
+    tools: ToolRegistry,
+    messages: list[dict[str, Any]],
+    recent_calls: list,
+    recent_args_texts: list,
+    on_tool_call: callable,
+    on_tool_result: callable,
+    used_tools: list,
+    on_doom: callable,
+) -> None:
+    """并发执行一批只读工具调用。"""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    def _exec_one(call: dict) -> dict[str, Any]:
+        name = call["name"]
+        args = call["args"]
+        if on_tool_call:
+            on_tool_call(name, args)
+        result = tools.execute(name, args)
+        if on_tool_result:
+            on_tool_result(name, result)
+        return {
+            "call": call,
+            "result": result,
+        }
+
+    with ThreadPoolExecutor(max_workers=min(len(calls), 5)) as pool:
+        futures = {pool.submit(_exec_one, c): c for c in calls}
+        for future in as_completed(futures):
+            call = futures[future]
+            name = call["name"]
+            args = call["args"]
+            call_id = call["id"]
+            used_tools.append((name, args))
+
+            if check_doom_loop(recent_calls, name, args, recent_args_texts=recent_args_texts):
+                logger.warning("doom-loop detected: %s", name)
+                messages.append({
+                    "role": "tool", "tool_call_id": call_id, "name": name,
+                    "content": json.dumps({"error": "doom-loop: 同参数重复调用3次，已中止"}, ensure_ascii=False),
+                })
+                on_doom()
+                return
+
+            try:
+                res = future.result()
+                result = res["result"]
+            except Exception as exc:
+                result = {"error": str(exc)}
+
+            messages.append({
+                "role": "tool",
+                "tool_call_id": call_id,
+                "name": name,
+                "content": json.dumps(result, ensure_ascii=False, default=str),
+            })
+
 
 def run(
     provider: LLMProvider,
@@ -58,6 +145,7 @@ def run(
     incomplete_tool_retries = 0
     used_tools_this_turn: list[tuple[str, dict]] = []
     _recent_calls: list[tuple[str, int]] = []
+    _recent_args_texts: list[str] = []
 
     _model_name = getattr(provider, "name", "")
 
@@ -161,35 +249,52 @@ def run(
                 assistant_msg["reasoning_content"] = thinking_buf
             messages.append(assistant_msg)
 
-            for call in tool_calls:
-                name = call["name"]
-                args = call["args"]
-                call_id = call["id"]
-                used_tools_this_turn.append((name, args))
+            # 分批：连续只读工具并行，写工具串行
+            batches = _partition_tool_calls(tool_calls)
+            doom_break = False
+            doom_flag = _DoomFlag()
 
-                if check_doom_loop(_recent_calls, name, args):
-                    logger.warning("doom-loop detected: %s", name)
-                    messages.append({
-                        "role": "tool", "tool_call_id": call_id, "name": name,
-                        "content": json.dumps({"error": "doom-loop: 同参数重复调用3次，已中止"}, ensure_ascii=False),
-                    })
-                    tool_calls = None
+            for batch in batches:
+                if doom_break:
                     break
+                if batch["concurrent"] and len(batch["calls"]) > 1:
+                    # 并行执行只读工具
+                    _execute_concurrent_batch(
+                        batch["calls"], tools, messages,
+                        _recent_calls, _recent_args_texts,
+                        on_tool_call, on_tool_result,
+                        used_tools_this_turn,
+                        lambda: doom_flag.__setattr__("val", True),
+                    )
+                    if doom_flag.val:
+                        tool_calls = None
+                        break
+                else:
+                    for call in batch["calls"]:
+                        name = call["name"]
+                        args = call["args"]
+                        call_id = call["id"]
+                        used_tools_this_turn.append((name, args))
 
-                if on_tool_call:
-                    on_tool_call(name, args)
+                        if check_doom_loop(_recent_calls, name, args, recent_args_texts=_recent_args_texts):
+                            logger.warning("doom-loop detected: %s", name)
+                            messages.append({
+                                "role": "tool", "tool_call_id": call_id, "name": name,
+                                "content": json.dumps({"error": "doom-loop: 同参数重复调用3次，已中止"}, ensure_ascii=False),
+                            })
+                            tool_calls = None
+                            doom_break = True
+                            break
 
-                result = tools.execute(name, args)
-
-                if on_tool_result:
-                    on_tool_result(name, result)
-
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": call_id,
-                    "name": name,
-                    "content": json.dumps(result, ensure_ascii=False, default=str),
-                })
+                        if on_tool_call:
+                            on_tool_call(name, args)
+                        result = tools.execute(name, args)
+                        if on_tool_result:
+                            on_tool_result(name, result)
+                        messages.append({
+                            "role": "tool", "tool_call_id": call_id, "name": name,
+                            "content": json.dumps(result, ensure_ascii=False, default=str),
+                        })
             # 继续下一轮
             continue
 

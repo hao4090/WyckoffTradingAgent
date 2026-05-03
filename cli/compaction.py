@@ -154,6 +154,64 @@ def serialize_messages_for_compaction(messages: list[dict[str, Any]]) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Memory Flush — 压缩前提取持久事实
+# ---------------------------------------------------------------------------
+
+_FLUSH_PROMPT = """请从以下对话片段中提取用户的持久偏好或重要事实，每条一行。
+只提取以下类型的信号：
+- 投资偏好（如"不买ST股"、"偏好大盘蓝筹"、"不追涨"）
+- 风险偏好（如"止损线8%"、"仓位不超过20%"）
+- 重要结论（如"000001适合长期持有"、"银行板块看好"）
+
+如果没有值得记忆的偏好或事实，只输出"无"。
+不要提取临时操作指令或工具调用细节。"""
+
+
+def flush_memory_before_compaction(
+    messages: list[dict[str, Any]],
+    provider: Any,
+) -> None:
+    """在压缩前，用 LLM 从待压缩消息中提取 preference 存入记忆。"""
+    try:
+        from integrations.local_db import save_memory
+        from cli.memory import extract_stock_codes
+    except ImportError:
+        return
+
+    # 只从 user/assistant 消息中提取，跳过工具结果
+    lines: list[str] = []
+    for m in messages:
+        role = m.get("role", "")
+        if role in ("user", "assistant"):
+            content = m.get("content", "")
+            if content and len(content) > 10:
+                lines.append(f"[{role}] {content[:300]}")
+    if len(lines) < 2:
+        return
+
+    text = "\n".join(lines[-20:])
+    try:
+        chunks = list(provider.chat_stream(
+            [{"role": "user", "content": text}],
+            [],
+            _FLUSH_PROMPT,
+        ))
+        result = "".join(c.get("text", "") for c in chunks if c.get("type") == "text_delta")
+        if not result or "无" in result.strip()[:5]:
+            return
+
+        all_text = " ".join(m.get("content", "") or "" for m in messages)
+        codes = extract_stock_codes(all_text)
+
+        for line in result.strip().split("\n"):
+            line = line.strip().lstrip("- ").strip()
+            if line and len(line) >= 5 and "无" not in line[:3]:
+                save_memory("preference", line, codes=",".join(codes[:10]))
+    except Exception:
+        pass
+
+
+# ---------------------------------------------------------------------------
 # 压缩 prompt
 # ---------------------------------------------------------------------------
 
@@ -185,6 +243,10 @@ def compact_messages(
 
     head = messages[:-TAIL_KEEP]
     tail = messages[-TAIL_KEEP:]
+
+    # 压缩前先提取持久偏好到记忆
+    flush_memory_before_compaction(head, provider)
+
     head_text = serialize_messages_for_compaction(head)
 
     try:

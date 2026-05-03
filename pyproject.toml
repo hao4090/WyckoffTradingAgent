@@ -1,6 +1,6 @@
 [project]
 name = "youngcan-wyckoff-analysis"
-version = "0.6.13"
+version = "0.7.0"
 requires-python = ">=3.11"
 description = "Wyckoff method quantitative analysis system for A-shares"
 readme = "README.md"
@@ -44,6 +44,7 @@ streamlit = [
     "litellm>=1.40.0",
 ]
 mcp = ["mcp>=1.0.0"]
+wbt = ["wbt>=0.1.6"]
 dev = ["pytest>=7.0"]
 
 [project.scripts]

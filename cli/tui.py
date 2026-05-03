@@ -1082,6 +1082,7 @@ class WyckoffTUI(App):
         total_output = 0
         t_start = time.monotonic()
         _recent_calls: list[tuple[str, str]] = []  # doom-loop: (name, args_hash)
+        _recent_args_texts: list[str] = []
         _doom_break = False
 
         # 记录用户输入
@@ -1241,7 +1242,7 @@ class WyckoffTUI(App):
                         used_tools_this_turn.append((name, args))
 
                         # ── Doom-loop 检测 ──
-                        if check_doom_loop(_recent_calls, name, args):
+                        if check_doom_loop(_recent_calls, name, args, recent_args_texts=_recent_args_texts):
                             _write(Text.from_markup(
                                 f"  [yellow]⚠ 检测到重复调用 {display}，已中止循环[/yellow]"
                             ))

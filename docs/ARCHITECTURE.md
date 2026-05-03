@@ -278,11 +278,13 @@ TUI 启动时自动执行 `prune_memories()`，清理 90 天前的 `session` 和
 
 ### 检索注入
 
-每次用户提问前，三路检索 + 偏好置顶：
-1. 从 user_message 提取股票代码（正则 `\d{6}`），匹配相关记忆（最多 5 条）
-2. 从 user_message 提取中文 2-gram 关键词（过滤停用词），关键词 OR 匹配补充召回
-3. 取最近 3 条 session 记忆
-4. 始终拉取全部 `preference` 类型记忆，置顶显示
+每次用户提问前，Hybrid Search 综合检索 + 偏好置顶：
+
+1. **FTS5 全文检索**（权重 1.0）：SQLite FTS5 索引，BM25 排序，精准匹配用户问题中的关键词
+2. **股票代码匹配**（权重 0.85）：正则提取 6 位代码，LIKE 匹配
+3. **中文关键词 LIKE**（权重 0.6）：2-gram 分词 + 停用词过滤，补充召回
+4. **时间衰减加权**：30 天半衰期，近期记忆得分更高，`preference` 类型永不衰减
+5. 始终拉取全部 `preference` 类型记忆，置顶显示
 
 拼成两段注入 system prompt 尾部：
 
@@ -322,8 +324,9 @@ TUI 启动时自动执行 `prune_memories()`，清理 90 天前的 `session` 和
 
 ### 压缩策略
 
-1. 保留最近 4 条消息（`TAIL_KEEP = 4`）原文
-2. 前面的消息用 LLM 总结为 ≤500 字中文摘要
+1. **Memory Flush**：压缩前先用 LLM 从待压缩消息中提取用户偏好/重要事实，存入 `preference` 记忆（永不丢失）
+2. 保留最近 4 条消息（`TAIL_KEEP = 4`）原文
+3. 前面的消息用 LLM 总结为 ≤500 字中文摘要
 3. 工具结果做智能摘要而非粗暴截断：
    - `analyze_stock` 诊断模式 → 保留 `code`、`phase`、`health`、`trigger_signals` 等关键字段
    - `analyze_stock` 行情模式 → 保留最近 5 条数据
@@ -352,7 +355,13 @@ TUI 启动时自动执行 `prune_memories()`，清理 90 天前的 `session` 和
 
 ### Doom Loop 防护
 
-滑动窗口检测（最近 6 次调用），同参数重复调用 ≥3 次自动中止，防止模型死循环浪费 token。
+滑动窗口检测（最近 6 次调用），两种触发条件：
+- **精确匹配**：同名工具 + 相同参数 hash ≥3 次 → 中止
+- **语义相似**：同名工具 + 参数 Jaccard 相似度 ≥0.8（字符 3-gram）≥3 次 → 中止（防止"换汤不换药"式死循环）
+
+### 并发工具执行
+
+只读工具（`search_stock_by_name`、`analyze_stock`、`portfolio`、`get_market_overview`、`query_history`）连续调用时自动并行执行（ThreadPoolExecutor，最多 5 线程），写工具保持串行。
 
 ## 本地可视化面板
 
@@ -420,7 +429,8 @@ CREATE TABLE chat_log (
 
 | 表 | 用途 |
 |---|------|
-| `schema_version` | 迁移版本管理（当前 v4） |
+| `schema_version` | 迁移版本管理（当前 v6） |
+| `agent_memory_fts` | FTS5 全文检索索引（自动同步） |
 | `recommendation_tracking` | 推荐跟踪镜像 |
 | `signal_pending` | 信号池镜像 |
 | `market_signal_daily` | 大盘信号镜像 |
