@@ -10,7 +10,8 @@ const TOOL_LABELS: Record<string, string> = {
   market_overview: '大盘水温',
   query_recommendations: '推荐跟踪',
   query_tail_buy: '尾盘记录',
-  update_portfolio: '调仓操作',
+  plan_portfolio_update: '调仓方案',
+  execute_portfolio_update: '执行调仓',
   analyze_stock: '个股诊断',
   screen_stocks: '漏斗选股',
   generate_ai_report: 'AI 研报',
@@ -76,6 +77,7 @@ export function ChatPage() {
   const [models, setModels] = useState<ModelOption[]>([])
   const [showModelPicker, setShowModelPicker] = useState(false)
   const [liveSteps, setLiveSteps] = useState<StepInfo[]>([])
+  const [streamingText, setStreamingText] = useState('')
   const scrollRef = useRef<HTMLDivElement>(null)
   const abortRef = useRef(false)
   const pickerRef = useRef<HTMLDivElement>(null)
@@ -105,7 +107,7 @@ export function ChatPage() {
 
   useEffect(() => {
     scrollToBottom()
-  }, [messages, liveSteps, scrollToBottom])
+  }, [messages, liveSteps, streamingText, scrollToBottom])
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -123,6 +125,7 @@ export function ChatPage() {
     setError('')
     setLoading(true)
     setLiveSteps([])
+    setStreamingText('')
     abortRef.current = false
 
     const chatHistory = newMessages
@@ -140,12 +143,18 @@ export function ChatPage() {
         onStep: (step) => {
           if (abortRef.current) return
           setLiveSteps((prev) => [...prev, step])
+          setStreamingText('')
+        },
+        onTextDelta: (delta) => {
+          if (abortRef.current) return
+          setStreamingText((prev) => prev + delta)
         },
         onFinish: (finalText, steps) => {
           if (abortRef.current) return
           if (finalText) {
             setMessages((prev) => [...prev, { role: 'assistant', content: finalText, steps }])
           }
+          setStreamingText('')
           setLiveSteps([])
           setLoading(false)
         },
@@ -153,6 +162,7 @@ export function ChatPage() {
           const msg = err.message || '请求失败'
           setError(msg)
           setMessages((prev) => [...prev, { role: 'assistant', content: `⚠️ ${msg}`, isError: true }])
+          setStreamingText('')
           setLiveSteps([])
           setLoading(false)
         },
@@ -273,12 +283,12 @@ export function ChatPage() {
               </div>
             ))}
 
-            {/* Live streaming indicator */}
+            {/* Live streaming */}
             {loading && (
               <div className="flex justify-start">
                 <div className="max-w-[80%] rounded-2xl bg-muted px-4 py-2.5 text-sm text-foreground">
-                  {liveSteps.length > 0 ? (
-                    <div className="space-y-1.5">
+                  {liveSteps.length > 0 && (
+                    <div className="mb-2 space-y-1">
                       {liveSteps.map((step, i) => (
                         <div key={i} className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
                           {step.type === 'tool_call' ? (
@@ -294,15 +304,14 @@ export function ChatPage() {
                           )}
                         </div>
                       ))}
-                      <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-                        <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-primary" />
-                        <span>思考中…</span>
-                      </div>
                     </div>
+                  )}
+                  {streamingText ? (
+                    <MarkdownContent content={streamingText} />
                   ) : (
                     <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
                       <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-primary" />
-                      <span>思考中…</span>
+                      <span>{liveSteps.length > 0 ? '生成回复中…' : '思考中…'}</span>
                     </div>
                   )}
                 </div>

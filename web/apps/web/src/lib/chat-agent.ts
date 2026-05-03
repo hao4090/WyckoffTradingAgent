@@ -1,5 +1,5 @@
 import { createOpenAI } from '@ai-sdk/openai'
-import { generateText, tool } from 'ai'
+import { generateText, streamText, tool } from 'ai'
 import { z } from 'zod'
 import { supabase } from './supabase'
 
@@ -645,6 +645,7 @@ export interface StepInfo {
 
 export interface StreamCallbacks {
   onStep: (step: StepInfo) => void
+  onTextDelta: (delta: string) => void
   onFinish: (finalText: string, steps: StepInfo[]) => void
   onError: (error: Error) => void
 }
@@ -661,7 +662,7 @@ export async function runChatAgentStream(
   const steps: StepInfo[] = []
 
   try {
-    const result = await generateText({
+    const result = streamText({
       model: provider(config.model),
       system: SYSTEM_PROMPT,
       messages,
@@ -683,7 +684,12 @@ export async function runChatAgentStream(
       },
     })
 
-    callbacks.onFinish(result.text, steps)
+    for await (const chunk of result.textStream) {
+      callbacks.onTextDelta(chunk)
+    }
+
+    const finalText = await result.text
+    callbacks.onFinish(finalText, steps)
   } catch (err) {
     callbacks.onError(err instanceof Error ? err : new Error(String(err)))
   }
