@@ -41,3 +41,4 @@ analysis/backtest/
 analysis/
 .openclaw/
 test-results/
+.traces/
