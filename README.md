@@ -49,6 +49,10 @@ Streamlit 版本功能完整可用，不再迭代新功能。
 
 在线地址：**[wyckoff-analysis-youngcanphoenix.streamlit.app](https://wyckoff-analysis-youngcanphoenix.streamlit.app/)**
 
+| 读盘室 | 数据导出 |
+|:---:|:---:|
+| <img src="attach/web-chat.png" width="450" /> | <img src="attach/web-export.png" width="450" /> |
+
 ---
 
 ## 本地使用
