@@ -23,7 +23,8 @@ export const onRequest: PagesFunction = async (context) => {
 
   const headers = new Headers()
   for (const [key, value] of request.headers.entries()) {
-    if (['host', 'x-target-url', 'connection', 'cf-connecting-ip', 'cf-ray', 'cf-visitor', 'cf-worker'].includes(key)) continue
+    if (['host', 'x-target-url', 'connection', 'origin', 'referer', 'cf-connecting-ip', 'cf-ray', 'cf-visitor', 'cf-worker'].includes(key)) continue
+    if (key.startsWith('sec-')) continue
     headers.set(key, value)
   }
   headers.set('user-agent', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36')

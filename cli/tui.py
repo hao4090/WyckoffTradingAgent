@@ -1093,6 +1093,7 @@ class WyckoffTUI(App):
         incomplete_tool_retries = 0
         used_tools_this_turn: list[tuple[str, dict]] = []
         executed_tool_summaries: list[dict[str, object]] = []
+        rounds_detail: list[dict[str, object]] = []
         self._agent_log.info("session=%s user: %s", self._session_id, _user_text[:200])
         _chatlog_save = self._chatlog_save  # bound method ref
 
@@ -1102,6 +1103,7 @@ class WyckoffTUI(App):
             _model_name_for_compact = getattr(self._provider, "name", "") if self._provider else ""
 
             for round_idx in range(MAX_TOOL_ROUNDS):
+                _round_start = time.monotonic()
                 # ── Context compaction ──
                 _spinner_start("压缩上下文")
                 prev_len = len(self._messages)
@@ -1200,6 +1202,17 @@ class WyckoffTUI(App):
 
                 total_input += round_usage.get("input_tokens", 0)
                 total_output += round_usage.get("output_tokens", 0)
+                rounds_detail.append({
+                    "round": round_idx + 1,
+                    "model": _model_name,
+                    "tokens_in": round_usage.get("input_tokens", 0),
+                    "tokens_out": round_usage.get("output_tokens", 0),
+                    "cache_read": round_usage.get("cache_read_tokens", 0),
+                    "cache_write": round_usage.get("cache_write_tokens", 0),
+                    "duration": round(time.monotonic() - _round_start, 2),
+                    "has_tool_calls": bool(tool_calls),
+                    "tool_names": [c["name"] for c in (tool_calls or [])],
+                })
 
                 will_retry_missing_tool = (
                     missing_required_tool(expectation, used_tools_this_turn)
@@ -1367,6 +1380,7 @@ class WyckoffTUI(App):
                     "cache_write": round_usage.get("cache_write_tokens", 0),
                     "stop_reason": round_usage.get("stop_reason", "stop"),
                     "rounds": round_idx + 1,
+                    "rounds_detail": rounds_detail,
                     "messages": list(self._messages),
                     "system_prompt": self._system_prompt,
                     "tools": self._tools.schemas() if self._tools else [],

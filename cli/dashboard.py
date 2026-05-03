@@ -546,6 +546,7 @@ zh:{
   no_recs:'暂无推荐',no_signals:'暂无信号',
   confirm_del_rec:'确认删除推荐记录：',confirm_del_sig:'确认删除信号记录：',confirm_del_session:'确认删除整个会话？会话 ID：',
   buy_links:'购买 API Key',buy_tickflow:'数据源（TickFlow）',buy_llm:'大模型（1Route）',
+  tab_content:'内容',tab_runtime:'调用链',no_runtime:'无调用链数据（需重新对话后可见）',
 },
 en:{
   nav_overview:'Overview',nav_recommendations:'Recommendations',nav_signals:'Signals',nav_tailbuy:'Tail Buy',nav_portfolio:'Portfolio',
@@ -574,6 +575,7 @@ en:{
   no_recs:'No recommendations',no_signals:'No signals',
   confirm_del_rec:'Delete recommendation: ',confirm_del_sig:'Delete signal: ',confirm_del_session:'Delete entire session? ID: ',
   buy_links:'Get API Keys',buy_tickflow:'Data Source (TickFlow)',buy_llm:'LLM API (1Route)',
+  tab_content:'Content',tab_runtime:'Runtime',no_runtime:'No runtime data (available after new conversations)',
 }};
 let _lang = localStorage.getItem('wk_lang') || 'zh';
 function t(k){return (I18N[_lang]||I18N.zh)[k]||k}
@@ -820,6 +822,7 @@ async function renderBgTaskDetail(c,taskId){
 let _chatSessionId=null;
 let _chatSelectedIdx=0;
 let _chatViewMode='pretty';
+let _chatDetailTab='content';
 function toYaml(obj,indent=0){
   if(obj==null)return 'null';
   if(typeof obj==='string')return obj.includes('\n')?`|\n${obj.split('\n').map(l=>' '.repeat(indent+2)+l).join('\n')}`:obj;
@@ -921,6 +924,9 @@ async function renderChatSession(c,sid){
     </div>
     <!-- Right: Detail Panel -->
     <div style="flex:1;overflow-y:auto;padding:16px 20px">
+      <div style="display:flex;gap:4px;margin-bottom:12px">
+        ${['content','runtime'].map(tb=>`<button onclick="_chatDetailTab='${tb}';loadPage('chatlog')" style="font-size:11px;padding:4px 12px;border-radius:4px;border:1px solid ${_chatDetailTab===tb?'var(--accent)':'var(--border)'};background:${_chatDetailTab===tb?'var(--accent-dim)':'transparent'};color:${_chatDetailTab===tb?'var(--accent)':'var(--text-dim)'};cursor:pointer">${t('tab_'+tb)}</button>`).join('')}
+      </div>
       <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;padding-bottom:12px;border-bottom:1px solid var(--border);flex-wrap:wrap">
         <span style="font-size:12px;color:var(--text-dim)">${localTime(selLog?.created_at)}</span>
         ${selLog?.elapsed_s?`<span style="font-size:12px;color:var(--text-dim)">${selLog.elapsed_s}s</span>`:''}
@@ -929,20 +935,18 @@ async function renderChatSession(c,sid){
         ${selLog?.tokens_in||selLog?.tokens_out?`<span style="font-size:12px;color:var(--text-dim)"># ${(selLog.tokens_in||0)+(selLog.tokens_out||0)}</span>`:''}
         ${meta.rounds&&meta.rounds>1?`<span style="font-size:10px;color:var(--text-dim)">${meta.rounds} rounds</span>`:''}
       </div>
+      ${_chatDetailTab==='content'?`
       ${selLog?.error?`<div style="background:var(--red-bg,rgba(255,0,0,0.1));border-radius:6px;padding:8px 12px;margin-bottom:12px;font-size:12px;color:var(--red)">${escHtml(selLog.error)}</div>`:''}
-      <!-- Input Section -->
       <details open style="margin-bottom:12px"><summary style="font-size:13px;font-weight:600;cursor:pointer;padding:8px 0;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between">
         <span>Input</span><span style="display:flex;gap:4px">${viewTabs('input')}</span>
       </summary>
         <pre style="font-size:12px;line-height:1.5;color:var(--text);white-space:pre-wrap;word-break:break-all;padding:12px 0;max-height:200px;overflow-y:auto">${fmtContent(selTrace?.user?.content,inputStruct,_chatViewMode)}</pre>
       </details>
-      <!-- Output Section -->
       <details open style="margin-bottom:12px"><summary style="font-size:13px;font-weight:600;cursor:pointer;padding:8px 0;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between">
         <span>Output</span><span style="display:flex;gap:4px">${viewTabs('output')}</span>
       </summary>
         <pre style="font-size:12px;line-height:1.5;color:var(--text);white-space:pre-wrap;word-break:break-all;padding:12px 0;max-height:300px;overflow-y:auto">${fmtContent(selTrace?.assistant?.content,outputStruct,_chatViewMode)}</pre>
       </details>
-      <!-- Tool Calls / Spans Section -->
       ${toolSpans.length?`<details open style="margin-bottom:12px"><summary style="font-size:13px;font-weight:600;cursor:pointer;padding:8px 0;border-bottom:1px solid var(--border)">Spans (${toolSpans.length})</summary>
         <div style="padding:12px 0">${toolSpans.map((sp,si)=>{
           const statusIcon=sp.status==='error'?'<span style="color:var(--red)">✗</span>':sp.status==='background'?'<span style="color:cyan">↗</span>':'<span style="color:var(--accent)">✓</span>';
@@ -952,7 +956,6 @@ async function renderChatSession(c,sid){
           ${sp.result?`<pre style="font-size:11px;color:var(--text);margin-top:4px;white-space:pre-wrap;max-height:100px;overflow-y:auto">${escHtml(typeof sp.result==='string'?sp.result:JSON.stringify(sp.result,null,2))}</pre>`:''}
           ${sp.error?`<pre style="font-size:11px;color:var(--red);margin-top:4px">${escHtml(sp.error)}</pre>`:''}
         </div>`}).join('')}</div></details>`:''}
-      <!-- Token Usage Section -->
       ${selLog?.tokens_in||selLog?.tokens_out?`<details style="margin-bottom:12px"><summary style="font-size:13px;font-weight:600;cursor:pointer;padding:8px 0;border-bottom:1px solid var(--border)">Token Usage</summary>
         <div style="padding:12px 0;font-size:12px;font-family:monospace;line-height:2">
           <div><span style="color:var(--accent)">prompt_tokens</span>: ${(selLog.tokens_in||0).toLocaleString()}</div>
@@ -961,9 +964,38 @@ async function renderChatSession(c,sid){
           ${meta.cache_write?`<div><span style="color:var(--accent)">cache_write</span>: ${(meta.cache_write||0).toLocaleString()}</div>`:''}
           <div><span style="color:var(--accent)">total_tokens</span>: ${((selLog.tokens_in||0)+(selLog.tokens_out||0)+(meta.cache_read||0)).toLocaleString()}</div>
         </div></details>`:''}
-      <!-- Metadata Section -->
       ${Object.keys(meta).length?`<details style="margin-bottom:12px"><summary style="font-size:13px;font-weight:600;cursor:pointer;padding:8px 0;border-bottom:1px solid var(--border)">Metadata</summary>
         <pre style="font-size:11px;line-height:1.6;color:var(--text-dim);padding:12px 0;white-space:pre-wrap">${escHtml(JSON.stringify(meta,null,2))}</pre></details>`:''}
+      `:`
+      ${(()=>{
+        const rd=meta.rounds_detail;
+        if(!rd||!rd.length)return `<div class="empty" style="margin-top:24px">${t('no_runtime')}${meta.rounds>1?` (${meta.rounds} rounds)`:''}</div>`;
+        const totalTok=rd.reduce((a,r)=>a+(r.tokens_in||0)+(r.tokens_out||0),0);
+        const totalDur=rd.reduce((a,r)=>a+(r.duration||0),0);
+        const modelCounts={};rd.forEach(r=>{const m=r.model||'unknown';modelCounts[m]=(modelCounts[m]||0)+1;});
+        const modelSummary=Object.entries(modelCounts).map(([m,c])=>`${m} ×${c}`).join('  ');
+        const modelColors=['var(--accent)','#a78bfa','#f59e0b','#ef4444','#06b6d4'];
+        const modelList=Object.keys(modelCounts);
+        const mColor=(m)=>modelColors[modelList.indexOf(m)%modelColors.length];
+        return `<div style="display:flex;gap:16px;margin-bottom:16px;font-size:12px;color:var(--text-dim);flex-wrap:wrap">
+          <span>${rd.length} turns</span>
+          <span>${totalTok.toLocaleString()} tokens</span>
+          <span>${totalDur.toFixed(1)}s</span>
+          <span>${modelSummary}</span>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:4px">${rd.map((r,i)=>{
+          const tok=(r.tokens_in||0)+(r.tokens_out||0);
+          const bar=Math.max(4,Math.min(100,tok/Math.max(...rd.map(x=>(x.tokens_in||0)+(x.tokens_out||0)),1)*100));
+          return `<div style="display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:6px;background:var(--card);border:1px solid var(--border)">
+            <span style="font-size:11px;color:var(--text-dim);min-width:48px">Turn ${r.round}</span>
+            <span style="font-size:10px;padding:2px 8px;border-radius:3px;background:color-mix(in srgb, ${mColor(r.model)} 15%, transparent);color:${mColor(r.model)};white-space:nowrap;max-width:200px;overflow:hidden;text-overflow:ellipsis">${escHtml(r.model||'—')}</span>
+            <div style="flex:1;height:6px;background:var(--bg3);border-radius:3px;overflow:hidden"><div style="width:${bar}%;height:100%;background:${mColor(r.model)};border-radius:3px"></div></div>
+            <span style="font-size:11px;color:var(--text);min-width:60px;text-align:right">${tok.toLocaleString()} tok</span>
+            <span style="font-size:11px;color:var(--text-dim);min-width:40px;text-align:right">${r.duration||0}s</span>
+            ${r.has_tool_calls?`<span style="font-size:9px;color:var(--text-dim)">🔧 ${(r.tool_names||[]).join(', ')}</span>`:''}
+          </div>`}).join('')}</div>`;
+      })()}
+      `}
     </div>
   </div>`}
 
