@@ -12,10 +12,41 @@ const navItems = [
   { to: '/tracking', icon: TrendingUp, label: '跟踪' },
   { to: '/tail-buy', icon: Moon, label: '尾盘记录' },
   { to: '/export', icon: FileDown, label: '数据导出' },
-  { to: '/home', icon: Home, label: '项目主页' },
   { to: '/changelog', icon: Megaphone, label: '更新日志' },
   { to: '/settings', icon: Settings, label: '设置' },
 ]
+
+const externalLinks = [
+  { href: 'https://youngcan-wang.github.io/wyckoff-homepage/', icon: Home, label: '项目主页' },
+  { href: 'https://github.com/YoungCan-Wang/Wyckoff-Analysis', icon: Github, label: 'GitHub' },
+]
+
+function SidebarFooter({ email, onLogout }: { email: string; onLogout: () => void }) {
+  return (
+    <div className="border-t border-border p-3">
+      {externalLinks.map(({ href, icon: Icon, label }) => (
+        <a
+          key={href}
+          href={href}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="mb-2 flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+        >
+          <Icon size={14} />
+          {label}
+        </a>
+      ))}
+      <div className="mb-2 truncate px-3 text-[11px] text-muted-foreground">{email}</div>
+      <button
+        onClick={onLogout}
+        className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+      >
+        <LogOut size={15} />
+        退出
+      </button>
+    </div>
+  )
+}
 
 export function AppLayout() {
   const navigate = useNavigate()
@@ -28,7 +59,6 @@ export function AppLayout() {
 
   return (
     <div className="flex h-screen">
-      {/* Sidebar */}
       <aside className="flex w-56 flex-col border-r border-border bg-sidebar">
         <div className="px-5 py-5">
           <h2 className="bg-gradient-to-r from-primary to-purple-500 bg-clip-text text-xl font-bold tracking-tight text-transparent">
@@ -56,30 +86,9 @@ export function AppLayout() {
           ))}
         </nav>
 
-        <div className="border-t border-border p-3">
-          <a
-            href="https://github.com/YoungCan-Wang/Wyckoff-Analysis"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="mb-2 flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-          >
-            <Github size={14} />
-            GitHub
-          </a>
-          <div className="mb-2 truncate px-3 text-[11px] text-muted-foreground">
-            {user?.email || 'dev@preview'}
-          </div>
-          <button
-            onClick={handleLogout}
-            className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-          >
-            <LogOut size={15} />
-            退出
-          </button>
-        </div>
+        <SidebarFooter email={user?.email || 'dev@preview'} onLogout={handleLogout} />
       </aside>
 
-      {/* Main area */}
       <div className="flex flex-1 flex-col overflow-hidden">
         <MarketBar />
         <main className="flex-1 overflow-auto bg-background">
