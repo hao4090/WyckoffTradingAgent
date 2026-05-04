@@ -532,7 +532,7 @@ function buildTools(userId: string, config: LLMConfig) {
 
         const llm = createProxiedProvider(config)
         const result = await generateText({
-          model: llm(config.model),
+          model: llm.chat(config.model),
           system: `你是威科夫分析大师。基于以下K线数据，对 ${code} ${name || ''} 进行深度诊断：
 1. 当前威科夫阶段（积累/上涨/派发/下跌），Phase A-E 定位
 2. 量价关系分析（供需力量对比，近期量比变化）
@@ -595,7 +595,7 @@ function buildTools(userId: string, config: LLMConfig) {
           const digest = buildKlineDigest(kline)
           const llm = createProxiedProvider(config)
           const result = await generateText({
-            model: llm(config.model),
+            model: llm.chat(config.model),
             system: `你是威科夫分析大师。为 ${code} 撰写一份简明研报，包含：阶段判断、量价特征、关键价位、操作建议。200字以内。`,
             prompt: digest,
           })
@@ -632,7 +632,7 @@ function buildTools(userId: string, config: LLMConfig) {
 
         const llm = createProxiedProvider(config)
         const result = await generateText({
-          model: llm(config.model),
+          model: llm.chat(config.model),
           system: '你是威科夫大师。基于用户的持仓和当前市场环境，为每只持仓股给出操作建议（买入加仓/持有/减仓/卖出），并给出整体仓位管理建议。简洁明了，必须附带风险提示。',
           prompt: `当前持仓:\n${posInfo}\n\n市场环境:\n${marketInfo}`,
         })
@@ -672,7 +672,7 @@ export async function runChatAgentStream(
 
   try {
     const result = streamText({
-      model: provider(config.model),
+      model: provider.chat(config.model),
       system: SYSTEM_PROMPT,
       messages,
       tools,
