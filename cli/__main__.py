@@ -983,6 +983,9 @@ def _cmd_tui(_args=None):
 
 
 def main():
+    sys.stdout.write("\033]0;Wyckoff-Analysis\007")
+    sys.stdout.flush()
+
     parser = argparse.ArgumentParser(
         prog="wyckoff",
         description="威科夫终端读盘室 — Wyckoff 量价分析 Agent",
