@@ -227,7 +227,7 @@ def search_stock_by_name(keyword: str, tool_context: ToolContext) -> list[dict]:
         keyword: 搜索关键词，如 "宁德" 或 "300750" 或 "600519"
 
     Returns:
-        匹配的股票列表，每项包含 code、name 字段。最多返回 10 条。
+        匹配的股票列表，每项包含 code、name、price、pct_chg、market_cap、news 字段。最多返回 10 条。
     """
     try:
         from integrations.fetch_a_share_csv import get_all_stocks
@@ -246,10 +246,56 @@ def search_stock_by_name(keyword: str, tool_context: ToolContext) -> list[dict]:
                 if len(results) >= 10:
                     break
 
-        return results if results else [{"message": f"未找到与 '{kw}' 匹配的股票"}]
+        if not results:
+            return [{"message": f"未找到与 '{kw}' 匹配的股票"}]
+
+        _enrich_search_results(results[:3])
+        return results
     except Exception as e:
         logger.exception("search_stock_by_name error")
         return [{"error": str(e)}]
+
+
+def _enrich_search_results(items: list[dict]) -> None:
+    """为搜索结果前几条附加行情、市值、新闻。"""
+    from datetime import datetime
+
+    try:
+        from integrations.data_source import fetch_stock_spot_snapshot
+    except Exception:
+        fetch_stock_spot_snapshot = None  # type: ignore[assignment]
+
+    cap_map: dict[str, float] = {}
+    try:
+        from integrations.data_source import fetch_market_cap_map
+
+        cap_map = fetch_market_cap_map()
+    except Exception:
+        pass
+
+    for item in items:
+        code = item["code"]
+        if fetch_stock_spot_snapshot:
+            try:
+                snap = fetch_stock_spot_snapshot(code)
+                if snap:
+                    item["price"] = snap.get("close")
+                    item["pct_chg"] = snap.get("pct_chg")
+            except Exception:
+                pass
+        if cap_map:
+            item["market_cap_yi"] = cap_map.get(code)
+        try:
+            import akshare as ak
+            import pandas as pd
+
+            df = ak.stock_news_em(symbol=code)
+            cutoff = datetime.now() - timedelta(days=7)
+            df["发布时间"] = pd.to_datetime(df["发布时间"])
+            recent = df[df["发布时间"] >= cutoff]
+            item["news"] = recent["新闻标题"].head(5).tolist()
+        except Exception:
+            item["news"] = []
 
 
 # ---------------------------------------------------------------------------
