@@ -153,7 +153,7 @@ def _cmd_update(_args):
         cmd = [sys.executable, "-m", "pip", "install", "--upgrade", pkg]
     try:
         subprocess.check_call(cmd)
-        url = "https://wyckoff-analysis-youngcanphoenix.streamlit.app/"
+        url = "https://wyckoff-analysis.pages.dev/"
         try:
             subprocess.run(["pbcopy"], input=url.encode(), check=True)
         except FileNotFoundError:
