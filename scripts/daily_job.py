@@ -23,14 +23,13 @@ from zoneinfo import ZoneInfo
 if __name__ == "__main__" or not __package__:
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from integrations.fetch_a_share_csv import _resolve_trading_window
-from utils.trading_clock import is_a_share_trading_day, next_trading_day
 from integrations.llm_client import DEFAULT_GEMINI_MODEL, OPENAI_COMPATIBLE_BASE_URLS
 from integrations.supabase_market_signal import upsert_market_signal_daily
 from integrations.supabase_recommendation import (
     mark_ai_recommendations,
     upsert_recommendations,
 )
-from utils.trading_clock import resolve_end_calendar_day
+from utils.trading_clock import next_trading_day, resolve_end_calendar_day
 
 TZ = ZoneInfo("Asia/Shanghai")
 STEP3_REASON_MAP = {

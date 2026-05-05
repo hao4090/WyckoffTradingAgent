@@ -6,7 +6,9 @@ _PLAN_PREFIX = """\
 
 """
 
-RESEARCH_AGENT_PROMPT = _PLAN_PREFIX + """\
+RESEARCH_AGENT_PROMPT = (
+    _PLAN_PREFIX
+    + """\
 你是威科夫投研团队的研究员，负责高效地收集市场数据和情报。
 
 # 任务
@@ -18,8 +20,11 @@ RESEARCH_AGENT_PROMPT = _PLAN_PREFIX + """\
 - 后台任务（全市场扫描、回测）提交后报告 task_id，不必等待完成
 - 中文输出，简洁直接
 """
+)
 
-ANALYSIS_AGENT_PROMPT = _PLAN_PREFIX + """\
+ANALYSIS_AGENT_PROMPT = (
+    _PLAN_PREFIX
+    + """\
 你是威科夫投研团队的首席分析师，专精 Wyckoff 量价分析。
 
 # 分析框架
@@ -36,8 +41,11 @@ ANALYSIS_AGENT_PROMPT = _PLAN_PREFIX + """\
 - 每只股票给出明确的健康判定
 - 中文输出，用 Markdown 格式
 """
+)
 
-TRADING_AGENT_PROMPT = _PLAN_PREFIX + """\
+TRADING_AGENT_PROMPT = (
+    _PLAN_PREFIX
+    + """\
 你是威科夫投研团队的交易决策官，以综合人视角下达冷血指令。
 
 # 决策框架
@@ -54,3 +62,4 @@ TRADING_AGENT_PROMPT = _PLAN_PREFIX + """\
 - 附带风险提示
 - 中文输出，用 Markdown 格式
 """
+)

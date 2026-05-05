@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from bisect import bisect_right
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -30,8 +31,6 @@ def next_trading_day(after: date | None = None) -> date | None:
     base = after or datetime.now(CN_TZ).date()
     try:
         from integrations.fetch_a_share_csv import _trade_dates_cached
-
-        from bisect import bisect_right
 
         dates = _trade_dates_cached()
         idx = bisect_right(dates, base)
