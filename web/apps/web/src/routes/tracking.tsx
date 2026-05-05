@@ -21,6 +21,7 @@ interface SummaryStats {
   avg: number | null
   best: number | null
   worst: number | null
+  totalRecommendations: number
 }
 
 const RETENTION_DATES = 30
@@ -50,10 +51,11 @@ export function TrackingPage() {
 
   const latestDates = useMemo(() => getLatestRecommendDates(data, RETENTION_DATES), [data])
   const activeDates = useMemo(() => latestDates.slice(0, selectedWindow), [latestDates, selectedWindow])
-  const visibleData = useMemo(() => {
+  const windowRows = useMemo(() => {
     const dateSet = new Set(activeDates)
     return data.filter((row) => dateSet.has(row.recommend_date))
   }, [data, activeDates])
+  const visibleData = useMemo(() => dedupeRecommendations(windowRows), [windowRows])
 
   const filtered = useMemo(() => {
     let result = visibleData
@@ -90,6 +92,7 @@ export function TrackingPage() {
         activeDateCount={activeDates.length}
         activeOldestDate={activeOldestDate}
         latestDate={latestDate}
+        rawCount={windowRows.length}
         selectedWindow={selectedWindow}
         onWindowChange={setSelectedWindow}
       />
@@ -129,12 +132,14 @@ function DateWindowFilter({
   activeDateCount,
   activeOldestDate,
   latestDate,
+  rawCount,
   selectedWindow,
   onWindowChange,
 }: {
   activeDateCount: number
   activeOldestDate: number | null
   latestDate: number | null
+  rawCount: number
   selectedWindow: RecommendationWindow
   onWindowChange: (value: RecommendationWindow) => void
 }) {
@@ -156,7 +161,8 @@ function DateWindowFilter({
       </label>
       {latestDate && activeOldestDate && (
         <span className="text-xs text-muted-foreground">
-          当前窗口：{formatDate(activeOldestDate)} 至 {formatDate(latestDate)}，{activeDateCount} 个推荐交易日
+          当前窗口：{formatDate(activeOldestDate)} 至 {formatDate(latestDate)}，{activeDateCount} 个推荐交易日，
+          {rawCount} 条推荐记录
         </span>
       )}
     </div>
@@ -165,11 +171,12 @@ function DateWindowFilter({
 
 function SummaryCards({ selectedWindow, stats }: { selectedWindow: RecommendationWindow; stats: SummaryStats }) {
   return (
-    <div className="mb-5 grid grid-cols-2 gap-3 lg:grid-cols-4">
-      <StatCard label="覆盖股票" value={String(stats.count)} />
+    <div className="mb-5 grid grid-cols-2 gap-3 lg:grid-cols-5">
+      <StatCard label="覆盖股票数" value={`${stats.count} 支`} />
       <StatCard label={`近${selectedWindow}个推荐交易日平均涨幅`} value={formatPct(stats.avg)} color={pctColor(stats.avg)} />
-      <StatCard label="最佳" value={formatPct(stats.best)} color={pctColor(stats.best)} />
-      <StatCard label="最大回撤" value={formatPct(stats.worst)} color={pctColor(stats.worst)} />
+      <StatCard label="最高涨幅" value={formatPct(stats.best)} color={pctColor(stats.best)} />
+      <StatCard label="最大跌幅" value={formatPct(stats.worst)} color={pctColor(stats.worst)} />
+      <StatCard label="总推荐次数" value={`${stats.totalRecommendations} 次`} />
     </div>
   )
 }
@@ -221,7 +228,7 @@ function TrackingFilters({
         <option value="score">按评分</option>
       </select>
       <span className="text-xs text-muted-foreground">
-        {filteredCount} / {visibleCount} 条
+        {filteredCount} / {visibleCount} 支
       </span>
     </div>
   )
@@ -294,11 +301,33 @@ function getLatestRecommendDates(rows: Recommendation[], limit: number): number[
   return [...new Set(dates)].sort((a, b) => b - a).slice(0, limit)
 }
 
+function dedupeRecommendations(rows: Recommendation[]): Recommendation[] {
+  const sortedRows = [...rows].sort((a, b) => b.recommend_date - a.recommend_date)
+  const byCode = new Map<number, Recommendation>()
+  for (const row of sortedRows) {
+    const existing = byCode.get(row.code)
+    if (!existing) {
+      byCode.set(row.code, {
+        ...row,
+        recommend_count: recommendationCount(row.recommend_count),
+      })
+      continue
+    }
+    existing.is_ai_recommended = existing.is_ai_recommended || row.is_ai_recommended
+    existing.recommend_count = Math.max(
+      recommendationCount(existing.recommend_count),
+      recommendationCount(row.recommend_count),
+    )
+  }
+  return [...byCode.values()]
+}
+
 function buildSummaryStats(rows: Recommendation[]): SummaryStats | null {
   if (rows.length === 0) return null
+  const totalRecommendations = rows.reduce((total, row) => total + recommendationCount(row.recommend_count), 0)
   const values = rows.map((row) => row.change_pct).filter(isFiniteNumber)
   if (values.length === 0) {
-    return { count: rows.length, avg: null, best: null, worst: null }
+    return { count: rows.length, avg: null, best: null, worst: null, totalRecommendations }
   }
   const sum = values.reduce((total, value) => total + value, 0)
   return {
@@ -306,7 +335,12 @@ function buildSummaryStats(rows: Recommendation[]): SummaryStats | null {
     avg: sum / values.length,
     best: Math.max(...values),
     worst: Math.min(...values),
+    totalRecommendations,
   }
+}
+
+function recommendationCount(value: number | null | undefined): number {
+  return isFiniteNumber(value) && value > 0 ? Math.trunc(value) : 1
 }
 
 function isFiniteNumber(value: number | null | undefined): value is number {
