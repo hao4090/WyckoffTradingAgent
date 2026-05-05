@@ -630,7 +630,7 @@ tickflow                                        （1 分钟盘中数据，尾盘
 
 数据隔离：Web JWT → RLS，CLI access_token → RLS，脚本 service_role_key → 绕过 RLS。
 
-`scripts/db_maintenance.py` 负责清理过期数据：行情缓存约 320 日，订单/信号/净值等短周期表保留 10-40 日区间，避免数据库行数无限增长。
+`scripts/db_maintenance.py` 负责清理过期数据：行情缓存约 320 日，推荐跟踪按表内最新 30 个推荐日期保留，订单/信号/净值等短周期表保留 10-30 日区间，避免数据库行数无限增长。
 
 ## CLI 命令
 
