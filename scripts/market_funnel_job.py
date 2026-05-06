@@ -48,6 +48,7 @@ class RuntimeConfig:
     spec: MarketSpec
     max_symbols: int
     quote_batch_size: int
+    quote_batch_sleep: float
     kline_count: int
     kline_batch_size: int
     kline_batch_sleep: float
@@ -113,6 +114,7 @@ def _runtime_config(market: str, output: str | None) -> RuntimeConfig:
         spec=spec,
         max_symbols=_int_env("MARKET_FUNNEL_MAX_SYMBOLS", spec.default_max_symbols, minimum=1),
         quote_batch_size=_int_env("MARKET_FUNNEL_QUOTE_BATCH_SIZE", 5, minimum=1),
+        quote_batch_sleep=_float_env("MARKET_FUNNEL_QUOTE_BATCH_SLEEP", 1.1),
         kline_count=_int_env("MARKET_FUNNEL_KLINE_COUNT", 320, minimum=220),
         kline_batch_size=_int_env("MARKET_FUNNEL_KLINE_BATCH_SIZE", 80, minimum=1),
         kline_batch_sleep=_float_env("MARKET_FUNNEL_KLINE_BATCH_SLEEP", 0.4),
@@ -218,6 +220,8 @@ def _fetch_quotes(
     for index, chunk in enumerate(batches, start=1):
         print(f"[market-funnel] {cfg.spec.label} 行情批次 {index}/{len(batches)} symbols={len(chunk)}")
         out.update(client.get_quotes(symbols=chunk))
+        if index < len(batches) and cfg.quote_batch_sleep > 0:
+            time.sleep(cfg.quote_batch_sleep)
     return out
 
 
@@ -333,7 +337,8 @@ def run_market_funnel(
     print(
         f"[market-funnel] start market={runtime.spec.key} universe={runtime.spec.universe} "
         f"symbols={len(universe_symbols)} max_symbols={runtime.max_symbols} "
-        f"quote_batch={runtime.quote_batch_size} kline_batch={runtime.kline_batch_size} "
+        f"quote_batch={runtime.quote_batch_size} quote_sleep={runtime.quote_batch_sleep} "
+        f"kline_batch={runtime.kline_batch_size} "
         f"symbol_file={runtime.symbol_path}"
     )
     quotes = _fetch_quotes(tf, universe_symbols, runtime)
@@ -362,6 +367,7 @@ def run_market_funnel(
         "limits": {
             "max_symbols": runtime.max_symbols,
             "quote_batch_size": runtime.quote_batch_size,
+            "quote_batch_sleep": runtime.quote_batch_sleep,
             "kline_batch_size": runtime.kline_batch_size,
             "kline_batch_sleep": runtime.kline_batch_sleep,
             "min_quote_amount": runtime.min_quote_amount,

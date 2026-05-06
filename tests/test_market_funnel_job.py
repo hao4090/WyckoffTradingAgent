@@ -67,6 +67,7 @@ def test_run_market_funnel_uses_quote_prefilter_and_batch_fetch(tmp_path, monkey
     monkeypatch.setenv("MARKET_FUNNEL_SYMBOL_FILE", str(symbol_file))
     monkeypatch.setenv("MARKET_FUNNEL_MAX_SYMBOLS", "2")
     monkeypatch.setenv("MARKET_FUNNEL_QUOTE_BATCH_SIZE", "1")
+    monkeypatch.setenv("MARKET_FUNNEL_QUOTE_BATCH_SLEEP", "0")
     monkeypatch.setenv("MARKET_FUNNEL_KLINE_COUNT", "230")
     monkeypatch.setenv("MARKET_FUNNEL_KLINE_BATCH_SIZE", "1")
     monkeypatch.setenv("MARKET_FUNNEL_KLINE_BATCH_SLEEP", "0")
@@ -87,4 +88,5 @@ def test_run_market_funnel_uses_quote_prefilter_and_batch_fetch(tmp_path, monkey
     assert client.kline_batches == [["00700.HK"], ["00005.HK"]]
     payload = json.loads(output.read_text(encoding="utf-8"))
     assert payload["limits"]["quote_batch_size"] == 1
+    assert payload["limits"]["quote_batch_sleep"] == 0.0
     assert payload["limits"]["kline_batch_size"] == 1

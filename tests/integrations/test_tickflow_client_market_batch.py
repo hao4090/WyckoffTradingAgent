@@ -1,6 +1,40 @@
 from __future__ import annotations
 
+import pytest
+
 from integrations.tickflow_client import TickFlowClient
+
+
+class FakeResponse:
+    def __init__(self, status_code, text="", payload=None, headers=None):
+        self.status_code = status_code
+        self.text = text
+        self._payload = payload or {}
+        self.headers = headers or {}
+
+    def json(self):
+        return self._payload
+
+
+def test_request_honors_tickflow_rate_limit_wait(monkeypatch):
+    client = TickFlowClient(api_key="test-key", max_retries=2)
+    sleeps = []
+    calls = []
+
+    def fake_get(url, *, headers, params, timeout):
+        calls.append((url, headers, params, timeout))
+        if len(calls) == 1:
+            return FakeResponse(429, '{"code":"RATE_LIMITED","message":"实时行情限流 (60/min)，请 1234ms 后重试"}')
+        return FakeResponse(200, payload={"data": []})
+
+    monkeypatch.setattr("integrations.tickflow_client.requests.get", fake_get)
+    monkeypatch.setattr("integrations.tickflow_client.time.sleep", sleeps.append)
+
+    payload = client._request("/v1/quotes", params={"symbols": "AAPL.US"})
+
+    assert payload == {"data": []}
+    assert len(calls) == 2
+    assert sleeps == [pytest.approx(1.734)]
 
 
 def test_get_quotes_accepts_universe(monkeypatch):
