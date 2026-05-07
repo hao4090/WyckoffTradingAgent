@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import { useNavigate } from 'react-router'
 import { Loader2, Play } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/auth'
@@ -62,11 +63,41 @@ async function fetchKline(code: string, apiKey: string): Promise<KlineData[]> {
 }
 
 export function AnalysisPage() {
+  const navigate = useNavigate()
   const user = useAuthStore((s) => s.user)
   const [symbol, setSymbol] = useState('')
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState<AnalysisResult | null>(null)
   const [error, setError] = useState('')
+  const [checkingConfig, setCheckingConfig] = useState(true)
+  const [hasModelConfig, setHasModelConfig] = useState(false)
+  const [hasDataSource, setHasDataSource] = useState(false)
+
+  useEffect(() => {
+    if (!user) return
+    void checkPrerequisites(user.id)
+  }, [user])
+
+  async function checkPrerequisites(userId: string) {
+    setCheckingConfig(true)
+    try {
+      const [config, tickflowKey] = await Promise.all([
+        loadLLMConfig(userId),
+        getTickFlowKey(userId),
+      ])
+      setHasModelConfig(Boolean(config?.api_key && config.model))
+      setHasDataSource(Boolean(tickflowKey))
+    } finally {
+      setCheckingConfig(false)
+    }
+  }
+
+  function getMissingRequirements(modelReady: boolean, dataReady: boolean): string[] {
+    const missing: string[] = []
+    if (!modelReady) missing.push('读盘室模型 API Key / 模型')
+    if (!dataReady) missing.push('TickFlow 股票数据源 API Key')
+    return missing
+  }
 
   async function handleAnalyze() {
     const code = symbol.trim().replace(/\D/g, '')
@@ -84,15 +115,26 @@ export function AnalysisPage() {
         loadLLMConfig(user!.id),
         getTickFlowKey(user!.id),
       ])
-      if (!config) {
-        setError('请先在设置页配置 API Key')
+      const modelReady = Boolean(config?.api_key && config?.model)
+      const dataReady = Boolean(tickflowKey)
+      setHasModelConfig(modelReady)
+      setHasDataSource(dataReady)
+
+      if (!modelReady || !dataReady) {
+        const missing = getMissingRequirements(modelReady, dataReady)
+        setError(`请先在设置页完成配置：${missing.join('、')}`)
+        setLoading(false)
+        return
+      }
+      if (!config || !tickflowKey) {
+        setError('配置状态异常，请前往设置页检查后重试')
         setLoading(false)
         return
       }
 
       const [stockInfoResult, klineData] = await Promise.all([
         supabase.from('recommendation_tracking').select('name').eq('code', parseInt(code)).limit(1).single(),
-        tickflowKey ? fetchKline(code, tickflowKey) : Promise.resolve([]),
+        fetchKline(code, tickflowKey),
       ])
 
       const name = stockInfoResult.data?.name || code
@@ -114,6 +156,22 @@ export function AnalysisPage() {
     <div className="flex h-full flex-col p-6">
       <h1 className="mb-6 text-xl font-semibold">单股分析</h1>
 
+      {!checkingConfig && (!hasModelConfig || !hasDataSource) && (
+        <div className="mb-6 rounded-xl border border-amber-200 bg-amber-50/80 p-4">
+          <h2 className="mb-2 text-sm font-semibold text-amber-900">开始分析前还差一步配置</h2>
+          <ul className="mb-3 list-disc space-y-1 pl-5 text-sm text-amber-800">
+            {!hasModelConfig && <li>请先配置读盘室模型的 API Key 和模型名称</li>}
+            {!hasDataSource && <li>请先配置 TickFlow 股票数据源 API Key</li>}
+          </ul>
+          <button
+            onClick={() => navigate('/settings')}
+            className="rounded-lg bg-amber-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-amber-800"
+          >
+            前往设置页
+          </button>
+        </div>
+      )}
+
       {/* Input */}
       <div className="mb-6 flex items-end gap-3">
         <div className="flex-1 max-w-xs">
@@ -130,7 +188,7 @@ export function AnalysisPage() {
         </div>
         <button
           onClick={handleAnalyze}
-          disabled={loading || !symbol.trim()}
+          disabled={loading || !symbol.trim() || checkingConfig || !hasModelConfig || !hasDataSource}
           className="flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50"
         >
           {loading ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} />}
@@ -245,4 +303,3 @@ async function callLLM(config: LLMConfig, code: string, name: string, klineSumma
   const data = await response.json()
   return data.choices?.[0]?.message?.content || '未获取到分析结果'
 }
-

@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { ExternalLink } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/auth'
 import { PROVIDERS, PROVIDER_LABELS, PROVIDER_BASE_URLS } from '@wyckoff/shared'
@@ -139,23 +140,53 @@ export function SettingsPage() {
         </div>
       )}
 
-      {/* Chat Provider */}
+      {/* Data Sources */}
       <section className="mb-8">
-        <h2 className="mb-3 text-sm font-medium text-muted-foreground">读盘室供应商</h2>
-        <select
-          value={chatProvider}
-          onChange={(e) => setChatProvider(e.target.value as Provider)}
-          className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
-        >
-          {PROVIDERS.map((p) => (
-            <option key={p} value={p}>{PROVIDER_LABELS[p]}</option>
-          ))}
-        </select>
+        <h2 className="mb-3 text-sm font-medium text-muted-foreground">数据源</h2>
+        <div className="space-y-3">
+          <div className="rounded-lg border border-emerald-200 bg-emerald-50/60 px-3 py-2 text-xs text-emerald-800">
+            TickFlow 行情数据源（支持项目）
+            <a
+              href="https://tickflow.org/auth/register?ref=5N4NKTCPL4"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="ml-1 inline-flex items-center gap-1 font-medium text-emerald-900 hover:underline"
+            >
+              邀请链接
+              <ExternalLink size={12} />
+            </a>
+          </div>
+          <Input label="TickFlow API Key" type="password" value={tickflowKey} onChange={setTickflowKey} placeholder="tf-..." />
+        </div>
       </section>
 
       {/* LLM Providers */}
       <section className="mb-8">
         <h2 className="mb-3 text-sm font-medium text-muted-foreground">模型配置</h2>
+        <div className="mb-4 rounded-lg border border-indigo-200 bg-indigo-50/60 px-3 py-2 text-xs text-indigo-800">
+          1Route 模型中转（支持项目）
+          <a
+            href="https://www.1route.dev/register?aff=359904261"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="ml-1 inline-flex items-center gap-1 font-medium text-indigo-900 hover:underline"
+          >
+            邀请链接
+            <ExternalLink size={12} />
+          </a>
+        </div>
+        <div className="mb-4">
+          <label className="mb-1.5 block text-sm font-medium">读盘室供应商</label>
+          <select
+            value={chatProvider}
+            onChange={(e) => setChatProvider(e.target.value as Provider)}
+            className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
+          >
+            {PROVIDERS.map((p) => (
+              <option key={p} value={p}>{PROVIDER_LABELS[p]}</option>
+            ))}
+          </select>
+        </div>
         <div className="space-y-4">
           {PROVIDERS.map((p) => (
             <details key={p} className="rounded-lg border border-border">
@@ -164,6 +195,20 @@ export function SettingsPage() {
                 {configs[p]?.api_key && <span className="ml-2 text-indigo-600">●</span>}
               </summary>
               <div className="space-y-3 border-t border-border px-4 py-3">
+                {p === '1route' && (
+                  <div className="rounded-md bg-indigo-50 px-2.5 py-2 text-xs text-indigo-700">
+                    还没有 1Route 账号？
+                    <a
+                      href="https://www.1route.dev/register?aff=359904261"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="ml-1 inline-flex items-center gap-1 font-medium text-indigo-900 hover:underline"
+                    >
+                      通过邀请链接开通
+                      <ExternalLink size={12} />
+                    </a>
+                  </div>
+                )}
                 <Input
                   label="API Key"
                   type="password"
@@ -186,14 +231,6 @@ export function SettingsPage() {
               </div>
             </details>
           ))}
-        </div>
-      </section>
-
-      {/* Data Sources */}
-      <section className="mb-8">
-        <h2 className="mb-3 text-sm font-medium text-muted-foreground">数据源</h2>
-        <div className="space-y-3">
-          <Input label="TickFlow API Key" type="password" value={tickflowKey} onChange={setTickflowKey} placeholder="tf-..." />
         </div>
       </section>
 
