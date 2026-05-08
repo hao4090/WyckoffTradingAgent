@@ -2,7 +2,7 @@
 
 # WyckoffAgent — Open-Source Wyckoff Trading Agent
 
-**Open-source Wyckoff trading agent and AI stock screener for volume-price analysis, A-share screening, portfolio diagnosis, CLI workflows, and MCP tools.**
+**Open-source Wyckoff trading agent and AI stock screener for volume-price analysis, A-share / HK / US screening, portfolio diagnosis, CLI workflows, and MCP tools.**
 
 **A 股威科夫量价分析智能体 — 你说人话，他读盘面。**
 
@@ -21,7 +21,7 @@
 
 WyckoffAgent is a research-oriented AI trading analysis agent. It helps users inspect Wyckoff volume-price structure, screen stocks, diagnose portfolios, run local CLI workflows, and expose analysis tools through MCP-compatible clients.
 
-用自然语言和一位威科夫大师对话。系统把 A 股日线行情、威科夫结构识别、AI 研报、持仓风控、推荐跟踪和通知推送串成一条自动化链路。
+用自然语言和一位威科夫大师对话。系统把 A 股日线行情、威科夫结构识别、AI 研报、持仓风控、推荐跟踪和通知推送串成一条自动化链路，并已扩展支持港股与美股漏斗扫描。
 
 React Web、Streamlit 维护入口、CLI、MCP 与 GitHub Actions 共同组成当前产品形态；行情优先复用 Supabase 缓存，缺口再回源补拉并回写。
 
@@ -238,6 +238,7 @@ wyckoff dashboard
 | 上下文压缩 | 动态阈值（25% model context window）自动压缩，智能摘要保留工具关键数据，支持超长对话 |
 | 工具确认 | `exec_command`、`write_file`、`update_portfolio` 执行前弹窗确认，防止误操作 |
 | 五层漏斗筛选 | 全市场 ~4500 股 → ~30 候选，六通道 + 板块共振 + 微观狙击。基于历史量价结构发现潜力标的，不构成投资建议 |
+| 跨市场扫描 | A 股主流程已扩展到港股和美股漏斗，支持独立 workflow 定时运行：[港股漏斗](https://github.com/YoungCan-Wang/WyckoffTradingAgent/actions/workflows/wyckoff_funnel_hk.yml) / [美股漏斗](https://github.com/YoungCan-Wang/WyckoffTradingAgent/actions/workflows/wyckoff_funnel_us.yml) |
 | AI 三阵营研报 | 逻辑破产 / 储备营地 / 起跳板，LLM 独立审判 |
 | 持仓诊断 | 批量体检：均线结构、吸筹阶段、触发信号、止损状态 |
 | 私人决断 | 综合持仓 + 候选，输出 EXIT/TRIM/HOLD/PROBE/ATTACK 指令，Telegram 推送 |
@@ -315,6 +316,8 @@ tickflow → tushare → akshare → baostock → efinance
 | 任务 | 时间（北京） | 说明 |
 |------|-------------|------|
 | 漏斗筛选 + AI 研报 + 私人决断 | 周日-周四 18:25 | 全自动，结果推送飞书/Telegram |
+| [港股漏斗](https://github.com/YoungCan-Wang/WyckoffTradingAgent/actions/workflows/wyckoff_funnel_hk.yml) | workflow_dispatch / 可定时 | 港股市场威科夫漏斗扫描 |
+| [美股漏斗](https://github.com/YoungCan-Wang/WyckoffTradingAgent/actions/workflows/wyckoff_funnel_us.yml) | workflow_dispatch / 可定时 | 美股市场威科夫漏斗扫描 |
 | 尾盘策略 | 周一-周五 13:50 | 规则打分 + LLM 复判，筛选尾盘买入 |
 | 盘前风控 | 周一-周五 08:20 | A50 + VIX 预警 |
 | 涨停复盘 | 周一-周五 19:25 | 当日涨幅 ≥ 8% 复盘 |
