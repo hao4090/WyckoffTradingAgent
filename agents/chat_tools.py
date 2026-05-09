@@ -258,9 +258,6 @@ def search_stock_by_name(keyword: str, tool_context: ToolContext) -> list[dict]:
 
 def _enrich_search_results(items: list[dict]) -> None:
     """为搜索结果前几条附加行情、市值、新闻。"""
-    import concurrent.futures
-    from datetime import datetime
-
     try:
         from integrations.data_source import fetch_stock_spot_snapshot
     except Exception:
