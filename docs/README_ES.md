@@ -22,8 +22,6 @@ Web + CLI + MCP triple canal, compatible con Gemini / Claude / OpenAI / DeepSeek
 
 Pagina del proyecto: **[youngcan-wang.github.io/wyckoff-homepage](https://youngcan-wang.github.io/wyckoff-homepage/)**
 
-Entradas por palabra clave: **[Trading Agent](https://youngcan-wang.github.io/wyckoff-homepage/trading-agent/)** · **[Wyckoff Trading Agent](https://youngcan-wang.github.io/wyckoff-homepage/wyckoff-trading-agent/)** · **[AI Trading Agent](https://youngcan-wang.github.io/wyckoff-homepage/ai-trading-agent/)** · **[Stock Screener Agent](https://youngcan-wang.github.io/wyckoff-homepage/stock-screener-agent/)**
-
 > Aviso de riesgo: WyckoffAgent es una herramienta educativa, de investigacion e informacion. No ofrece asesoramiento de inversion, no cubre todas las circunstancias financieras personales y no garantiza resultados futuros.
 
 ## Navegacion de documentos

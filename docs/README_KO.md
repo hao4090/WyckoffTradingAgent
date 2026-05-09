@@ -22,8 +22,6 @@ Web + CLI + MCP 트리플 채널, Gemini / Claude / OpenAI / DeepSeek 멀티 모
 
 프로젝트 홈페이지: **[youngcan-wang.github.io/wyckoff-homepage](https://youngcan-wang.github.io/wyckoff-homepage/)**
 
-키워드 입구: **[Trading Agent](https://youngcan-wang.github.io/wyckoff-homepage/trading-agent/)** · **[Wyckoff Trading Agent](https://youngcan-wang.github.io/wyckoff-homepage/wyckoff-trading-agent/)** · **[AI Trading Agent](https://youngcan-wang.github.io/wyckoff-homepage/ai-trading-agent/)** · **[Stock Screener Agent](https://youngcan-wang.github.io/wyckoff-homepage/stock-screener-agent/)**
-
 > 위험 고지: WyckoffAgent는 교육, 연구, 정보 제공 목적의 도구입니다. 투자 조언을 제공하지 않으며, 개인별 재무 상황을 모두 반영하지 않고, 미래 성과를 보장하지 않습니다.
 
 ## 문서 안내
