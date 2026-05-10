@@ -10,6 +10,7 @@ MAX_TOOL_ROUNDS = 15
 MAX_INCOMPLETE_TOOL_RETRIES = 2
 DOOM_LOOP_WINDOW = 6
 DOOM_LOOP_THRESHOLD = 3
+DOOM_LOOP_EXEMPT = frozenset({"check_background_tasks"})
 
 
 @dataclass(frozen=True)
@@ -289,6 +290,8 @@ def check_doom_loop(
     appears >= ``DOOM_LOOP_THRESHOLD`` times in the window,
     OR when similar args (Jaccard >= threshold) appear >= threshold times.
     """
+    if name in DOOM_LOOP_EXEMPT:
+        return False
     import json as _json
 
     args_text = _json.dumps(args, sort_keys=True, ensure_ascii=False)
