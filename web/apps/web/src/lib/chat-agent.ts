@@ -154,62 +154,64 @@ export async function loadAllModels(userId: string): Promise<ModelOption[]> {
 }
 
 
-function createReasoningFetch(): typeof globalThis.fetch {
-  const cache: string[] = []
+const reasoningCache: string[] = []
 
-  return async (input, init) => {
-    if (init?.body && typeof init.body === 'string') {
-      try {
-        const body = JSON.parse(init.body)
-        if (Array.isArray(body.messages)) {
-          let idx = 0
-          for (const msg of body.messages) {
-            if (msg.role === 'assistant' && !msg.reasoning_content && idx < cache.length) {
-              msg.reasoning_content = cache[idx]
-            }
-            if (msg.role === 'assistant') idx++
+export function resetReasoningCache() {
+  reasoningCache.length = 0
+}
+
+const reasoningFetch: typeof globalThis.fetch = async (input, init) => {
+  if (init?.body && typeof init.body === 'string') {
+    try {
+      const body = JSON.parse(init.body)
+      if (Array.isArray(body.messages)) {
+        let idx = 0
+        for (const msg of body.messages) {
+          if (msg.role === 'assistant' && !msg.reasoning_content && idx < reasoningCache.length) {
+            msg.reasoning_content = reasoningCache[idx]
           }
-          init = { ...init, body: JSON.stringify(body) }
+          if (msg.role === 'assistant') idx++
         }
-      } catch {}
-    }
-
-    const res = await globalThis.fetch(input, init)
-
-    if (!res.ok) {
-      const text = await res.clone().text().catch(() => '')
-      let msg = `API ${res.status}`
-      try { const j = JSON.parse(text); msg = j?.error?.message || j?.error || msg } catch {}
-      throw new Error(msg)
-    }
-
-    const contentType = res.headers.get('content-type') || ''
-    if (!contentType.includes('text/event-stream') || !res.body) return res
-
-    let reasoning = ''
-    const original = res.body
-    const transformed = original.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
-      transform(chunk, controller) {
-        controller.enqueue(chunk)
-        const text = new TextDecoder().decode(chunk)
-        for (const line of text.split('\n')) {
-          if (!line.startsWith('data: ') || line === 'data: [DONE]') continue
-          try {
-            const evt = JSON.parse(line.slice(6))
-            const rc = evt?.choices?.[0]?.delta?.reasoning_content
-            if (rc) reasoning += rc
-          } catch {}
-        }
-      },
-      flush() { if (reasoning) cache.push(reasoning) },
-    }))
-
-    return new Response(transformed, {
-      status: res.status,
-      statusText: res.statusText,
-      headers: res.headers,
-    })
+        init = { ...init, body: JSON.stringify(body) }
+      }
+    } catch {}
   }
+
+  const res = await globalThis.fetch(input, init)
+
+  if (!res.ok) {
+    const text = await res.clone().text().catch(() => '')
+    let msg = `API ${res.status}`
+    try { const j = JSON.parse(text); msg = j?.error?.message || j?.error || msg } catch {}
+    throw new Error(msg)
+  }
+
+  const contentType = res.headers.get('content-type') || ''
+  if (!contentType.includes('text/event-stream') || !res.body) return res
+
+  let reasoning = ''
+  const original = res.body
+  const transformed = original.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
+    transform(chunk, controller) {
+      controller.enqueue(chunk)
+      const text = new TextDecoder().decode(chunk)
+      for (const line of text.split('\n')) {
+        if (!line.startsWith('data: ') || line === 'data: [DONE]') continue
+        try {
+          const evt = JSON.parse(line.slice(6))
+          const rc = evt?.choices?.[0]?.delta?.reasoning_content
+          if (rc) reasoning += rc
+        } catch {}
+      }
+    },
+    flush() { if (reasoning) reasoningCache.push(reasoning) },
+  }))
+
+  return new Response(transformed, {
+    status: res.status,
+    statusText: res.statusText,
+    headers: res.headers,
+  })
 }
 
 function createProxiedProvider(config: LLMConfig) {
@@ -217,7 +219,7 @@ function createProxiedProvider(config: LLMConfig) {
     apiKey: config.api_key,
     baseURL: '/api/llm-proxy',
     headers: { 'X-Target-URL': config.base_url },
-    fetch: createReasoningFetch(),
+    fetch: reasoningFetch,
   })
 }
 

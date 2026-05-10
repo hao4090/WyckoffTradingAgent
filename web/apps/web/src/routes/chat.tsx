@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useCallback, memo } from 'react'
 import { Send, RotateCcw, ChevronDown, ChevronRight, Wrench, Brain } from 'lucide-react'
 import { useAuthStore } from '@/stores/auth'
-import { loadLLMConfig, loadAllModels, runChatAgentStream, type LLMConfig, type ModelOption, type StepInfo } from '@/lib/chat-agent'
+import { loadLLMConfig, loadAllModels, runChatAgentStream, resetReasoningCache, type LLMConfig, type ModelOption, type StepInfo } from '@/lib/chat-agent'
 import { MarkdownContent } from '@/components/markdown'
 import { usePreferences, type TranslationKey } from '@/lib/preferences'
 
@@ -201,6 +201,7 @@ export function ChatPage() {
 
   function handleNewChat() {
     abortRef.current = true
+    resetReasoningCache()
     setMessages([])
     setLiveSteps([])
     setError('')
