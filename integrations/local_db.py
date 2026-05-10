@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS recommendation_tracking (
     initial_price REAL DEFAULT 0,
     current_price REAL DEFAULT 0,
     is_ai_recommended INTEGER DEFAULT 0,
+    rag_vetoed INTEGER DEFAULT 0,
     camp TEXT DEFAULT '',
     synced_at TEXT DEFAULT (datetime('now')),
     UNIQUE(code, recommend_date)

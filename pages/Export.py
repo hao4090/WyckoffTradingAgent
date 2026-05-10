@@ -168,7 +168,7 @@ with content_col:
             batch_symbols_text = st.text_area(
                 "股票代码列表（支持粘贴混合文本）",
                 value="",
-                placeholder="例如：000973;600798;300459（; 或 ；均可）",
+                placeholder="例如：601318;000001;600519（; 或 ；均可）",
                 help="用分号（; 或 ；）分隔，系统会提取其中的 6 位数字作为股票代码（自动去重）。",
             )
 
@@ -231,7 +231,7 @@ with content_col:
                     "选择股票 (支持代码或名称搜索)",
                     options=stock_options,
                     index=default_index,
-                    help="输入代码（如 300364）或名称（如 中文在线）进行搜索",
+                    help="输入代码（如 601318）或名称（如 中国平安）进行搜索",
                     key="stock_selector",
                 )
 
@@ -250,7 +250,7 @@ with content_col:
                 symbol_input = st.text_input(
                     "股票代码 (必填)",
                     value=st.session_state.current_symbol,
-                    help="请输入 6 位股票代码，例如 300364",
+                    help="请输入 6 位股票代码，例如 601318",
                     key="symbol_input_widget",
                 )
                 if symbol_input != st.session_state.current_symbol:

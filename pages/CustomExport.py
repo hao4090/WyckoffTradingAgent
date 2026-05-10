@@ -44,7 +44,7 @@ with content_col:
             "fn": get_stock_hist,
             "has_adjust": True,
             "help": "返回日频 K 线数据；symbol 为 6 位股票代码（支持 akshare/baostock/efinance 自动降级）。",
-            "default_symbol": "300364",
+            "default_symbol": "601318",
         },
         {
             "id": "index_zh_a_hist",

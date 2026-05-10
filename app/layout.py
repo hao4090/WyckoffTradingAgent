@@ -18,7 +18,7 @@ def init_session_state() -> None:
     _set_default("access_token", None)
     _set_default("refresh_token", None)
     _set_default("search_history", [])
-    _set_default("current_symbol", "300364")
+    _set_default("current_symbol", "601318")
     _set_default("should_run", False)
     _set_default("mobile_mode", False)
     _set_default("custom_export_payload", None)

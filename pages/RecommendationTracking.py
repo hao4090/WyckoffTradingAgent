@@ -69,6 +69,11 @@ with content_col:
     df["is_ai_recommended"] = (
         df["is_ai_recommended"].apply(lambda x: str(x).strip().lower() in {"1", "true", "t", "yes", "y"}).astype(bool)
     )
+    if "rag_vetoed" not in df.columns:
+        df["rag_vetoed"] = False
+    df["rag_vetoed"] = (
+        df["rag_vetoed"].apply(lambda x: str(x).strip().lower() in {"1", "true", "t", "yes", "y"}).astype(bool)
+    )
     df["funnel_score"] = pd.to_numeric(df["funnel_score"], errors="coerce")
     df["initial_price"] = pd.to_numeric(df.get("initial_price"), errors="coerce")
     df["current_price"] = pd.to_numeric(df.get("current_price"), errors="coerce")
@@ -131,6 +136,7 @@ with content_col:
         "current_price": "first",
         "change_pct": "first",
         "is_ai_recommended": "any",  # 任意一次被 AI 推荐过就标 True
+        "rag_vetoed": "any",
         "recommend_count": "max",  # 取最大推荐次数
         "recommend_reason": "first",
         "funnel_score": "first",
@@ -146,9 +152,10 @@ with content_col:
     st.markdown("### 📊 表现摘要")
     st.caption(f"当前窗口覆盖 {len(active_dates)} 个推荐交易日，{len(stats_df)} 条推荐记录。")
     col1, col2, col3, col4, col5 = st.columns(5)
-    avg_change = df["change_pct"].mean()
-    max_change = df["change_pct"].max()
-    min_change = df["change_pct"].min()
+    active_df = df[~df["rag_vetoed"]]
+    avg_change = active_df["change_pct"].mean()
+    max_change = active_df["change_pct"].max()
+    min_change = active_df["change_pct"].min()
     total_recommend_events = int(df["recommend_count"].sum())
 
     col1.metric("覆盖股票数", f"{len(df)} 支")
@@ -164,7 +171,7 @@ with content_col:
     search_col, ai_col, sort_col, order_col = st.columns([2, 1, 1, 1])
 
     with search_col:
-        search_query = st.text_input("搜索代码或名字", placeholder="输入 000001 或 平安银行...", key="rec_search")
+        search_query = st.text_input("搜索代码或名字", placeholder="输入 601318 或 中国平安...", key="rec_search")
 
     with ai_col:
         only_ai = st.checkbox("只看AI推荐", value=False, key="rec_only_ai")
@@ -225,6 +232,7 @@ with content_col:
             "initial_price",
             "current_price",
             "is_ai_recommended",
+            "rag_vetoed",
             "recommend_count",
             "days_since_recommend",
             "recommend_date_str",
@@ -233,6 +241,7 @@ with content_col:
         ]
     ].copy()
     display_df["is_ai_recommended"] = display_df["is_ai_recommended"].map(lambda x: "是" if bool(x) else "否")
+    display_df["rag_vetoed"] = display_df["rag_vetoed"].map(lambda x: "已剔除" if bool(x) else "")
 
     display_df.columns = [
         "代码",
@@ -241,6 +250,7 @@ with content_col:
         "加入价",
         "当前价",
         "AI推荐",
+        "RAG防雷",
         "推荐次数",
         "加入推荐天数",
         "推荐日期",
@@ -267,7 +277,8 @@ with content_col:
             ),
             subset=["累计涨跌幅"],
         )
-        .map(lambda v: "color: #16a34a; font-weight: 700;" if v == "是" else "color: #6b7280;", subset=["AI推荐"]),
+        .map(lambda v: "color: #16a34a; font-weight: 700;" if v == "是" else "color: #6b7280;", subset=["AI推荐"])
+        .map(lambda v: "color: #dc2626; font-weight: 700;" if v == "已剔除" else "", subset=["RAG防雷"]),
         use_container_width=True,
         hide_index=True,
         height=600,

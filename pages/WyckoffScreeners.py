@@ -146,7 +146,7 @@ with content_col:
     board = "all"
     manual_symbols = ""
     if pool_mode == "手动输入":
-        manual_symbols = st.text_area("股票代码", placeholder="例如: 600519, 000001", height=120)
+        manual_symbols = st.text_area("股票代码", placeholder="例如: 601318", height=120)
     else:
         board = st.selectbox(
             "选择板块",

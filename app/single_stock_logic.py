@@ -389,7 +389,7 @@ def render_single_stock_page(
     col1, col2 = st.columns([1, 1])
     with col1:
         stock_input = st.text_input(
-            "股票代码", placeholder="例如：600519", help="请输入单个 A 股代码", key="single_stock_code"
+            "股票代码", placeholder="例如：601318", help="请输入单个 A 股代码", key="single_stock_code"
         )
     with col2:
         uploaded_file = st.file_uploader(

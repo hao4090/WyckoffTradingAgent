@@ -12,6 +12,7 @@ interface Recommendation {
   current_price: number | null
   change_pct: number | null
   is_ai_recommended: boolean
+  rag_vetoed: boolean
   funnel_score: number | null
   recommend_count: number | null
   recommend_reason: string | null
@@ -364,9 +365,14 @@ function SortableHeader({
 }
 
 function TrackingRow({ row }: { row: Recommendation }) {
+  const vetoed = row.rag_vetoed
+  const rowCls = vetoed ? 'border-t border-border hover:bg-muted/20 opacity-60 line-through' : 'border-t border-border hover:bg-muted/20'
   return (
-    <tr className="border-t border-border hover:bg-muted/20">
-      <td className="px-3 py-2 font-mono">{String(row.code).padStart(6, '0')}</td>
+    <tr className={rowCls}>
+      <td className="px-3 py-2 font-mono">
+        {String(row.code).padStart(6, '0')}
+        {vetoed && <span className="ml-1 inline-block h-2 w-2 rounded-full bg-red-500" title="RAG veto" />}
+      </td>
       <td className="px-3 py-2">{row.name || '-'}</td>
       <td className="px-3 py-2 text-right text-muted-foreground">{formatDate(row.recommend_date)}</td>
       <td className="px-3 py-2 text-right">{row.initial_price?.toFixed(2) || '-'}</td>
@@ -409,6 +415,7 @@ function dedupeRecommendations(rows: Recommendation[]): Recommendation[] {
       continue
     }
     existing.is_ai_recommended = existing.is_ai_recommended || row.is_ai_recommended
+    existing.rag_vetoed = existing.rag_vetoed || row.rag_vetoed
     existing.recommend_count = Math.max(
       recommendationCount(existing.recommend_count),
       recommendationCount(row.recommend_count),
@@ -420,7 +427,8 @@ function dedupeRecommendations(rows: Recommendation[]): Recommendation[] {
 function buildSummaryStats(rows: Recommendation[]): SummaryStats | null {
   if (rows.length === 0) return null
   const totalRecommendations = rows.reduce((total, row) => total + recommendationCount(row.recommend_count), 0)
-  const values = rows.map((row) => row.change_pct).filter(isFiniteNumber)
+  const activeRows = rows.filter((row) => !row.rag_vetoed)
+  const values = activeRows.map((row) => row.change_pct).filter(isFiniteNumber)
   if (values.length === 0) {
     return { count: rows.length, avg: null, best: null, worst: null, totalRecommendations }
   }

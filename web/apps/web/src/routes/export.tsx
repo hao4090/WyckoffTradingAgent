@@ -4,6 +4,40 @@ import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/auth'
 import { usePreferences } from '@/lib/preferences'
 
+async function getTickFlowKey(userId: string): Promise<string | null> {
+  const { data } = await supabase
+    .from('user_settings')
+    .select('tickflow_api_key')
+    .eq('user_id', userId)
+    .single()
+  return data?.tickflow_api_key || null
+}
+
+async function checkWhitelist(userId: string): Promise<boolean> {
+  const { data } = await supabase
+    .from('whitelist')
+    .select('user_id')
+    .eq('user_id', userId)
+    .limit(1)
+  return Array.isArray(data) && data.length > 0
+}
+
+async function fetchFromCache(code: string, adjustVal: string, start: string, end: string, limit: number): Promise<Record<string, string | number>[] | null> {
+  const startIso = `${start.slice(0, 4)}-${start.slice(4, 6)}-${start.slice(6, 8)}`
+  const endIso = `${end.slice(0, 4)}-${end.slice(4, 6)}-${end.slice(6, 8)}`
+  const { data } = await supabase
+    .from('stock_hist_cache')
+    .select('date,open,high,low,close,volume,amount,pct_chg')
+    .eq('symbol', code)
+    .eq('adjust', adjustVal || 'none')
+    .gte('date', startIso)
+    .lte('date', endIso)
+    .order('date', { ascending: true })
+    .limit(limit)
+  if (!data || data.length === 0) return null
+  return data as Record<string, string | number>[]
+}
+
 export function ExportPage() {
   const user = useAuthStore((s) => s.user)
   const { t } = usePreferences()
@@ -15,16 +49,6 @@ export function ExportPage() {
   const [preview, setPreview] = useState<Record<string, string | number>[] | null>(null)
   const [csvBlob, setCsvBlob] = useState<Blob | null>(null)
   const [fileName, setFileName] = useState('')
-
-  async function getTickFlowKey(): Promise<string | null> {
-    if (!user) return null
-    const { data } = await supabase
-      .from('user_settings')
-      .select('tickflow_api_key')
-      .eq('user_id', user.id)
-      .single()
-    return data?.tickflow_api_key || null
-  }
 
   async function handleExport() {
     const code = symbol.trim().replace(/\D/g, '')
@@ -39,13 +63,6 @@ export function ExportPage() {
     setCsvBlob(null)
 
     try {
-      const apiKey = await getTickFlowKey()
-      if (!apiKey) {
-        setError(t('export.configureTickflow'))
-        setLoading(false)
-        return
-      }
-
       const endDate = new Date()
       endDate.setDate(endDate.getDate() - 1)
       const end = formatDate(endDate)
@@ -54,19 +71,36 @@ export function ExportPage() {
       startDate.setDate(startDate.getDate() - Math.ceil(days * 1.6))
       const start = formatDate(startDate)
 
-      const url = `https://api.tickflow.io/v1/stock/history?symbol=${code}&start_date=${start}&end_date=${end}&adjust=${adjust}&limit=${days}`
+      let rows: Record<string, string | number>[] = []
 
-      const resp = await fetch(url, {
-        headers: { 'Authorization': `Bearer ${apiKey}` },
-      })
-
-      if (!resp.ok) {
-        const errBody = await resp.text()
-        throw new Error(t('export.apiError', { status: resp.status, message: errBody.slice(0, 200) }))
+      if (user && await checkWhitelist(user.id)) {
+        const cached = await fetchFromCache(code, adjust, start, end, days)
+        if (cached && cached.length > 0) {
+          rows = cached
+        }
       }
 
-      const json = await resp.json()
-      const rows: Record<string, string | number>[] = json.data || json.records || json || []
+      if (rows.length === 0) {
+        const apiKey = user ? await getTickFlowKey(user.id) : null
+        if (!apiKey) {
+          setError(t('export.configureTickflow'))
+          setLoading(false)
+          return
+        }
+
+        const url = `https://api.tickflow.io/v1/stock/history?symbol=${code}&start_date=${start}&end_date=${end}&adjust=${adjust}&limit=${days}`
+        const resp = await fetch(url, {
+          headers: { 'Authorization': `Bearer ${apiKey}` },
+        })
+
+        if (!resp.ok) {
+          const errBody = await resp.text()
+          throw new Error(t('export.apiError', { status: resp.status, message: errBody.slice(0, 200) }))
+        }
+
+        const json = await resp.json()
+        rows = json.data || json.records || json || []
+      }
 
       if (!Array.isArray(rows) || rows.length === 0) {
         throw new Error(t('export.noData'))

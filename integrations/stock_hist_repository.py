@@ -25,7 +25,7 @@ def _is_cache_allowed(user_id: str, context: str) -> bool:
     if ctx in ("background", "admin"):
         return True
     if not user_id or user_id == _LOCAL_USER_ID:
-        return True
+        return False
     from core.cache_whitelist import is_user_in_cache_whitelist
 
     return is_user_in_cache_whitelist(user_id)
