@@ -24,6 +24,18 @@ React Web、CLI、MCP 与 GitHub Actions 共同组成当前产品形态；行情
 
 ---
 
+## Operating Cost Transparency
+
+从 **2026-06-03** 起，WyckoffAgent 按付费基础设施运行：行情源、数据库、AI 报告、在线分析服务和自动化维护都会进入显性成本模型。
+
+<p align="center">
+  <img src="docs/screenshots/supabase-quota-grace-2026-06-03.svg" alt="Supabase quota grace period until 03 Jun, 2026" width="900" />
+</p>
+
+公开成本模型见 [docs/COST_MODEL.md](docs/COST_MODEL.md)。
+
+---
+
 ## Special Thanks
 
 <table>
@@ -164,6 +176,7 @@ wyckoff dashboard
 | 想了解 | 去哪里看 |
 |--------|----------|
 | 架构、Actions、数据表、缓存 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
+| 运营成本、规模化预算 | [docs/COST_MODEL.md](docs/COST_MODEL.md) |
 | 漏斗、AI 研报、OMS、回测 | [README_STRATEGY.md](README_STRATEGY.md) |
 | 术语速查 | [GLOSSARY.md](GLOSSARY.md) |
 | 方法论、运维排障 | [wiki_repo_new/Home.md](wiki_repo_new/Home.md) |
