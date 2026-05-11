@@ -10,12 +10,18 @@ ADK 的 FunctionTool 会自动解析为工具 schema。
 
 from __future__ import annotations
 
+import ipaddress
 import logging
 import os
+import pathlib
+import re
+import shlex
+import socket
 import threading
 import time
 from datetime import date, timedelta
 from typing import Any
+from urllib.parse import urlparse
 
 try:
     from google.adk.tools import ToolContext
@@ -29,6 +35,261 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 _NAME_MAP: dict[str, str] | None = None
+_MAX_AGENT_FILE_BYTES = 50 * 1024 * 1024
+_MAX_AGENT_TEXT_WRITE_BYTES = 2 * 1024 * 1024
+_MAX_AGENT_WEB_BYTES = 1024 * 1024
+
+_SENSITIVE_KEY_RE = re.compile(
+    r"(api[_-]?key|access[_-]?token|refresh[_-]?token|token|password|passwd|secret|credential|authorization|cookie|session)",
+    re.IGNORECASE,
+)
+_SECRET_ASSIGNMENT_RE = re.compile(
+    r"(?i)\b(api[_-]?key|access[_-]?token|refresh[_-]?token|token|password|passwd|secret|authorization|cookie)\b"
+    r"\s*[:=]\s*([\"']?)[^\s\"',;]+"
+)
+_BEARER_RE = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{12,}")
+_COMMON_SECRET_VALUE_RE = re.compile(
+    r"\b(?:sk|ak|pk|ghp|gho|github_pat|glpat|xoxb|xoxp|AIza)[A-Za-z0-9_\-]{12,}\b"
+)
+_BLOCKED_PATH_PARTS = {
+    ".ssh",
+    ".aws",
+    ".azure",
+    ".config/gcloud",
+    ".gnupg",
+    ".kube",
+    ".docker",
+    ".npm",
+}
+_BLOCKED_FILE_NAMES = {
+    ".env",
+    ".env.local",
+    ".env.production",
+    ".netrc",
+    ".npmrc",
+    ".pypirc",
+    "id_rsa",
+    "id_dsa",
+    "id_ecdsa",
+    "id_ed25519",
+}
+_ALLOWED_WYCKOFF_SUBDIRS = {"tool-results", "scratchpad", "exports", "reports"}
+_BLOCKED_SYSTEM_ROOTS = (
+    pathlib.Path("/bin"),
+    pathlib.Path("/etc"),
+    pathlib.Path("/Library"),
+    pathlib.Path("/private/etc"),
+    pathlib.Path("/sbin"),
+    pathlib.Path("/System"),
+    pathlib.Path("/usr"),
+    pathlib.Path("/var"),
+)
+_BLOCKED_COMMANDS = {
+    "bash",
+    "chflags",
+    "chmod",
+    "chown",
+    "curl",
+    "dd",
+    "ftp",
+    "env",
+    "kill",
+    "launchctl",
+    "mkfs",
+    "nc",
+    "ncat",
+    "osascript",
+    "pkill",
+    "printenv",
+    "rm",
+    "rmdir",
+    "rsync",
+    "scp",
+    "sh",
+    "shred",
+    "ssh",
+    "su",
+    "sudo",
+    "wget",
+    "zsh",
+}
+_INLINE_CODE_COMMANDS = {"python", "python3", "node", "ruby", "perl", "php"}
+_SHELL_META_RE = re.compile(r"[\n\r;&|<>`]|(?<!\\)\$\(")
+_SAFE_WRITE_SUFFIXES = {
+    ".csv",
+    ".html",
+    ".json",
+    ".jsonl",
+    ".log",
+    ".md",
+    ".txt",
+    ".yaml",
+    ".yml",
+}
+_SAFE_WEB_CONTENT_TYPES = (
+    "application/json",
+    "application/xml",
+    "application/xhtml+xml",
+    "text/",
+)
+
+
+def _security_error(message: str) -> dict:
+    return {"error": f"安全拦截: {message}"}
+
+
+def _redact_sensitive_text(text: str) -> str:
+    """Redact obvious credentials before model-facing tool output is returned."""
+
+    if not text:
+        return text
+    redacted = _SECRET_ASSIGNMENT_RE.sub(lambda m: f"{m.group(1)}={m.group(2)}***REDACTED***", text)
+    redacted = _BEARER_RE.sub("Bearer ***REDACTED***", redacted)
+    redacted = _COMMON_SECRET_VALUE_RE.sub("***REDACTED***", redacted)
+    return redacted
+
+
+def _redact_sensitive_columns(df: Any) -> Any:
+    """Mask sensitive dataframe columns while preserving table shape."""
+
+    try:
+        out = df.copy()
+        for col in out.columns:
+            if _SENSITIVE_KEY_RE.search(str(col)):
+                out[col] = "***REDACTED***"
+        return out
+    except Exception:
+        return df
+
+
+def _path_parts_lower(path: pathlib.Path) -> list[str]:
+    return [part.lower() for part in path.parts]
+
+
+def _is_allowed_wyckoff_path(parts: list[str]) -> bool:
+    if ".wyckoff" not in parts:
+        return False
+    idx = parts.index(".wyckoff")
+    return len(parts) > idx + 1 and parts[idx + 1] in _ALLOWED_WYCKOFF_SUBDIRS
+
+
+def _is_under_path(path: pathlib.Path, root: pathlib.Path) -> bool:
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
+def _validate_agent_path(path: str, *, for_write: bool = False) -> pathlib.Path | dict:
+    if not path or not str(path).strip():
+        return _security_error("文件路径不能为空")
+
+    try:
+        p = pathlib.Path(path).expanduser().resolve()
+    except Exception as e:
+        return _security_error(f"文件路径无效: {e}")
+
+    parts = _path_parts_lower(p)
+    joined = "/".join(parts)
+    name = p.name.lower()
+    allowed_wyckoff_path = _is_allowed_wyckoff_path(parts)
+
+    if any(_is_under_path(p, root) for root in _BLOCKED_SYSTEM_ROOTS):
+        return _security_error("禁止访问系统目录")
+
+    user_library = pathlib.Path.home().expanduser() / "Library"
+    if _is_under_path(p, user_library):
+        return _security_error("禁止访问用户 Library 配置目录")
+
+    if ".wyckoff" in parts and not allowed_wyckoff_path:
+        return _security_error("禁止读取或写入 Wyckoff 凭据、会话和配置目录")
+
+    if any(part in parts for part in _BLOCKED_PATH_PARTS) or any(part in joined for part in _BLOCKED_PATH_PARTS):
+        return _security_error("禁止访问凭据、密钥或云配置目录")
+
+    hidden_parts = [part for part in parts if part.startswith(".") and part not in {".", "..", ".wyckoff"}]
+    if hidden_parts and not allowed_wyckoff_path:
+        return _security_error("禁止访问隐藏文件或隐藏目录")
+
+    if name in _BLOCKED_FILE_NAMES or name.startswith(".env"):
+        return _security_error("禁止访问环境变量或密钥文件")
+
+    if _SENSITIVE_KEY_RE.search(name):
+        return _security_error("文件名疑似包含凭据或会话数据")
+
+    if for_write:
+        suffix = p.suffix.lower()
+        if suffix not in _SAFE_WRITE_SUFFIXES:
+            allowed = ", ".join(sorted(_SAFE_WRITE_SUFFIXES))
+            return _security_error(f"只允许写入文本/报告类文件: {allowed}")
+    return p
+
+
+def _validate_agent_command(command: str) -> list[str] | dict:
+    raw = str(command or "").strip()
+    if not raw:
+        return _security_error("命令不能为空")
+    if len(raw) > 500:
+        return _security_error("命令过长，请拆成更小的只读操作")
+    if _SHELL_META_RE.search(raw):
+        return _security_error("禁止使用 shell 控制符、管道、重定向、命令替换或多条命令")
+
+    try:
+        args = shlex.split(raw)
+    except ValueError as e:
+        return _security_error(f"命令解析失败: {e}")
+    if not args:
+        return _security_error("命令不能为空")
+
+    executable = pathlib.Path(args[0]).name.lower()
+    if executable in _BLOCKED_COMMANDS:
+        return _security_error(f"禁止通过 Agent 执行高风险命令: {executable}")
+    if executable in _INLINE_CODE_COMMANDS and any(arg in {"-c", "-e"} for arg in args[1:]):
+        return _security_error("禁止通过 Agent 执行内联代码")
+    for arg in args[1:]:
+        lowered = arg.lower()
+        touches_wyckoff_config = ".wyckoff" in lowered and not any(
+            f".wyckoff/{subdir}" in lowered for subdir in _ALLOWED_WYCKOFF_SUBDIRS
+        )
+        if _SENSITIVE_KEY_RE.search(arg) or ".ssh" in lowered or ".env" in lowered or touches_wyckoff_config:
+            return _security_error("命令参数疑似访问凭据、会话或密钥")
+    return args
+
+
+def _validate_public_http_url(url: str) -> str | dict:
+    raw = str(url or "").strip()
+    if not raw:
+        return _security_error("URL 不能为空")
+
+    parsed = urlparse(raw)
+    if parsed.scheme not in {"http", "https"}:
+        return _security_error("只允许抓取 http/https URL")
+    if parsed.username or parsed.password:
+        return _security_error("URL 中禁止携带用户名或密码")
+    if not parsed.hostname:
+        return _security_error("URL 缺少主机名")
+    if parsed.port and parsed.port not in {80, 443}:
+        return _security_error("禁止抓取非标准端口，避免访问内网服务")
+
+    host = parsed.hostname.strip().lower().rstrip(".")
+    if host in {"localhost", "localhost.localdomain"} or host.endswith(".local"):
+        return _security_error("禁止抓取本机或本地域名")
+
+    try:
+        infos = socket.getaddrinfo(host, parsed.port or (443 if parsed.scheme == "https" else 80), type=socket.SOCK_STREAM)
+    except socket.gaierror:
+        return _security_error("URL 主机无法解析")
+
+    for info in infos:
+        ip_text = info[4][0]
+        try:
+            ip = ipaddress.ip_address(ip_text)
+        except ValueError:
+            return _security_error("URL 解析到无效地址")
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_reserved or ip.is_unspecified:
+            return _security_error("禁止抓取内网、本机、链路本地或保留地址")
+    return raw
 
 
 def _code_to_name(code: str) -> str:
@@ -1524,10 +1785,10 @@ def run_backtest(
 
 
 def exec_command(command: str, timeout: int = 30, tool_context: ToolContext = None) -> dict:
-    """在用户本地执行 shell 命令并返回输出。
+    """在用户本地执行单条低风险命令并返回输出。
 
     Args:
-        command: 要执行的 shell 命令
+        command: 要执行的命令；禁止 shell 控制符、管道、重定向和高风险命令
         timeout: 超时秒数，默认 30
 
     Returns:
@@ -1535,19 +1796,25 @@ def exec_command(command: str, timeout: int = 30, tool_context: ToolContext = No
     """
     import subprocess
 
+    args = _validate_agent_command(command)
+    if isinstance(args, dict):
+        return args
+
     timeout = max(1, min(int(timeout), 120))
     try:
         r = subprocess.run(
-            command,
-            shell=True,
+            args,
+            shell=False,
             capture_output=True,
             text=True,
             timeout=timeout,
             cwd=os.path.expanduser("~"),
         )
+        stdout = _redact_sensitive_text(r.stdout)
+        stderr = _redact_sensitive_text(r.stderr)
         return {
-            "stdout": r.stdout[:8000] + ("...(截断)" if len(r.stdout) > 8000 else ""),
-            "stderr": r.stderr[:2000] + ("...(截断)" if len(r.stderr) > 2000 else ""),
+            "stdout": stdout[:8000] + ("...(截断)" if len(stdout) > 8000 else ""),
+            "stderr": stderr[:2000] + ("...(截断)" if len(stderr) > 2000 else ""),
             "returncode": r.returncode,
         }
     except subprocess.TimeoutExpired:
@@ -1566,15 +1833,15 @@ def read_file(path: str, encoding: str = "utf-8", tool_context: ToolContext = No
     Returns:
         包含 path, size, content 的 dict。CSV 返回 markdown 表格预览。
     """
-    import pathlib
-
-    p = pathlib.Path(path).expanduser().resolve()
+    p = _validate_agent_path(path, for_write=False)
+    if isinstance(p, dict):
+        return p
     if not p.exists():
         return {"error": f"文件不存在: {p}"}
     if not p.is_file():
         return {"error": f"不是文件: {p}"}
     size = p.stat().st_size
-    if size > 50 * 1024 * 1024:
+    if size > _MAX_AGENT_FILE_BYTES:
         return {"error": f"文件过大 ({size / 1024 / 1024:.1f}MB)，上限 50MB"}
 
     suffix = p.suffix.lower()
@@ -1583,14 +1850,16 @@ def read_file(path: str, encoding: str = "utf-8", tool_context: ToolContext = No
             import pandas as pd
 
             df = pd.read_csv(p, encoding=encoding, nrows=50)
+            df = _redact_sensitive_columns(df)
             preview = df.to_markdown(index=False)
-            return {"path": str(p), "size": size, "rows_total": "≤50(预览)", "content": preview}
+            return {"path": str(p), "size": size, "rows_total": "≤50(预览)", "content": _redact_sensitive_text(preview)}
         elif suffix in (".xls", ".xlsx"):
             import pandas as pd
 
             df = pd.read_excel(p, nrows=50)
+            df = _redact_sensitive_columns(df)
             preview = df.to_markdown(index=False)
-            return {"path": str(p), "size": size, "rows_total": "≤50(预览)", "content": preview}
+            return {"path": str(p), "size": size, "rows_total": "≤50(预览)", "content": _redact_sensitive_text(preview)}
         elif suffix == ".json":
             import json as _json
 
@@ -1600,13 +1869,14 @@ def read_file(path: str, encoding: str = "utf-8", tool_context: ToolContext = No
                 content = _json.dumps(obj, ensure_ascii=False, indent=2)[:10000]
             except _json.JSONDecodeError:
                 content = text
-            return {"path": str(p), "size": size, "content": content}
+            return {"path": str(p), "size": size, "content": _redact_sensitive_text(content)}
         else:
             text = p.read_text(encoding=encoding)
+            content = _redact_sensitive_text(text)
             return {
                 "path": str(p),
                 "size": size,
-                "content": text[:10000] + ("...(截断)" if len(text) > 10000 else ""),
+                "content": content[:10000] + ("...(截断)" if len(content) > 10000 else ""),
             }
     except Exception as e:
         return {"error": f"读取失败: {e}"}
@@ -1623,9 +1893,15 @@ def write_file(path: str, content: str, encoding: str = "utf-8", tool_context: T
     Returns:
         包含 path, size 的 dict。
     """
-    import pathlib
-
-    p = pathlib.Path(path).expanduser().resolve()
+    p = _validate_agent_path(path, for_write=True)
+    if isinstance(p, dict):
+        return p
+    try:
+        content_bytes = str(content).encode(encoding)
+    except LookupError:
+        return {"error": f"写入失败: 不支持的编码 {encoding}"}
+    if len(content_bytes) > _MAX_AGENT_TEXT_WRITE_BYTES:
+        return _security_error("写入内容过大，上限 2MB")
     try:
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(content, encoding=encoding)
@@ -1643,24 +1919,45 @@ def web_fetch(url: str, tool_context: ToolContext = None) -> dict:
     Returns:
         包含 url, status, content 的 dict。
     """
-    import re
-
     import requests
 
+    safe_url = _validate_public_http_url(url)
+    if isinstance(safe_url, dict):
+        return safe_url
+
     try:
-        resp = requests.get(url, timeout=15, headers={"User-Agent": "Wyckoff-Agent/1.0"})
+        resp = requests.get(
+            safe_url,
+            timeout=(3, 15),
+            headers={"User-Agent": "Wyckoff-Agent/1.0"},
+            stream=True,
+        )
         resp.raise_for_status()
-        ctype = resp.headers.get("content-type", "")
+        ctype = resp.headers.get("content-type", "").lower()
+        if ctype and not any(ctype.startswith(prefix) for prefix in _SAFE_WEB_CONTENT_TYPES):
+            return _security_error(f"拒绝抓取非文本内容: {ctype}")
+
+        chunks: list[bytes] = []
+        total = 0
+        for chunk in resp.iter_content(chunk_size=65536):
+            if not chunk:
+                continue
+            chunks.append(chunk)
+            total += len(chunk)
+            if total > _MAX_AGENT_WEB_BYTES:
+                return _security_error("网页响应过大，上限 1MB")
+        body = b"".join(chunks).decode(resp.encoding or "utf-8", errors="replace")
+
         if "json" in ctype:
-            text = resp.text[:8000]
+            text = body[:8000]
         elif "html" in ctype:
-            text = re.sub(r"<script[^>]*>.*?</script>", "", resp.text, flags=re.DOTALL | re.IGNORECASE)
+            text = re.sub(r"<script[^>]*>.*?</script>", "", body, flags=re.DOTALL | re.IGNORECASE)
             text = re.sub(r"<style[^>]*>.*?</style>", "", text, flags=re.DOTALL | re.IGNORECASE)
             text = re.sub(r"<[^>]+>", " ", text)
             text = re.sub(r"\s+", " ", text).strip()[:8000]
         else:
-            text = resp.text[:8000]
-        return {"url": url, "status": resp.status_code, "content": text}
+            text = body[:8000]
+        return {"url": safe_url, "status": resp.status_code, "content": _redact_sensitive_text(text)}
     except Exception as e:
         return {"error": f"抓取失败: {e}"}
 

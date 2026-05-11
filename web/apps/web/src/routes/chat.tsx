@@ -3,6 +3,7 @@ import { Send, RotateCcw, ChevronDown, ChevronRight, Wrench, Brain } from 'lucid
 import { useAuthStore } from '@/stores/auth'
 import { loadLLMConfig, loadAllModels, runChatAgentStream, resetReasoningCache, type LLMConfig, type ModelOption, type StepInfo } from '@/lib/chat-agent'
 import { MarkdownContent } from '@/components/markdown'
+import { ScreenResultCard } from '@/components/screen-result-card'
 import { usePreferences, type TranslationKey } from '@/lib/preferences'
 
 const TOOL_LABEL_KEYS: Record<string, TranslationKey> = {
@@ -86,6 +87,10 @@ const MessageBubble = memo(function MessageBubble({ msg }: { msg: Message }) {
         ) : (
           <>
             {msg.steps && msg.steps.length > 0 && <StepsCollapsible steps={msg.steps} />}
+            {msg.steps?.map((s, i) => {
+              if (s.toolName !== 'screen_stocks' || !s.toolResult) return null
+              try { return <ScreenResultCard key={i} data={JSON.parse(s.toolResult)} /> } catch { return null }
+            })}
             <MarkdownContent content={msg.content} />
           </>
         )}

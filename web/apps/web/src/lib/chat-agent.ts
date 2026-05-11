@@ -327,6 +327,7 @@ export interface StepInfo {
   type: 'tool_call' | 'text'
   toolName?: string
   text?: string
+  toolResult?: string
 }
 
 export interface StreamCallbacks {
@@ -371,6 +372,11 @@ export async function runChatAgentStream(
           const step: StepInfo = { type: 'tool_call', toolName: event.toolName }
           steps.push(step)
           callbacks.onStep(step)
+          break
+        }
+        case 'tool-result': {
+          const s = steps.findLast(s => s.toolName === event.toolName)
+          if (s) s.toolResult = typeof event.output === 'string' ? event.output : JSON.stringify(event.output)
           break
         }
         case 'error':

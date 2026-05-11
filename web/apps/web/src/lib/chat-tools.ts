@@ -304,6 +304,19 @@ export async function execExecutePortfolioUpdate(
   return '未知操作'
 }
 
+export interface ScreenStockItem {
+  code: string
+  name: string
+  funnel_score: number | null
+  change_pct: number | null
+}
+
+export interface ScreenResult {
+  date: string
+  stocks: ScreenStockItem[]
+  meta: { ai_count: number }
+}
+
 export async function execScreenStocks(deps: ToolDeps): Promise<string> {
   const { data } = await deps.supabase
     .from('recommendation_tracking')
@@ -312,19 +325,23 @@ export async function execScreenStocks(deps: ToolDeps): Promise<string> {
     .order('recommend_date', { ascending: false })
     .limit(30)
 
-  if (!data || data.length === 0) return '暂无选股结果'
+  if (!data || data.length === 0) return JSON.stringify({ date: '', stocks: [], meta: { ai_count: 0 } })
 
   const latestDate = data[0]!.recommend_date
   const latest = data.filter(r => r.recommend_date === latestDate)
 
-  const lines = latest.map((r) => {
-    const code = String(r.code).padStart(6, '0')
-    const score = r.funnel_score?.toFixed(2) || '--'
-    const chg = r.change_pct != null ? (r.change_pct >= 0 ? `+${r.change_pct.toFixed(2)}%` : `${r.change_pct.toFixed(2)}%`) : '--'
-    return `${code} ${r.name} | 漏斗分 ${score} | 推荐后涨跌 ${chg}`
-  })
+  const result: ScreenResult = {
+    date: latestDate,
+    stocks: latest.map(r => ({
+      code: String(r.code).padStart(6, '0'),
+      name: r.name,
+      funnel_score: r.funnel_score ?? null,
+      change_pct: r.change_pct ?? null,
+    })),
+    meta: { ai_count: latest.length },
+  }
 
-  return `最新选股日期 ${latestDate}，共 ${latest.length} 只 AI 候选：\n\n${lines.join('\n')}`
+  return JSON.stringify(result)
 }
 
 export async function execAnalyzeStock(

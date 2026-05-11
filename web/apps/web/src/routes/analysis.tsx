@@ -133,6 +133,11 @@ export function AnalysisPage() {
   const wyckoff = useMemo(() => (result?.klineData ? detectWyckoffAnnotations(result.klineData) : null), [result?.klineData])
 
   useEffect(() => {
+    const code = new URLSearchParams(window.location.search).get('code')
+    if (code && /^\d{6}$/.test(code)) setSymbol(code)
+  }, [])
+
+  useEffect(() => {
     if (!user) return
     void checkPrerequisites(user.id)
   }, [user])
