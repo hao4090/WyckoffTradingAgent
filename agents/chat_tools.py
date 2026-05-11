@@ -439,15 +439,11 @@ def portfolio(mode: str = "view", tool_context: ToolContext = None) -> dict:
         portfolio_id = build_user_live_portfolio_id(user_id)
         state = None
 
-        # local-first
-        try:
-            from integrations.local_db import load_portfolio
+        from core.cache_whitelist import is_user_in_cache_whitelist
 
-            state = load_portfolio(portfolio_id)
-        except Exception:
-            pass
+        use_remote = is_user_in_cache_whitelist(user_id) and _has_cloud(tool_context)
 
-        if state is None and _has_cloud(tool_context):
+        if use_remote:
             from integrations.supabase_portfolio import load_portfolio_state
 
             _client = _get_user_client(tool_context)
@@ -473,6 +469,14 @@ def portfolio(mode: str = "view", tool_context: ToolContext = None) -> dict:
                     )
                 except Exception:
                     pass
+
+        if state is None:
+            try:
+                from integrations.local_db import load_portfolio
+
+                state = load_portfolio(portfolio_id)
+            except Exception:
+                pass
 
         if state is None:
             return {"message": "未找到持仓记录，可通过 update_portfolio 添加", "positions": [], "free_cash": 0}
