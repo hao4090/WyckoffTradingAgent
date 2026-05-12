@@ -48,7 +48,7 @@ from integrations.supabase_market_signal import (
 )
 from integrations.supabase_portfolio import load_portfolio_state
 from integrations.tickflow_client import TickFlowClient, normalize_cn_symbol
-from integrations.tickflow_notice import TICKFLOW_LIMIT_HINT, is_tickflow_rate_limited_error
+from integrations.tickflow_notice import TICKFLOW_LIMIT_HINT, TICKFLOW_UPGRADE_URL, is_tickflow_rate_limited_error
 from utils.feishu import send_feishu_notification, send_tail_buy_card
 from utils.notify import send_to_telegram
 from utils.trading_clock import is_a_share_trading_day
@@ -1366,7 +1366,7 @@ def main() -> int:
     )
 
     if not tickflow_api_key:
-        _log(f"缺少 TICKFLOW_API_KEY，Tail Buy 需要分钟级数据。{TICKFLOW_UPGRADE_HINT}", logs_path)
+        _log(f"缺少 TICKFLOW_API_KEY，Tail Buy 需要分钟级数据，请购买：{TICKFLOW_UPGRADE_URL}", logs_path)
         return 1
     if not feishu_webhook:
         _log("缺少 FEISHU_WEBHOOK_URL，Tail Buy 需要至少配置飞书推送；Telegram 为可选通道。", logs_path)

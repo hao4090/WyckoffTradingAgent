@@ -28,6 +28,7 @@ def _build_ctx():
     if not state["access_token"]:
         try:
             from cli.auth import load_session
+
             sess = load_session()
             if sess:
                 state["user_id"] = sess.get("user", {}).get("id", "")
@@ -93,7 +94,9 @@ def search_stock_by_name(keyword: str) -> list[dict]:
 
 
 @mcp.tool()
-def analyze_stock(code: str, mode: Literal["diagnose", "price"] = "diagnose", cost: float = 0.0, days: int = 30) -> dict:
+def analyze_stock(
+    code: str, mode: Literal["diagnose", "price"] = "diagnose", cost: float = 0.0, days: int = 30
+) -> dict:
     """分析单只 A 股。
 
     **调用时机**：用户问某只股票怎么样、做个诊断、查价格时调用。
@@ -166,7 +169,8 @@ def market_regime() -> dict:
     返回 regime 枚举（RISK_ON/NEUTRAL/RISK_OFF/CRASH/PANIC_REPAIR）及斜率、3日收益等指标。
     **结果处理**：regime 是核心字段，请据此给出仓位建议。
     """
-    from datetime import date as _date, timedelta
+    from datetime import date as _date
+    from datetime import timedelta
 
     from core.wyckoff_engine import FunnelConfig
     from integrations.data_source import fetch_index_hist
@@ -188,7 +192,8 @@ def wyckoff_diagnose(code: str) -> dict:
     **结果处理**：trading_range 和 triggers 是核心，请结合阶段判断当前是吸筹/派发/标记。
     """
     import dataclasses
-    from datetime import date as _date, timedelta
+    from datetime import date as _date
+    from datetime import timedelta
 
     from core.stock_cache import normalize_hist_df
     from core.wyckoff_engine import FunnelConfig

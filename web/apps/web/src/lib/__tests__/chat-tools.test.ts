@@ -198,6 +198,8 @@ describe('execScreenStocks', () => {
   it('returns no-data message when empty', async () => {
     const deps = createMockDeps({ recommendation_tracking: [] })
     const result = await execScreenStocks(deps)
-    expect(result).toBe('暂无选股结果')
+    const parsed = JSON.parse(result)
+    expect(parsed.stocks).toEqual([])
+    expect(parsed.meta.ai_count).toBe(0)
   })
 })

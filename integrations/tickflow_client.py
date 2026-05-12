@@ -103,7 +103,7 @@ def _throttle_kline_request(path: str) -> None:
 
 
 def normalize_cn_symbol(raw: str) -> str:
-    """将 A 股 6 位代码标准化为 TickFlow 接口格式：XXXXXX.SH / XXXXXX.SZ。"""
+    """将 A 股 6 位代码标准化为 TickFlow 接口格式：.SH / .SZ / .BJ。"""
     s = str(raw or "").strip().upper()
     if not s:
         return ""
@@ -114,6 +114,8 @@ def normalize_cn_symbol(raw: str) -> str:
         return s
     if digits.startswith(("0", "3", "2")):
         return f"{digits}.SZ"
+    if digits.startswith(("4", "8", "9")):
+        return f"{digits}.BJ"
     return f"{digits}.SH"
 
 
@@ -168,7 +170,7 @@ class TickFlowClient:
         self.max_retries = max(int(self.max_retries), 1)
         self.retry_backoff_seconds = max(float(self.retry_backoff_seconds), 0.1)
         if not self.api_key:
-            raise ValueError("TICKFLOW_API_KEY 未配置，购买: https://tickflow.org/auth/register?ref=5N4NKTCPL4")
+            raise ValueError("TICKFLOW_API_KEY 未配置")
 
     def _request(self, path: str, *, params: dict[str, Any] | None = None) -> dict[str, Any]:
         last_err: Exception | None = None

@@ -21,7 +21,6 @@ SUPPORTED_PROVIDERS = (
     "1route",
     "gemini",
     "openai",
-    "openrouter",
     "longcat",
     "efficiency",
     "openai_compatible",
@@ -35,7 +34,6 @@ SUPPORTED_PROVIDERS = (
 OPENAI_COMPATIBLE_BASE_URLS = {
     "1route": "https://www.1route.dev/v1",
     "openai": "https://api.openai.com/v1",
-    "openrouter": "https://openrouter.ai/api/v1",
     "longcat": "https://api.longcat.chat/openai",
     "efficiency": "",
     "openai_compatible": "",
@@ -61,7 +59,6 @@ PROVIDER_LABELS: dict[str, str] = {
     "1route": "1Route（推荐）",
     "gemini": "Gemini",
     "openai": "OpenAI",
-    "openrouter": "OpenRouter",
     "longcat": "LongCat",
     "efficiency": "Efficiency（OpenAI兼容）",
     "openai_compatible": "OpenAI兼容",

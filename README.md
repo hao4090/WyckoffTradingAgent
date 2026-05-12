@@ -50,6 +50,16 @@ React Web、CLI、MCP 与 GitHub Actions 共同组成当前产品形态；行情
       感谢 TickFlow 为 WyckoffAgent 提供高质量 A 股 / 美股 / 港股行情数据能力支持。
     </td>
   </tr>
+  <tr>
+    <td width="150" align="center">
+      <strong><a href="https://github.com/waditu/czsc">CZSC</a></strong><br />
+      <sub>缠中说禅</sub>
+    </td>
+    <td>
+      <strong><a href="https://github.com/waditu/czsc">缠中说禅（CZSC）</a></strong><br />
+      感谢顶级交易开源项目缠中说禅（CZSC）的作者 <a href="https://github.com/zengbin93">zengbin93</a> 在交易策略上的指导与点拨。
+    </td>
+  </tr>
 </table>
 
 ---

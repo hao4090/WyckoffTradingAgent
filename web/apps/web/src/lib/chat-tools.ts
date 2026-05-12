@@ -53,40 +53,161 @@ export function buildKlineDigest(data: KlineRow[]): string {
   return lines.join('\n')
 }
 
-export async function fetchTickFlowKey(deps: ToolDeps, userId: string): Promise<string | null> {
+export async function fetchUserDataKeys(deps: ToolDeps, userId: string): Promise<{ tickflow: string | null; tushare: string | null }> {
   const { data } = await deps.supabase
     .from('user_settings')
-    .select('tickflow_api_key')
+    .select('tickflow_api_key, tushare_token')
     .eq('user_id', userId)
     .single()
-  return data?.tickflow_api_key || null
+  return {
+    tickflow: data?.tickflow_api_key || null,
+    tushare: data?.tushare_token || null,
+  }
 }
 
-export async function fetchKlineForAgent(deps: ToolDeps, code: string, apiKey: string): Promise<KlineRow[]> {
-  const end = new Date()
-  end.setDate(end.getDate() - 1)
-  const start = new Date()
-  start.setDate(start.getDate() - 500)
+export async function fetchTickFlowKey(deps: ToolDeps, userId: string): Promise<string | null> {
+  const keys = await fetchUserDataKeys(deps, userId)
+  return keys.tickflow
+}
+
+async function checkWhitelist(deps: ToolDeps, userId: string): Promise<boolean> {
+  const { data } = await deps.supabase
+    .from('whitelist')
+    .select('user_id')
+    .eq('user_id', userId)
+    .limit(1)
+  return Array.isArray(data) && data.length > 0
+}
+
+function normalizeTushareCode(code: string): string {
+  const c = code.replace(/\.\w+$/, '')
+  if (c.startsWith('6')) return `${c}.SH`
+  if (c.startsWith('4') || c.startsWith('8') || c.startsWith('9')) return `${c}.BJ`
+  return `${c}.SZ`
+}
+
+async function tusharePost(deps: ToolDeps, token: string, api_name: string, params: Record<string, string>, fields: string) {
+  const resp = await deps.fetch('/api/llm-proxy/', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Target-URL': 'https://api.tushare.pro' },
+    body: JSON.stringify({ api_name, token, params, fields }),
+  })
+  if (!resp.ok) return null
+  return (await resp.json()) as { data?: { fields?: string[]; items?: unknown[][] } }
+}
+
+async function fetchKlineViaTushare(deps: ToolDeps, code: string, token: string, startDate: string, endDate: string): Promise<KlineRow[]> {
+  const tsCode = normalizeTushareCode(code)
+  const [dailyJson, adjJson] = await Promise.all([
+    tusharePost(deps, token, 'daily', { ts_code: tsCode, start_date: startDate, end_date: endDate }, 'trade_date,open,high,low,close,vol'),
+    tusharePost(deps, token, 'adj_factor', { ts_code: tsCode, start_date: startDate, end_date: endDate }, 'trade_date,adj_factor'),
+  ])
+  const items = dailyJson?.data?.items
+  if (!Array.isArray(items) || items.length === 0) return []
+
+  const adjItems = adjJson?.data?.items
+  if (!Array.isArray(adjItems) || adjItems.length === 0) return []
+  const adjMap = new Map<string, number>()
+  let latestDate = ''
+  for (const row of adjItems) {
+    const dt = String(row[0])
+    adjMap.set(dt, Number(row[1]))
+    if (dt > latestDate) latestDate = dt
+  }
+  const latestFactor = adjMap.get(latestDate) || 1
+
+  return items.map(row => {
+    const dt = String(row[0] || '')
+    const factor = adjMap.get(dt)
+    if (!factor) return null
+    const ratio = factor / latestFactor
+    return {
+      date: dt.replace(/(\d{4})(\d{2})(\d{2})/, '$1-$2-$3'),
+      open: Number(row[1] || 0) * ratio, high: Number(row[2] || 0) * ratio,
+      low: Number(row[3] || 0) * ratio, close: Number(row[4] || 0) * ratio,
+      volume: Number(row[5] || 0),
+    }
+  }).filter((d): d is KlineRow => d !== null && d.date !== '' && d.close > 0)
+}
+
+function normalizeTickFlowSymbol(code: string): string {
+  const c = code.replace(/\.\w+$/, '')
+  if (c.startsWith('0') || c.startsWith('2') || c.startsWith('3')) return `${c}.SZ`
+  if (c.startsWith('4') || c.startsWith('8') || c.startsWith('9')) return `${c}.BJ`
+  return `${c}.SH`
+}
+
+function parseKlineRows(rows: unknown[]): KlineRow[] {
+  return (rows as Record<string, unknown>[]).map(r => ({
+    date: String(r.date || r.trade_date || '').replace(/(\d{4})(\d{2})(\d{2})/, '$1-$2-$3'),
+    open: Number(r.open || 0),
+    high: Number(r.high || 0),
+    low: Number(r.low || 0),
+    close: Number(r.close || 0),
+    volume: Number(r.volume || r.vol || 0),
+  })).filter(d => d.date && d.close > 0)
+}
+
+function parseTickFlowPayload(json: Record<string, unknown>): KlineRow[] {
+  const data = json.data
+  if (Array.isArray(data)) return parseKlineRows(data)
+  if (Array.isArray(json.records)) return parseKlineRows(json.records)
+  if (!data || typeof data !== 'object') return []
+  const table = data as Record<string, unknown[]>
+  const ts = Array.isArray(table.timestamp) ? table.timestamp : []
+  if (ts.length === 0) return []
+  const o = table.open || [], h = table.high || [], l = table.low || [], c = table.close || [], v = table.volume || []
+  return ts.map((t, i) => ({
+    date: formatTimestamp(t), open: Number(o[i] || 0), high: Number(h[i] || 0),
+    low: Number(l[i] || 0), close: Number(c[i] || 0), volume: Number(v[i] || 0),
+  })).filter(d => d.date && d.close > 0)
+}
+
+function formatTimestamp(value: unknown): string {
+  const n = Number(value)
+  if (Number.isFinite(n) && n > 0) return new Date(n + 8 * 3600_000).toISOString().slice(0, 10)
+  return String(value || '').replace(/(\d{4})(\d{2})(\d{2})/, '$1-$2-$3').slice(0, 10)
+}
+
+async function fetchKlineViaTickFlow(deps: ToolDeps, code: string, apiKey: string): Promise<KlineRow[]> {
+  const params = new URLSearchParams({
+    symbol: normalizeTickFlowSymbol(code), period: '1d', count: '250', adjust: 'forward',
+  })
+  const resp = await deps.fetch(`/api/llm-proxy/v1/klines?${params}`, {
+    headers: { 'x-api-key': apiKey, 'X-Target-URL': 'https://api.tickflow.org' },
+  })
+  if (!resp.ok) return []
+  return parseTickFlowPayload(await resp.json())
+}
+
+async function fetchKlineFromCache(deps: ToolDeps, code: string, startIso: string, endIso: string): Promise<KlineRow[]> {
+  const { data } = await deps.supabase
+    .from('stock_hist_cache')
+    .select('date,open,high,low,close,volume')
+    .eq('symbol', code)
+    .eq('adjust', 'qfq')
+    .gte('date', startIso)
+    .lte('date', endIso)
+    .order('date', { ascending: false })
+    .limit(250)
+  if (!data || data.length === 0) return []
+  return parseKlineRows(data).reverse()
+}
+
+export async function fetchKlineForAgent(deps: ToolDeps, code: string, keys: { tickflow: string | null; tushare: string | null }, userId: string): Promise<KlineRow[]> {
+  const end = new Date(); end.setDate(end.getDate() - 1)
+  const start = new Date(); start.setDate(start.getDate() - 500)
   const fmt = (d: Date) => d.toISOString().slice(0, 10).replace(/-/g, '')
 
-  const url = `https://api.tickflow.io/v1/stock/history?symbol=${code}&start_date=${fmt(start)}&end_date=${fmt(end)}&adjust=qfq&limit=250`
-  try {
-    const resp = await deps.fetch(url, { headers: { Authorization: `Bearer ${apiKey}` } })
-    if (!resp.ok) return []
-    const json = await resp.json()
-    const rows = json.data || json.records || json || []
-    if (!Array.isArray(rows)) return []
-    return rows.map((r: Record<string, unknown>) => ({
-      date: String(r.date || r.trade_date || '').replace(/(\d{4})(\d{2})(\d{2})/, '$1-$2-$3'),
-      open: Number(r.open || 0),
-      high: Number(r.high || 0),
-      low: Number(r.low || 0),
-      close: Number(r.close || 0),
-      volume: Number(r.volume || r.vol || 0),
-    })).filter((d: KlineRow) => d.date && d.close > 0)
-  } catch {
-    return []
+  if (keys.tickflow) {
+    try { const r = await fetchKlineViaTickFlow(deps, code, keys.tickflow); if (r.length) return r } catch { /* */ }
   }
+  if (keys.tushare) {
+    try { const r = await fetchKlineViaTushare(deps, code, keys.tushare, fmt(start), fmt(end)); if (r.length) return r.sort((a, b) => a.date.localeCompare(b.date)) } catch { /* */ }
+  }
+  if (!(await checkWhitelist(deps, userId))) return []
+  const toIso = (s: string) => `${s.slice(0, 4)}-${s.slice(4, 6)}-${s.slice(6, 8)}`
+  return fetchKlineFromCache(deps, code, toIso(fmt(start)), toIso(fmt(end)))
 }
 
 export async function fetchQuotes(
@@ -98,11 +219,13 @@ export async function fetchQuotes(
   try {
     const symbols = stocks.map(r => {
       const c = String(r.code).padStart(6, '0')
-      return c.startsWith('6') ? `${c}.SH` : `${c}.SZ`
+      if (c.startsWith('6')) return `${c}.SH`
+      if (c.startsWith('4') || c.startsWith('8') || c.startsWith('9')) return `${c}.BJ`
+      return `${c}.SZ`
     }).join(',')
     const resp = await deps.fetch(
-      `https://api.tickflow.io/v1/quotes?symbols=${symbols}`,
-      { headers: { Authorization: `Bearer ${tickflowKey}` } },
+      `/api/llm-proxy/v1/quotes?symbols=${symbols}`,
+      { headers: { 'x-api-key': tickflowKey, 'X-Target-URL': 'https://api.tickflow.org' } },
     )
     if (!resp.ok) return {}
     const json = await resp.json() as { data?: Record<string, number>[] }
@@ -347,14 +470,10 @@ export async function execScreenStocks(deps: ToolDeps): Promise<string> {
 export async function execAnalyzeStock(
   deps: ToolDeps, userId: string, _config: LLMToolConfig, model: unknown, code: string, name: string | null,
 ): Promise<string> {
-  const tickflowKey = await fetchTickFlowKey(deps, userId)
-  if (!tickflowKey) {
-    return `未配置 TickFlow API Key，无法获取 ${code} 的K线数据。请在设置页配置。`
-  }
-
-  const kline = await fetchKlineForAgent(deps, code, tickflowKey)
+  const keys = await fetchUserDataKeys(deps, userId)
+  const kline = await fetchKlineForAgent(deps, code, keys, userId)
   if (kline.length === 0) {
-    return `无法获取 ${code} ${name || ''} 的K线数据，请检查代码是否正确。`
+    return `无法获取 ${code} ${name || ''} 的K线数据。推荐购买 TickFlow 获取实时行情：https://tickflow.org/auth/register?ref=5N4NKTCPL4`
   }
 
   const digest = buildKlineDigest(kline)
@@ -378,12 +497,11 @@ export async function execAnalyzeStock(
 export async function execGenerateAiReport(
   deps: ToolDeps, userId: string, _config: LLMToolConfig, model: unknown, codes: string[],
 ): Promise<string> {
-  const tickflowKey = await fetchTickFlowKey(deps, userId)
-  if (!tickflowKey) return '未配置 TickFlow API Key，无法生成研报。'
+  const keys = await fetchUserDataKeys(deps, userId)
 
   const results: string[] = []
   for (const code of codes.slice(0, 3)) {
-    const kline = await fetchKlineForAgent(deps, code, tickflowKey)
+    const kline = await fetchKlineForAgent(deps, code, keys, userId)
     if (kline.length === 0) {
       results.push(`## ${code}\n无法获取K线数据\n`)
       continue

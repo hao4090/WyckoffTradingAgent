@@ -48,9 +48,7 @@ _SECRET_ASSIGNMENT_RE = re.compile(
     r"\s*[:=]\s*([\"']?)[^\s\"',;]+"
 )
 _BEARER_RE = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{12,}")
-_COMMON_SECRET_VALUE_RE = re.compile(
-    r"\b(?:sk|ak|pk|ghp|gho|github_pat|glpat|xoxb|xoxp|AIza)[A-Za-z0-9_\-]{12,}\b"
-)
+_COMMON_SECRET_VALUE_RE = re.compile(r"\b(?:sk|ak|pk|ghp|gho|github_pat|glpat|xoxb|xoxp|AIza)[A-Za-z0-9_\-]{12,}\b")
 _BLOCKED_PATH_PARTS = {
     ".ssh",
     ".aws",
@@ -277,7 +275,9 @@ def _validate_public_http_url(url: str) -> str | dict:
         return _security_error("禁止抓取本机或本地域名")
 
     try:
-        infos = socket.getaddrinfo(host, parsed.port or (443 if parsed.scheme == "https" else 80), type=socket.SOCK_STREAM)
+        infos = socket.getaddrinfo(
+            host, parsed.port or (443 if parsed.scheme == "https" else 80), type=socket.SOCK_STREAM
+        )
     except socket.gaierror:
         return _security_error("URL 主机无法解析")
 
@@ -287,7 +287,14 @@ def _validate_public_http_url(url: str) -> str | dict:
             ip = ipaddress.ip_address(ip_text)
         except ValueError:
             return _security_error("URL 解析到无效地址")
-        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_reserved or ip.is_unspecified:
+        if (
+            ip.is_private
+            or ip.is_loopback
+            or ip.is_link_local
+            or ip.is_multicast
+            or ip.is_reserved
+            or ip.is_unspecified
+        ):
             return _security_error("禁止抓取内网、本机、链路本地或保留地址")
     return raw
 
@@ -1846,27 +1853,18 @@ def read_file(path: str, encoding: str = "utf-8", tool_context: ToolContext = No
 
     suffix = p.suffix.lower()
     try:
-        if suffix == ".csv":
+        if suffix == ".csv" or suffix in (".xls", ".xlsx"):
             import pandas as pd
 
-            df = pd.read_csv(p, encoding=encoding, nrows=50)
-            df = _redact_sensitive_columns(df)
-            preview = df.to_markdown(index=False)
-            return {"path": str(p), "size": size, "rows_total": "≤50(预览)", "content": _redact_sensitive_text(preview)}
-        elif suffix in (".xls", ".xlsx"):
-            import pandas as pd
-
-            df = pd.read_excel(p, nrows=50)
-            df = _redact_sensitive_columns(df)
-            preview = df.to_markdown(index=False)
+            df = pd.read_csv(p, encoding=encoding, nrows=50) if suffix == ".csv" else pd.read_excel(p, nrows=50)
+            preview = _redact_sensitive_columns(df).to_markdown(index=False)
             return {"path": str(p), "size": size, "rows_total": "≤50(预览)", "content": _redact_sensitive_text(preview)}
         elif suffix == ".json":
             import json as _json
 
             text = p.read_text(encoding=encoding)[:10000]
             try:
-                obj = _json.loads(text)
-                content = _json.dumps(obj, ensure_ascii=False, indent=2)[:10000]
+                content = _json.dumps(_json.loads(text), ensure_ascii=False, indent=2)[:10000]
             except _json.JSONDecodeError:
                 content = text
             return {"path": str(p), "size": size, "content": _redact_sensitive_text(content)}

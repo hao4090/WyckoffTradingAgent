@@ -595,7 +595,7 @@ class WyckoffTUI(App):
 
         if self._busy:
             self._queue.append(text)
-            log.write(Text.from_markup(f"  [dim]📋 已排队（等待当前回复完成后自动发送）[/dim]"))
+            log.write(Text.from_markup("  [dim]📋 已排队（等待当前回复完成后自动发送）[/dim]"))
             return
 
         # 用户消息
@@ -1242,12 +1242,14 @@ class WyckoffTUI(App):
             if sys.platform == "darwin":
                 subprocess.Popen(
                     ["osascript", "-e", f'display notification "{message}" with title "Wyckoff 读盘室"'],
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
                 )
             else:
                 subprocess.Popen(
                     ["notify-send", "Wyckoff 读盘室", message],
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
                 )
         except FileNotFoundError:
             print("\a", end="", flush=True)
@@ -1450,7 +1452,8 @@ class WyckoffTUI(App):
                 _ensure_round(round_number)
 
                 if event_type == "compaction":
-                    _write(Text.from_markup(f"  [dim]📦 上下文已压缩（{event['before_messages']}条 → {event['after_messages']}条）[/dim]"))
+                    before, after = event["before_messages"], event["after_messages"]
+                    _write(Text.from_markup(f"  [dim]📦 上下文压缩（{before}→{after}条）[/dim]"))
                     _scroll()
                     continue
 
@@ -1492,9 +1495,9 @@ class WyckoffTUI(App):
                     _spinner_stop()
                     _display_thinking(event.get("text", ""))
                     continue
-
                 if event_type == "model_start":
-                    _spinner_start("思考中"); continue
+                    _spinner_start("思考中")
+                    continue
 
                 if event_type == "tool_start":
                     _flush_stream_line()

@@ -29,7 +29,6 @@ logger = logging.getLogger(__name__)
 PROVIDER_PREFIX_MAP: dict[str, str] = {
     "gemini": "gemini",
     "openai": "openai",
-    "openrouter": "openai",
     "longcat": "openai",
     "efficiency": "openai",
     "openai_compatible": "openai",

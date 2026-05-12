@@ -30,6 +30,7 @@ from core.wyckoff_engine import (
     normalize_hist_from_fetch,
 )
 from integrations.tickflow_client import TickFlowClient
+from integrations.tickflow_notice import TICKFLOW_UPGRADE_URL
 from tools.candidate_ranker import TRIGGER_LABELS
 
 
@@ -412,6 +413,13 @@ def _write_report(path: Path | None, result: dict[str, Any]) -> None:
             fh.write(report + "\n")
 
 
+def _require_tickflow_client() -> TickFlowClient:
+    api_key = os.getenv("TICKFLOW_API_KEY", "").strip()
+    if not api_key:
+        raise RuntimeError(f"market_funnel_job 需要实时行情数据，请购买 TickFlow：{TICKFLOW_UPGRADE_URL}")
+    return TickFlowClient(api_key=api_key)
+
+
 def run_market_funnel(
     market: str,
     *,
@@ -419,7 +427,7 @@ def run_market_funnel(
     client: TickFlowClient | None = None,
 ) -> dict[str, Any]:
     runtime = _runtime_config(market, output)
-    tf = client or TickFlowClient(api_key=os.getenv("TICKFLOW_API_KEY", "").strip())
+    tf = client or _require_tickflow_client()
     universe_symbols = _load_symbols(runtime.symbol_path)
     print(
         f"[market-funnel] start market={runtime.spec.key} universe={runtime.spec.universe} "

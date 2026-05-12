@@ -80,7 +80,7 @@ export async function loadLLMConfig(userId: string): Promise<LLMConfig | null> {
   if (provider === 'gemini') {
     api_key = data.gemini_api_key || ''
     model = data.gemini_model || 'gemini-2.0-flash'
-    base_url = data.gemini_base_url || ''
+    base_url = data.gemini_base_url || 'https://generativelanguage.googleapis.com/v1beta/openai'
   } else if (provider === 'openai') {
     api_key = data.openai_api_key || ''
     model = data.openai_model || 'gpt-4o'
@@ -118,6 +118,7 @@ export async function loadAllModels(userId: string): Promise<ModelOption[]> {
   }
   const BASE_URLS: Record<string, string> = {
     '1route': 'https://www.1route.dev/v1',
+    gemini: 'https://generativelanguage.googleapis.com/v1beta/openai',
     openai: 'https://api.openai.com/v1',
     deepseek: 'https://api.deepseek.com/v1',
   }

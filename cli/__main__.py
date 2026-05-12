@@ -247,7 +247,9 @@ def _model_list():
             marks += " ⚡"
         if c["id"] == light_id:
             marks += " 💡"
-        print(f"  {c['id']}{marks}  provider={c.get('provider_name', '')}  model={c.get('model', '')}  base_url={c.get('base_url', '') or '(default)'}")
+        print(
+            f"  {c['id']}{marks}  provider={c.get('provider_name', '')}  model={c.get('model', '')}  base_url={c.get('base_url', '') or '(default)'}"
+        )
     legend = "  * = 默认"
     if fallback_id:
         legend += "  ⚡ = fallback"
@@ -289,11 +291,13 @@ def _model_role_set(args, role: str):
     from cli.auth import load_model_configs
 
     if role == "fallback":
-        from cli.auth import load_fallback_model_id as _load, set_fallback_model as _set
+        from cli.auth import load_fallback_model_id as _load
+        from cli.auth import set_fallback_model as _set
 
         label, empty_msg = "fallback", "未设置（降级到所有模型）"
     else:
-        from cli.auth import load_light_model_id as _load, set_light_model as _set
+        from cli.auth import load_light_model_id as _load
+        from cli.auth import set_light_model as _set
 
         label, empty_msg = "light 路由", "未设置（不启用自动路由）"
 
@@ -350,7 +354,15 @@ def _cmd_model(args):
         if not all([model_id, provider, api_key]):
             print("用法: wyckoff model set <id> <provider> <api_key> [--model X] [--base-url X]")
             sys.exit(1)
-        save_model_entry({"id": model_id, "provider_name": provider, "api_key": api_key, "model": args.model_name or "", "base_url": args.base_url or ""})
+        save_model_entry(
+            {
+                "id": model_id,
+                "provider_name": provider,
+                "api_key": api_key,
+                "model": args.model_name or "",
+                "base_url": args.base_url or "",
+            }
+        )
         print(f"✓ 模型 {model_id} 已保存")
         return
     if sub == "rm":
@@ -1019,6 +1031,7 @@ def _cmd_tui(_args=None):
     def _dash_bg():
         try:
             from cli.dashboard import start_dashboard_background
+
             start_dashboard_background()
         except Exception:
             pass

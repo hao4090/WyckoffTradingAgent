@@ -32,10 +32,10 @@ async function fetchFromCache(code: string, adjustVal: string, start: string, en
     .eq('adjust', adjustVal || 'none')
     .gte('date', startIso)
     .lte('date', endIso)
-    .order('date', { ascending: true })
+    .order('date', { ascending: false })
     .limit(limit)
   if (!data || data.length === 0) return null
-  return data as Record<string, string | number>[]
+  return (data as Record<string, string | number>[]).reverse()
 }
 
 export function ExportPage() {
@@ -88,18 +88,18 @@ export function ExportPage() {
           return
         }
 
-        const url = `https://api.tickflow.io/v1/stock/history?symbol=${code}&start_date=${start}&end_date=${end}&adjust=${adjust}&limit=${days}`
-        const resp = await fetch(url, {
-          headers: { 'Authorization': `Bearer ${apiKey}` },
+        const toMs = (s: string) => new Date(s.replace(/(\d{4})(\d{2})(\d{2})/, '$1-$2-$3')).getTime()
+        const params = new URLSearchParams({
+          symbol: code.startsWith('6') ? `${code}.SH` : (code.startsWith('4') || code.startsWith('8') || code.startsWith('9')) ? `${code}.BJ` : `${code}.SZ`, period: '1d',
+          adjust: adjust === 'qfq' ? 'forward' : adjust === 'hfq' ? 'backward' : 'none',
+          start_time: String(toMs(start)), end_time: String(toMs(end)), count: String(days),
+        })
+        const resp = await fetch(`/api/llm-proxy/v1/klines?${params}`, {
+          headers: { 'x-api-key': apiKey, 'X-Target-URL': 'https://api.tickflow.org' },
         })
 
-        if (!resp.ok) {
-          const errBody = await resp.text()
-          throw new Error(t('export.apiError', { status: resp.status, message: errBody.slice(0, 200) }))
-        }
-
-        const json = await resp.json()
-        rows = json.data || json.records || json || []
+        if (!resp.ok) throw new Error(t('export.apiError', { status: resp.status, message: (await resp.text()).slice(0, 200) }))
+        rows = parseTickFlowToRows(await resp.json())
       }
 
       if (!Array.isArray(rows) || rows.length === 0) {
@@ -259,6 +259,23 @@ export function ExportPage() {
       )}
     </div>
   )
+}
+
+function parseTickFlowToRows(json: Record<string, unknown>): Record<string, string | number>[] {
+  const data = json.data
+  if (Array.isArray(data)) return data as Record<string, string | number>[]
+  if (Array.isArray(json.records)) return json.records as Record<string, string | number>[]
+  if (!data || typeof data !== 'object') return []
+  const table = data as Record<string, unknown[]>
+  const ts = Array.isArray(table.timestamp) ? table.timestamp : []
+  if (ts.length === 0) return []
+  const keys = Object.keys(table).filter(k => Array.isArray(table[k]) && k !== 'timestamp')
+  return ts.map((t, i) => {
+    const d = new Date(Number(t) + 8 * 3600_000)
+    const row: Record<string, string | number> = { date: d.toISOString().slice(0, 10) }
+    for (const k of keys) row[k] = Number((table[k] as unknown[])[i] || 0)
+    return row
+  })
 }
 
 function formatDate(d: Date): string {

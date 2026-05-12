@@ -25,38 +25,127 @@ interface AnalysisResult {
   klineData: KlineData[]
 }
 
-async function getTickFlowKey(userId: string): Promise<string | null> {
+async function getUserDataKeys(userId: string): Promise<{ tickflow: string | null; tushare: string | null }> {
   const { data } = await supabase
     .from('user_settings')
-    .select('tickflow_api_key')
+    .select('tickflow_api_key, tushare_token')
     .eq('user_id', userId)
     .single()
-  return data?.tickflow_api_key || null
+  return {
+    tickflow: data?.tickflow_api_key || null,
+    tushare: data?.tushare_token || null,
+  }
 }
 
-async function fetchKline(code: string, apiKey: string): Promise<KlineData[]> {
-  const params = new URLSearchParams({
-    symbol: normalizeTickFlowSymbol(code),
-    period: '1d',
-    count: '320',
-    adjust: 'forward',
-  })
-  const path = `/api/llm-proxy/v1/klines?${params.toString()}`
+async function checkWhitelist(userId: string): Promise<boolean> {
+  const { data } = await supabase
+    .from('whitelist')
+    .select('user_id')
+    .eq('user_id', userId)
+    .limit(1)
+  return Array.isArray(data) && data.length > 0
+}
 
-  const resp = await fetch(path, {
-    headers: {
-      'x-api-key': apiKey,
-      'X-Target-URL': 'https://api.tickflow.org',
-    },
+function normalizeTushareCode(code: string): string {
+  if (code.startsWith('6')) return `${code}.SH`
+  if (code.startsWith('4') || code.startsWith('8') || code.startsWith('9')) return `${code}.BJ`
+  return `${code}.SZ`
+}
+
+async function tusharePost(token: string, api_name: string, params: Record<string, string>, fields: string) {
+  const resp = await fetch('/api/llm-proxy/', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Target-URL': 'https://api.tushare.pro' },
+    body: JSON.stringify({ api_name, token, params, fields }),
   })
-  if (!resp.ok) {
-    const body = await resp.text().catch(() => '')
-    throw new Error(`TickFlow API (${resp.status}): ${body.slice(0, 200)}`)
+  if (!resp.ok) return null
+  return (await resp.json()) as { data?: { fields?: string[]; items?: unknown[][] } }
+}
+
+async function fetchKlineViaTushare(code: string, token: string, startDate: string, endDate: string): Promise<KlineData[]> {
+  const tsCode = normalizeTushareCode(code)
+  const [dailyJson, adjJson] = await Promise.all([
+    tusharePost(token, 'daily', { ts_code: tsCode, start_date: startDate, end_date: endDate }, 'trade_date,open,high,low,close,vol'),
+    tusharePost(token, 'adj_factor', { ts_code: tsCode, start_date: startDate, end_date: endDate }, 'trade_date,adj_factor'),
+  ])
+  const items = dailyJson?.data?.items
+  if (!Array.isArray(items) || items.length === 0) return []
+
+  const adjItems = adjJson?.data?.items
+  if (!Array.isArray(adjItems) || adjItems.length === 0) return []
+  const adjMap = new Map<string, number>()
+  let latestDate = ''
+  for (const row of adjItems) {
+    const dt = String(row[0])
+    adjMap.set(dt, Number(row[1]))
+    if (dt > latestDate) latestDate = dt
   }
+  const latestFactor = adjMap.get(latestDate) || 1
+
+  return items.map(row => {
+    const dt = String(row[0] || '')
+    const factor = adjMap.get(dt) || latestFactor
+    const ratio = factor / latestFactor
+    return {
+      date: dt.replace(/(\d{4})(\d{2})(\d{2})/, '$1-$2-$3'),
+      open: Number(row[1] || 0) * ratio, high: Number(row[2] || 0) * ratio,
+      low: Number(row[3] || 0) * ratio, close: Number(row[4] || 0) * ratio,
+      volume: Number(row[5] || 0),
+    }
+  }).filter(d => d.date && d.close > 0)
+}
+
+async function fetchKlineViaTickFlow(code: string, apiKey: string): Promise<KlineData[]> {
+  const params = new URLSearchParams({
+    symbol: normalizeTickFlowSymbol(code), period: '1d', count: '320', adjust: 'forward',
+  })
+  const resp = await fetch(`/api/llm-proxy/v1/klines?${params}`, {
+    headers: { 'x-api-key': apiKey, 'X-Target-URL': 'https://api.tickflow.org' },
+  })
+  if (!resp.ok) return []
   const json = await resp.json()
-  return parseKlinePayload(json)
-    .sort((a: KlineData, b: KlineData) => a.date.localeCompare(b.date))
-    .slice(-320)
+  return parseKlinePayload(json).sort((a, b) => a.date.localeCompare(b.date)).slice(-320)
+}
+
+async function fetchKlineFromCache(code: string, startIso: string, endIso: string): Promise<KlineData[]> {
+  const { data } = await supabase
+    .from('stock_hist_cache')
+    .select('date,open,high,low,close,volume')
+    .eq('symbol', code)
+    .eq('adjust', 'qfq')
+    .gte('date', startIso)
+    .lte('date', endIso)
+    .order('date', { ascending: false })
+    .limit(320)
+  if (!data || data.length === 0) return []
+  return (data as Record<string, unknown>[]).map(r => ({
+    date: String(r.date || ''), open: Number(r.open || 0), high: Number(r.high || 0),
+    low: Number(r.low || 0), close: Number(r.close || 0), volume: Number(r.volume || 0),
+  })).filter(d => d.date && d.close > 0).reverse()
+}
+
+const TICKFLOW_PURCHASE = 'https://tickflow.org/auth/register?ref=5N4NKTCPL4'
+
+async function fetchKline(code: string, keys: { tickflow: string | null; tushare: string | null }, userId: string): Promise<KlineData[]> {
+  const end = new Date(); end.setDate(end.getDate() - 1)
+  const start = new Date(); start.setDate(start.getDate() - 500)
+  const fmtCompact = (d: Date) => d.toISOString().slice(0, 10).replace(/-/g, '')
+
+  if (keys.tickflow) {
+    try { const r = await fetchKlineViaTickFlow(code, keys.tickflow); if (r.length) return r } catch { /* */ }
+  }
+  if (keys.tushare) {
+    try {
+      const r = await fetchKlineViaTushare(code, keys.tushare, fmtCompact(start), fmtCompact(end))
+      if (r.length) return r.sort((a, b) => a.date.localeCompare(b.date)).slice(-320)
+    } catch { /* */ }
+  }
+  if (await checkWhitelist(userId)) {
+    const fmt = (d: Date) => d.toISOString().slice(0, 10)
+    const r = await fetchKlineFromCache(code, fmt(start), fmt(end))
+    if (r.length) return r
+  }
+  throw new Error(`无法获取K线数据。推荐购买 TickFlow 获取实时行情：${TICKFLOW_PURCHASE}`)
 }
 
 function parseKlinePayload(payload: unknown): KlineData[] {
@@ -108,13 +197,15 @@ function valueArray(value: unknown): unknown[] {
 }
 
 function normalizeTickFlowSymbol(code: string): string {
-  return code.startsWith('0') || code.startsWith('2') || code.startsWith('3') ? `${code}.SZ` : `${code}.SH`
+  if (code.startsWith('0') || code.startsWith('2') || code.startsWith('3')) return `${code}.SZ`
+  if (code.startsWith('4') || code.startsWith('8') || code.startsWith('9')) return `${code}.BJ`
+  return `${code}.SH`
 }
 
 function formatTimestampDate(value: unknown): string {
   const numeric = Number(value)
   if (Number.isFinite(numeric) && numeric > 0) {
-    return new Date(numeric).toISOString().slice(0, 10)
+    return new Date(numeric + 8 * 3600_000).toISOString().slice(0, 10)
   }
   return String(value || '').slice(0, 10)
 }
@@ -145,12 +236,13 @@ export function AnalysisPage() {
   async function checkPrerequisites(userId: string) {
     setCheckingConfig(true)
     try {
-      const [config, tickflowKey] = await Promise.all([
+      const [config, dataKeys, wl] = await Promise.all([
         loadLLMConfig(userId),
-        getTickFlowKey(userId),
+        getUserDataKeys(userId),
+        checkWhitelist(userId),
       ])
       setHasModelConfig(Boolean(config?.api_key && config.model))
-      setHasDataSource(Boolean(tickflowKey))
+      setHasDataSource(Boolean(dataKeys.tickflow || dataKeys.tushare || wl))
     } finally {
       setCheckingConfig(false)
     }
@@ -172,22 +264,20 @@ export function AnalysisPage() {
     setResult(null)
 
     try {
-      const [config, tickflowKey] = await Promise.all([
+      const [config, dataKeys] = await Promise.all([
         loadLLMConfig(user!.id),
-        getTickFlowKey(user!.id),
+        getUserDataKeys(user!.id),
       ])
       const modelReady = Boolean(config?.api_key && config?.model)
-      const dataReady = Boolean(tickflowKey)
       setHasModelConfig(modelReady)
-      setHasDataSource(dataReady)
 
-      if (!modelReady || !dataReady) {
-        const missing = getMissingRequirements(modelReady, dataReady)
+      if (!modelReady) {
+        const missing = getMissingRequirements(modelReady, true)
         setError(t('analysis.missingPrefix', { items: missing.join('、') }))
         setLoading(false)
         return
       }
-      if (!config || !tickflowKey) {
+      if (!config) {
         setError(t('analysis.configError'))
         setLoading(false)
         return
@@ -195,7 +285,7 @@ export function AnalysisPage() {
 
       const [stockInfoResult, klineData] = await Promise.all([
         supabase.from('recommendation_tracking').select('name').eq('code', parseInt(code)).limit(1).single(),
-        fetchKline(code, tickflowKey),
+        fetchKline(code, dataKeys, user!.id),
       ])
 
       const name = stockInfoResult.data?.name || code

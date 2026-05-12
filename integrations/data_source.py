@@ -29,6 +29,7 @@ import pandas as pd
 
 from integrations.tickflow_notice import (
     TICKFLOW_LIMIT_HINT,
+    TICKFLOW_UPGRADE_URL,
     is_tickflow_rate_limited_error,
     record_tickflow_limit_event,
 )
@@ -673,7 +674,7 @@ def _fetch_stock_tickflow(symbol: str, start: str, end: str, adjust: str) -> pd.
     """
     client = _get_tickflow_client()
     if client is None:
-        raise RuntimeError("TICKFLOW_API_KEY 未配置，购买: https://tickflow.org/auth/register?ref=5N4NKTCPL4")
+        raise RuntimeError("TICKFLOW_API_KEY 未配置")
 
     try:
         start_d = datetime.strptime(start, "%Y%m%d").date()
@@ -762,6 +763,17 @@ def _fetch_stock_tickflow(symbol: str, start: str, end: str, adjust: str) -> pd.
     ].copy()
 
 
+def _build_datasource_hint(failed_details: list[str]) -> str:
+    hint = _network_hint_from_details(failed_details)
+    _has_tickflow = bool(os.getenv("TICKFLOW_API_KEY", "").strip())
+    _has_tushare = bool(os.getenv("TUSHARE_TOKEN", "").strip())
+    if not _has_tickflow and not _has_tushare:
+        return f" 请配置数据源：{TICKFLOW_UPGRADE_URL}"
+    if _has_tushare and not _has_tickflow:
+        return f" Tushare 数据权限不足，可购买 TickFlow 获取更稳定的数据源：{TICKFLOW_UPGRADE_URL}"
+    return f" 诊断提示：{hint}" if hint else ""
+
+
 def fetch_stock_hist(
     symbol: str,
     start: str | date,
@@ -815,7 +827,7 @@ def fetch_stock_hist(
         failed_details.append("tickflow=disabled_by_env")
     elif not os.getenv("TICKFLOW_API_KEY", "").strip():
         failed_sources.append("tickflow(unconfigured)")
-        failed_details.append("tickflow=api_key_missing(购买: https://tickflow.org/auth/register?ref=5N4NKTCPL4)")
+        failed_details.append("tickflow=unconfigured")
     else:
         try:
             return _tag_source(
@@ -975,8 +987,7 @@ def fetch_stock_hist(
             failed_details.append(f"efinance={_compact_error(e)}")
 
     detail_suffix = f" 失败详情：{'；'.join(failed_details[:4])}。" if failed_details else ""
-    hint = _network_hint_from_details(failed_details)
-    hint_suffix = f" 诊断提示：{hint}" if hint else ""
+    hint_suffix = _build_datasource_hint(failed_details)
     raise RuntimeError(
         f"数据拉取全线失败 [标:{symbol}, 范围:{start_s}..{end_s}, 复权:{adjust}]：已按顺序尝试 tickflow→tushare→akshare→baostock→efinance，"
         f"均无可用 K 线数据。请检查该标的是否已退市或处于长期停牌期。{detail_suffix}{hint_suffix}"
@@ -991,9 +1002,7 @@ def _fetch_index_tushare(code: str, start: str, end: str) -> pd.DataFrame:
 
     pro = get_pro()
     if pro is None:
-        raise RuntimeError(
-            "拉取失败（非程序错误）：大盘指数需 Tushare Token，免费数据源（akshare 等）不支持大盘指数。请配置 TUSHARE_TOKEN。"
-        )
+        raise RuntimeError("tushare token 未配置，跳过 tushare 大盘指数")
     ts_code = _index_to_ts_code(code)
     df = pro.index_daily(ts_code=ts_code, start_date=start, end_date=end)
     if df is None or df.empty:
@@ -1060,7 +1069,15 @@ def fetch_index_hist(code: str, start: str | date, end: str | date) -> pd.DataFr
     except Exception as e2:
         _debug_source_fail("akshare(index)", e2)
 
-    raise RuntimeError(f"大盘指数 {code} 拉取全部失败（tushare + akshare），请检查 TUSHARE_TOKEN 或网络连通性。")
+    _has_tickflow = bool(os.getenv("TICKFLOW_API_KEY", "").strip())
+    _has_tushare = bool(os.getenv("TUSHARE_TOKEN", "").strip())
+    if not _has_tickflow and not _has_tushare:
+        suffix = f" 请配置数据源：{TICKFLOW_UPGRADE_URL}"
+    elif _has_tushare and not _has_tickflow:
+        suffix = f" Tushare 权限不足，可购买 TickFlow 获取更稳定数据：{TICKFLOW_UPGRADE_URL}"
+    else:
+        suffix = " 请检查网络连通性。"
+    raise RuntimeError(f"大盘指数 {code} 拉取全部失败（tushare + akshare）。{suffix}")
 
 
 # --- 行业 & 市值批量获取（tushare） ---
