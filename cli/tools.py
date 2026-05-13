@@ -1,5 +1,5 @@
 """
-工具注册表 — 复用 agents/chat_tools.py 的 10 个函数，去除 ADK 依赖。
+工具注册表 — 复用 agents/chat_tools.py 的工具函数，去除 ADK 依赖。
 
 核心思路：
 1. ToolContext 用 shim 类替代（只需 .state 属性）
@@ -90,6 +90,23 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "parameters": {
             "type": "object",
             "properties": {},
+        },
+    },
+    {
+        "name": "get_market_history",
+        "description": "回看 A 股主要指数过去 N 个交易日的日线量价关系。用户问过去、近 N 日、回看、阶段位置时使用。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "days": {
+                    "type": "integer",
+                    "description": "回看交易日数量，默认 100，最大 320",
+                },
+                "index": {
+                    "type": "string",
+                    "description": "指数别名或代码，支持 sse/上证/csi300/沪深300/szse/深证/chinext/创业板",
+                },
+            },
         },
     },
     {
@@ -304,6 +321,7 @@ TOOL_SPECS: dict[str, ToolSpec] = {
     "analyze_stock": ToolSpec("analyze_stock", "个股分析", concurrency_safe=True),
     "portfolio": ToolSpec("portfolio", "持仓", concurrency_safe=True),
     "get_market_overview": ToolSpec("get_market_overview", "大盘水温", concurrency_safe=True),
+    "get_market_history": ToolSpec("get_market_history", "大盘回看", concurrency_safe=True),
     "screen_stocks": ToolSpec("screen_stocks", "全市场扫描", background=True),
     "generate_ai_report": ToolSpec("generate_ai_report", "深度审讯", background=True),
     "generate_strategy_decision": ToolSpec("generate_strategy_decision", "攻防决策", background=True),
@@ -389,6 +407,7 @@ class ToolRegistry:
             exec_command,
             generate_ai_report,
             generate_strategy_decision,
+            get_market_history,
             get_market_overview,
             portfolio,
             query_history,
@@ -411,6 +430,7 @@ class ToolRegistry:
             "analyze_stock": analyze_stock,
             "portfolio": portfolio,
             "get_market_overview": get_market_overview,
+            "get_market_history": get_market_history,
             "screen_stocks": screen_stocks,
             "generate_ai_report": generate_ai_report,
             "generate_strategy_decision": generate_strategy_decision,

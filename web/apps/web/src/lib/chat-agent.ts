@@ -7,6 +7,7 @@ import {
   execSearchStock, execViewPortfolio, execMarketOverview,
   execQueryRecommendations, execQueryTailBuy, execExecutePortfolioUpdate,
   execAnalyzeStock, execScreenStocks, execGenerateAiReport, execStrategyDecision,
+  execMarketHistory,
 } from './chat-tools'
 
 const SYSTEM_PROMPT = `# 角色设定
@@ -19,7 +20,8 @@ const SYSTEM_PROMPT = `# 角色设定
 
 1. **搜索** — search_stock：在全市场中搜索股票（名称或代码）
 2. **查看持仓** — view_portfolio：查看用户的持仓列表和资金
-3. **大盘水温** — market_overview：查看市场信号、指数走势
+3. **大盘水温** — market_overview：查看当前/最新市场信号、指数走势
+12. **大盘回看** — market_history：回看过去 N 个交易日指数K线，分析量价关系和威科夫阶段
 4. **形态复盘** — query_recommendations：查询形态复盘记录
 5. **尾盘记录** — query_tail_buy：查询尾盘买入记录
 6. **调仓方案** — plan_portfolio_update：生成调仓方案（不直接执行）
@@ -34,7 +36,8 @@ const SYSTEM_PROMPT = `# 角色设定
 只做用户要求的事，绝不多做。
 - "我有什么持仓" → view_portfolio
 - "帮我看看某只股票" → analyze_stock
-- "大盘怎么样" → market_overview
+- "大盘今天怎么样" / "当前大盘怎么样" → market_overview
+- "大盘过去N个交易日" / "回看大盘" / "大盘量价关系" / "大盘到什么阶段了" → market_history
 - "复盘记录" → query_recommendations
 - "尾盘买了啥" → query_tail_buy
 - "帮我选股" / "今天有什么好票" → screen_stocks
@@ -64,11 +67,30 @@ export interface ModelOption {
 
 const RETIRED_PROVIDERS = new Set(['zhipu', 'minimax', 'qwen', 'volcengine'])
 const CHAT_STREAM_TIMEOUT_MS = 120_000
+const ALLOWED_URL_RE = /^https?:\/\//i
+
+function parseCustomProviders(raw: unknown): Record<string, Record<string, string>> {
+  try {
+    const parsed = typeof raw === 'string' ? JSON.parse(raw || '{}') : (raw || {})
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
+    const result: Record<string, Record<string, string>> = {}
+    for (const [key, value] of Object.entries(parsed)) {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) continue
+      const entry = value as Record<string, unknown>
+      const baseUrl = String(entry.baseurl || entry.base_url || '')
+      if (baseUrl && !ALLOWED_URL_RE.test(baseUrl)) continue
+      result[key] = Object.fromEntries(Object.entries(entry).map(([k, v]) => [k, String(v ?? '')]))
+    }
+    return result
+  } catch {
+    return {}
+  }
+}
 
 export async function loadLLMConfig(userId: string): Promise<LLMConfig | null> {
   const { data } = await supabase
     .from('user_settings')
-    .select('*')
+    .select('chat_provider, gemini_api_key, gemini_model, gemini_base_url, openai_api_key, openai_model, openai_base_url, deepseek_api_key, deepseek_model, deepseek_base_url, custom_providers')
     .eq('user_id', userId)
     .single()
 
@@ -91,9 +113,7 @@ export async function loadLLMConfig(userId: string): Promise<LLMConfig | null> {
     model = data.deepseek_model || 'deepseek-chat'
     base_url = data.deepseek_base_url || 'https://api.deepseek.com/v1'
   } else {
-    const custom = typeof data.custom_providers === 'string'
-      ? JSON.parse(data.custom_providers || '{}')
-      : (data.custom_providers || {})
+    const custom = parseCustomProviders(data.custom_providers)
     const info = custom[provider] || {}
     api_key = info.apikey || info.api_key || ''
     model = info.model || ''
@@ -107,7 +127,7 @@ export async function loadLLMConfig(userId: string): Promise<LLMConfig | null> {
 export async function loadAllModels(userId: string): Promise<ModelOption[]> {
   const { data } = await supabase
     .from('user_settings')
-    .select('*')
+    .select('gemini_api_key, gemini_model, gemini_base_url, openai_api_key, openai_model, openai_base_url, deepseek_api_key, deepseek_model, deepseek_base_url, custom_providers')
     .eq('user_id', userId)
     .single()
 
@@ -137,9 +157,7 @@ export async function loadAllModels(userId: string): Promise<ModelOption[]> {
     }
   }
 
-  const custom = typeof data.custom_providers === 'string'
-    ? JSON.parse(data.custom_providers || '{}')
-    : (data.custom_providers || {})
+  const custom = parseCustomProviders(data.custom_providers)
   for (const [p, info] of Object.entries(custom) as [string, Record<string, string>][]) {
     if (RETIRED_PROVIDERS.has(p)) continue
     const key = info.apikey || info.api_key
@@ -192,11 +210,12 @@ async function throwForApiError(res: Response): Promise<void> {
 function wrapReasoningStream(res: Response, cache: string[]): Response {
   if (!res.body) return res
   let reasoning = ''
+  const decoder = new TextDecoder()
   const transformed = res.body.pipeThrough(
     new TransformStream<Uint8Array, Uint8Array>({
       transform(chunk, controller) {
         controller.enqueue(chunk)
-        const text = new TextDecoder().decode(chunk)
+        const text = decoder.decode(chunk, { stream: true })
         for (const line of text.split('\n')) {
           if (!line.startsWith('data: ') || line === 'data: [DONE]') continue
           try {
@@ -236,6 +255,36 @@ function createProxiedProvider(config: LLMConfig, reasoningCache: string[]) {
   })
 }
 
+function createMarketHistoryTool(deps: ToolDeps, userId: string, model: unknown) {
+  return tool({
+    description: '回看大盘指数过去N个交易日K线，分析量价关系、威科夫阶段、支撑压力和当前位置。适合“过去100个交易日”“回看大盘”“量价关系”等问题。',
+    inputSchema: z.object({
+      days: z.number().nullable().describe('回看交易日数量，默认100，范围1-250'),
+      index: z.enum(['sse', 'csi300', 'szse', 'chinext']).nullable().describe('指数：sse=上证指数，csi300=沪深300，szse=深证成指，chinext=创业板指；默认sse'),
+    }),
+    execute: ({ days, index }) => execMarketHistory(deps, userId, model, days ?? 100, index ?? 'sse'),
+  })
+}
+
+function createMarketOverviewTool(deps: ToolDeps) {
+  return tool({
+    description: '查看当前/最新大盘行情信号：市场状态（regime）、上证指数、A50、VIX、市场提示。只适合回答今天或当前的大盘状态。',
+    inputSchema: z.object({}),
+    execute: () => execMarketOverview(deps),
+  })
+}
+
+function formatPortfolioPlan({ action, code, name, shares, cost_price, stop_loss, reason }: { action: string; code: string; name: string | null; shares: number | null; cost_price: number | null; stop_loss: number | null; reason: string | null }) {
+  const actionLabel = { add: '新增', update: '修改', delete: '删除' }[action] ?? action
+  const lines = [`📋 **调仓方案**`, `- 操作：${actionLabel}`, `- 标的：${code} ${name || ''}`]
+  if (shares) lines.push(`- 股数：${shares}`)
+  if (cost_price) lines.push(`- 价格：¥${cost_price}`)
+  if (stop_loss) lines.push(`- 止损：¥${stop_loss}`)
+  if (reason) lines.push(`- 理由：${reason}`)
+  lines.push('', '⚠️ 请确认是否执行此操作？')
+  return lines.join('\n')
+}
+
 function buildTools(userId: string, config: LLMConfig, reasoningCache: string[]) {
   const deps: ToolDeps = { supabase, fetch: globalThis.fetch, generateText }
   const model = createProxiedProvider(config, reasoningCache).chat(config.model)
@@ -252,11 +301,8 @@ function buildTools(userId: string, config: LLMConfig, reasoningCache: string[])
       execute: () => execViewPortfolio(deps, userId),
     }),
 
-    market_overview: tool({
-      description: '查看最新大盘行情信号：市场状态（regime）、上证指数、A50、VIX、市场提示。',
-      inputSchema: z.object({}),
-      execute: () => execMarketOverview(deps),
-    }),
+    market_overview: createMarketOverviewTool(deps),
+    market_history: createMarketHistoryTool(deps, userId, model),
 
     query_recommendations: tool({
       description: '查询形态复盘记录，显示入选股票及其后续涨跌表现。',
@@ -281,16 +327,7 @@ function buildTools(userId: string, config: LLMConfig, reasoningCache: string[])
         stop_loss: z.number().nullable().describe('止损价'),
         reason: z.string().nullable().describe('调仓理由'),
       }),
-      execute: async ({ action, code, name, shares, cost_price, stop_loss, reason }) => {
-        const actionLabel = { add: '新增', update: '修改', delete: '删除' }[action]
-        const lines = [`📋 **调仓方案**`, `- 操作：${actionLabel}`, `- 标的：${code} ${name || ''}`]
-        if (shares) lines.push(`- 股数：${shares}`)
-        if (cost_price) lines.push(`- 价格：¥${cost_price}`)
-        if (stop_loss) lines.push(`- 止损：¥${stop_loss}`)
-        if (reason) lines.push(`- 理由：${reason}`)
-        lines.push('', '⚠️ 请确认是否执行此操作？')
-        return lines.join('\n')
-      },
+      execute: (params) => formatPortfolioPlan(params),
     }),
 
     execute_portfolio_update: tool({

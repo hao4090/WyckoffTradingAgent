@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
+import { avg, rsi as calcRSI, macd as calcMACD, bollinger as calcBollinger } from '@/lib/math'
 import {
   createChart,
   CandlestickSeries,
@@ -10,6 +11,7 @@ import {
   type HistogramData,
   type IChartApi,
   type ISeriesApi,
+  type ISeriesMarkersPluginApi,
   type LineData,
   type SeriesMarker,
   type Time,
@@ -37,6 +39,7 @@ interface KlineChartProps {
   wyckoffMarkers?: WyckoffMarkerInput[]
   tradingRange?: { support: number; resistance: number }
   stage?: string
+  showIndicators?: boolean
 }
 
 interface StructureSnapshot {
@@ -58,124 +61,245 @@ interface ChartRefs {
   ma20: ISeriesApi<'Line'>
   ma50: ISeriesApi<'Line'>
   volume: ISeriesApi<'Histogram'>
+  markers: ISeriesMarkersPluginApi<Time> | null
 }
 
-export function KlineChart({ data, height = 400, wyckoffMarkers, tradingRange, stage }: KlineChartProps) {
+type ChartTheme = ReturnType<typeof readChartTheme>
+
+export function KlineChart({ data, height = 400, wyckoffMarkers, tradingRange, stage, showIndicators = false }: KlineChartProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRefs = useRef<ChartRefs | null>(null)
+  const themeRef = useRef(readChartTheme())
   const structure = useMemo(() => buildStructureSnapshot(data, tradingRange, stage), [data, tradingRange, stage])
+  const [indicators, setIndicators] = useState({ boll: false, rsi: false, macd: false })
 
+  useChartInit(containerRef, chartRefs, themeRef, height)
+  useChartData(chartRefs, themeRef, data, wyckoffMarkers, tradingRange)
+  useBollingerOverlay(chartRefs, data, indicators.boll)
+
+  const closes = useMemo(() => data.map((d) => d.close), [data])
+  const dates = useMemo(() => data.map((d) => d.date), [data])
+
+  return (
+    <div className="space-y-3">
+      {structure && <StructureMetrics structure={structure} />}
+      <div ref={containerRef} className="h-[350px] w-full overflow-hidden rounded-lg border border-border bg-background sm:h-auto" />
+      {showIndicators && <IndicatorBar indicators={indicators} setIndicators={setIndicators} />}
+      {indicators.rsi && <RSISubChart closes={closes} dates={dates} />}
+      {indicators.macd && <MACDSubChart closes={closes} dates={dates} />}
+      <ChartLegend boll={indicators.boll} wyckoffMarkers={!!wyckoffMarkers} />
+    </div>
+  )
+}
+
+function useChartInit(
+  containerRef: React.RefObject<HTMLDivElement | null>,
+  chartRefs: React.MutableRefObject<ChartRefs | null>,
+  themeRef: React.MutableRefObject<ChartTheme>,
+  height: number,
+) {
   useEffect(() => {
     if (!containerRef.current) return
-
-    const theme = readChartTheme()
+    themeRef.current = readChartTheme()
+    const theme = themeRef.current
     const chart = createChart(containerRef.current, {
       height,
-      layout: {
-        background: { color: theme.background },
-        textColor: theme.mutedText,
-        fontSize: 11,
-      },
-      grid: {
-        vertLines: { color: theme.grid },
-        horzLines: { color: theme.grid },
-      },
+      layout: { background: { color: theme.background }, textColor: theme.mutedText, fontSize: 11 },
+      grid: { vertLines: { color: theme.grid }, horzLines: { color: theme.grid } },
       crosshair: { mode: 0 },
       rightPriceScale: { borderColor: theme.border },
       timeScale: { borderColor: theme.border, timeVisible: false },
     })
-
     const candle = chart.addSeries(CandlestickSeries, {
       upColor: theme.up, downColor: theme.down,
       borderUpColor: theme.up, borderDownColor: theme.down,
       wickUpColor: theme.up, wickDownColor: theme.down,
     })
-
     const maOpts = { priceLineVisible: false, lastValueVisible: false } as const
     const ma5 = chart.addSeries(LineSeries, { ...maOpts, color: '#f59e0b', lineWidth: 1 })
     const ma20 = chart.addSeries(LineSeries, { ...maOpts, color: '#2563eb', lineWidth: 2 })
     const ma50 = chart.addSeries(LineSeries, { ...maOpts, color: '#7c3aed', lineWidth: 2, lineStyle: LineStyle.Dashed })
-
-    const volume = chart.addSeries(HistogramSeries, {
-      priceFormat: { type: 'volume' },
-      priceScaleId: 'volume',
-    })
+    const volume = chart.addSeries(HistogramSeries, { priceFormat: { type: 'volume' }, priceScaleId: 'volume' })
     chart.priceScale('volume').applyOptions({ scaleMargins: { top: 0.84, bottom: 0 } })
-
-    chartRefs.current = { chart, candle, ma5, ma20, ma50, volume }
-
-    const handleResize = () => {
-      if (containerRef.current) chart.applyOptions({ width: containerRef.current.clientWidth })
-    }
+    chartRefs.current = { chart, candle, ma5, ma20, ma50, volume, markers: null }
+    const handleResize = () => { if (containerRef.current) chart.applyOptions({ width: containerRef.current.clientWidth }) }
     window.addEventListener('resize', handleResize)
     handleResize()
-
-    return () => {
-      window.removeEventListener('resize', handleResize)
-      chart.remove()
-      chartRefs.current = null
-    }
+    return () => { window.removeEventListener('resize', handleResize); chartRefs.current?.markers?.detach(); chart.remove(); chartRefs.current = null }
   }, [height])
+}
 
+function useChartData(
+  chartRefs: React.MutableRefObject<ChartRefs | null>,
+  themeRef: React.MutableRefObject<ChartTheme>,
+  data: KlineData[],
+  wyckoffMarkers: WyckoffMarkerInput[] | undefined,
+  tradingRange: { support: number; resistance: number } | undefined,
+) {
   useEffect(() => {
     const refs = chartRefs.current
     if (!refs || data.length === 0) return
-
-    const theme = readChartTheme()
-
-    const candles: CandlestickData<Time>[] = data.map((d) => ({
-      time: d.date as Time, open: d.open, high: d.high, low: d.low, close: d.close,
-    }))
+    const theme = themeRef.current
+    const candles: CandlestickData<Time>[] = data.map((d) => ({ time: d.date as Time, open: d.open, high: d.high, low: d.low, close: d.close }))
     const volumes: HistogramData<Time>[] = data.map((d) => ({
-      time: d.date as Time, value: d.volume,
-      color: d.close >= d.open ? `${theme.up}4d` : `${theme.down}4d`,
+      time: d.date as Time, value: d.volume, color: d.close >= d.open ? `${theme.up}4d` : `${theme.down}4d`,
     }))
-
     refs.candle.setData(candles)
     refs.ma5.setData(movingAverage(data, 5))
     refs.ma20.setData(movingAverage(data, 20))
     refs.ma50.setData(movingAverage(data, 50))
     refs.volume.setData(volumes)
-    createSeriesMarkers(refs.candle, wyckoffMarkers ? toSeriesMarkers(wyckoffMarkers) : buildMarkers(data))
-
+    const markers = wyckoffMarkers ? toSeriesMarkers(wyckoffMarkers) : buildMarkers(data)
+    if (refs.markers) refs.markers.setMarkers(markers)
+    else refs.markers = createSeriesMarkers(refs.candle, markers)
+    refs.candle.priceLines().forEach((line) => refs.candle.removePriceLine(line))
     addPriceLines(refs.candle, tradingRange ?? buildPriceLevels(data), theme)
     refs.chart.timeScale().fitContent()
   }, [data, wyckoffMarkers, tradingRange])
+}
 
+function useBollingerOverlay(chartRefs: React.MutableRefObject<ChartRefs | null>, data: KlineData[], active: boolean) {
+  useEffect(() => {
+    const refs = chartRefs.current
+    if (!refs || data.length === 0) return
+    const bollRefs: ISeriesApi<'Line'>[] = []
+    if (active) {
+      const boll = calcBollinger(data.map((d) => d.close))
+      const lineOpt = { priceLineVisible: false, lastValueVisible: false, lineWidth: 1 as const, lineStyle: LineStyle.Dashed }
+      const upper = refs.chart.addSeries(LineSeries, { ...lineOpt, color: '#94a3b8' })
+      const mid = refs.chart.addSeries(LineSeries, { ...lineOpt, color: '#94a3b8', lineStyle: LineStyle.Dotted })
+      const lower = refs.chart.addSeries(LineSeries, { ...lineOpt, color: '#94a3b8' })
+      const toLine = (vals: (number | null)[]) => vals.map((v, i) => v != null ? { time: data[i]!.date as Time, value: v } : null).filter(Boolean) as LineData<Time>[]
+      upper.setData(toLine(boll.upper)); mid.setData(toLine(boll.middle)); lower.setData(toLine(boll.lower))
+      bollRefs.push(upper, mid, lower)
+    }
+    return () => { bollRefs.forEach((s) => refs.chart.removeSeries(s)) }
+  }, [data, active])
+}
+
+function StructureMetrics({ structure }: { structure: StructureSnapshot }) {
   return (
-    <div className="space-y-3">
-      {structure && (
-        <div className="grid gap-2 text-xs sm:grid-cols-2 lg:grid-cols-4">
-          <Metric label="最新收盘" value={`${formatPrice(structure.latestClose)} (${formatPct(structure.changePct)})`} tone={structure.tone} />
-          <Metric label="结构状态" value={structure.phase} tone={structure.tone} />
-          <Metric label="支撑 / 压力" value={`${formatPrice(structure.support)} / ${formatPrice(structure.resistance)}`} />
-          <Metric label="量能 / 均线" value={`${structure.volumeRatio.toFixed(1)}x · MA20 ${formatPrice(structure.ma20)} · MA50 ${formatPrice(structure.ma50)}`} />
-        </div>
-      )}
-      <div ref={containerRef} className="h-[350px] w-full overflow-hidden rounded-lg border border-border bg-background sm:h-auto" />
-      <div className="flex flex-wrap gap-3 text-[11px] text-muted-foreground">
-        <Legend color="#f59e0b" label="MA5" />
-        <Legend color="#2563eb" label="MA20" />
-        <Legend color="#7c3aed" label="MA50" />
-        {wyckoffMarkers ? (
-          <>
-            <Legend color="#f59e0b" label="Spring" />
-            <Legend color="#ef4444" label="SOS" />
-            <Legend color="#2563eb" label="LPS" />
-            <Legend color="#7c3aed" label="EVR" />
-          </>
-        ) : (
-          <>
-            <Legend color="#ef4444" label="SOS/突破" />
-            <Legend color="#2563eb" label="测试" />
-            <Legend color="#10b981" label="供应风险" />
-          </>
-        )}
-      </div>
+    <div className="grid gap-2 text-xs sm:grid-cols-2 lg:grid-cols-4">
+      <Metric label="最新收盘" value={`${formatPrice(structure.latestClose)} (${formatPct(structure.changePct)})`} tone={structure.tone} />
+      <Metric label="结构状态" value={structure.phase} tone={structure.tone} />
+      <Metric label="支撑 / 压力" value={`${formatPrice(structure.support)} / ${formatPrice(structure.resistance)}`} />
+      <Metric label="量能 / 均线" value={`${structure.volumeRatio.toFixed(1)}x · MA20 ${formatPrice(structure.ma20)} · MA50 ${formatPrice(structure.ma50)}`} />
     </div>
   )
 }
 
+function IndicatorBar({ indicators, setIndicators }: { indicators: { boll: boolean; rsi: boolean; macd: boolean }; setIndicators: React.Dispatch<React.SetStateAction<{ boll: boolean; rsi: boolean; macd: boolean }>> }) {
+  return (
+    <div className="flex flex-wrap gap-2 text-[11px]">
+      <IndicatorToggle label="BOLL" active={indicators.boll} onToggle={() => setIndicators((p) => ({ ...p, boll: !p.boll }))} />
+      <IndicatorToggle label="RSI" active={indicators.rsi} onToggle={() => setIndicators((p) => ({ ...p, rsi: !p.rsi }))} />
+      <IndicatorToggle label="MACD" active={indicators.macd} onToggle={() => setIndicators((p) => ({ ...p, macd: !p.macd }))} />
+    </div>
+  )
+}
+
+function ChartLegend({ boll, wyckoffMarkers }: { boll: boolean; wyckoffMarkers: boolean }) {
+  return (
+    <div className="flex flex-wrap gap-3 text-[11px] text-muted-foreground">
+      <Legend color="#f59e0b" label="MA5" />
+      <Legend color="#2563eb" label="MA20" />
+      <Legend color="#7c3aed" label="MA50" />
+      {boll && <Legend color="#94a3b8" label="BOLL" />}
+      {wyckoffMarkers ? (
+        <>
+          <Legend color="#f59e0b" label="Spring" />
+          <Legend color="#ef4444" label="SOS" />
+          <Legend color="#2563eb" label="LPS" />
+          <Legend color="#7c3aed" label="EVR" />
+        </>
+      ) : (
+        <>
+          <Legend color="#ef4444" label="SOS/突破" />
+          <Legend color="#2563eb" label="测试" />
+          <Legend color="#10b981" label="供应风险" />
+        </>
+      )}
+    </div>
+  )
+}
+
+function IndicatorToggle({ label, active, onToggle }: { label: string; active: boolean; onToggle: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      className={`rounded-md border px-2 py-1 text-[11px] font-medium transition-colors ${active ? 'border-primary bg-primary/10 text-primary' : 'border-border text-muted-foreground hover:bg-muted/50'}`}
+    >
+      {label}
+    </button>
+  )
+}
+
+function RSISubChart({ closes, dates }: { closes: number[]; dates: string[] }) {
+  const containerRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!containerRef.current || closes.length === 0) return
+    const theme = readChartTheme()
+    const chart = createChart(containerRef.current, {
+      height: 120,
+      layout: { background: { color: theme.background }, textColor: theme.mutedText, fontSize: 10 },
+      grid: { vertLines: { color: theme.grid }, horzLines: { color: theme.grid } },
+      rightPriceScale: { borderColor: theme.border },
+      timeScale: { borderColor: theme.border, visible: false },
+    })
+    const line = chart.addSeries(LineSeries, { color: '#8b5cf6', lineWidth: 1, priceLineVisible: false, lastValueVisible: true, title: 'RSI' })
+    const rsiResult = calcRSI(closes)
+    const points: LineData<Time>[] = []
+    for (let i = 0; i < rsiResult.values.length; i++) {
+      if (rsiResult.values[i] != null) points.push({ time: dates[i]! as Time, value: rsiResult.values[i]! })
+    }
+    line.setData(points)
+    line.createPriceLine({ price: 70, color: '#ef4444', lineWidth: 1, lineStyle: LineStyle.Dotted, axisLabelVisible: false })
+    line.createPriceLine({ price: 30, color: '#10b981', lineWidth: 1, lineStyle: LineStyle.Dotted, axisLabelVisible: false })
+    chart.timeScale().fitContent()
+    const resize = () => { if (containerRef.current) chart.applyOptions({ width: containerRef.current.clientWidth }) }
+    window.addEventListener('resize', resize)
+    resize()
+    return () => { window.removeEventListener('resize', resize); chart.remove() }
+  }, [closes, dates])
+  return <div ref={containerRef} className="w-full overflow-hidden rounded-lg border border-border bg-background" />
+}
+
+function MACDSubChart({ closes, dates }: { closes: number[]; dates: string[] }) {
+  const containerRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!containerRef.current || closes.length === 0) return
+    const theme = readChartTheme()
+    const chart = createChart(containerRef.current, {
+      height: 120,
+      layout: { background: { color: theme.background }, textColor: theme.mutedText, fontSize: 10 },
+      grid: { vertLines: { color: theme.grid }, horzLines: { color: theme.grid } },
+      rightPriceScale: { borderColor: theme.border },
+      timeScale: { borderColor: theme.border, visible: false },
+    })
+    const macdResult = calcMACD(closes)
+    const macdLine = chart.addSeries(LineSeries, { color: '#2563eb', lineWidth: 1, priceLineVisible: false, lastValueVisible: false, title: 'MACD' })
+    const sigLine = chart.addSeries(LineSeries, { color: '#f59e0b', lineWidth: 1, priceLineVisible: false, lastValueVisible: false, title: 'Signal' })
+    const hist = chart.addSeries(HistogramSeries, { priceLineVisible: false, lastValueVisible: false })
+
+    const toLine = (vals: (number | null)[]) => vals.map((v, i) => v != null ? { time: dates[i]! as Time, value: v } : null).filter(Boolean) as LineData<Time>[]
+    macdLine.setData(toLine(macdResult.macd))
+    sigLine.setData(toLine(macdResult.signal))
+    hist.setData(
+      macdResult.histogram
+        .map((v, i) => v != null ? { time: dates[i]! as Time, value: v, color: v >= 0 ? '#ef444480' : '#10b98180' } : null)
+        .filter(Boolean) as HistogramData<Time>[],
+    )
+    chart.timeScale().fitContent()
+    const resize = () => { if (containerRef.current) chart.applyOptions({ width: containerRef.current.clientWidth }) }
+    window.addEventListener('resize', resize)
+    resize()
+    return () => { window.removeEventListener('resize', resize); chart.remove() }
+  }, [closes, dates])
+  return <div ref={containerRef} className="w-full overflow-hidden rounded-lg border border-border bg-background" />
+}
+
+// Chinese market convention: red = bullish/up, green = bearish/down (opposite of Western markets)
 function Metric({ label, value, tone = 'watch' }: { label: string; value: string; tone?: StructureSnapshot['tone'] }) {
   const toneClass = tone === 'strong'
     ? 'border-red-200 bg-red-50 text-red-700 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-200'
@@ -227,9 +351,12 @@ function readChartTheme() {
 function movingAverage(data: KlineData[], period: number): LineData<Time>[] {
   if (data.length < period) return []
   const points: LineData<Time>[] = []
-  for (let index = period - 1; index < data.length; index += 1) {
-    const window = data.slice(index - period + 1, index + 1)
-    points.push({ time: data[index]!.date as Time, value: avg(window.map((d) => d.close)) })
+  let sum = 0
+  for (let i = 0; i < period; i++) sum += data[i]!.close
+  points.push({ time: data[period - 1]!.date as Time, value: sum / period })
+  for (let i = period; i < data.length; i++) {
+    sum += data[i]!.close - data[i - period]!.close
+    points.push({ time: data[i]!.date as Time, value: sum / period })
   }
   return points
 }
@@ -251,26 +378,39 @@ function toSeriesMarkers(markers: WyckoffMarkerInput[]): SeriesMarker<Time>[] {
 function buildMarkers(data: KlineData[]): SeriesMarker<Time>[] {
   const markers: SeriesMarker<Time>[] = []
   const start = Math.max(20, data.length - 150)
-  for (let index = start; index < data.length; index += 1) {
-    const current = data[index]!
-    const previous = data.slice(Math.max(0, index - 20), index)
-    if (previous.length < 10) continue
 
-    const volume20 = avg(previous.map((d) => d.volume))
-    const previousHigh = Math.max(...previous.map((d) => d.high))
-    const range = Math.max(current.high - current.low, 0.01)
-    const closePosition = (current.close - current.low) / range
-    const body = Math.abs(current.close - current.open)
-    const upperShadow = current.high - Math.max(current.close, current.open)
+  const volSum = new Float64Array(data.length + 1)
+  const highMax = new Float64Array(data.length)
+  for (let i = 0; i < data.length; i++) volSum[i + 1] = volSum[i]! + data[i]!.volume
 
-    if (current.close > previousHigh && current.volume > volume20 * 1.35 && closePosition > 0.65) {
-      markers.push({ time: current.date as Time, position: 'belowBar', shape: 'arrowUp', color: '#ef4444', text: 'SOS', size: 1.2 })
-    } else if (current.volume < volume20 * 0.55 && closePosition > 0.55) {
-      markers.push({ time: current.date as Time, position: 'belowBar', shape: 'circle', color: '#2563eb', text: '测试' })
+  for (let i = start; i < data.length; i++) {
+    const lo = Math.max(0, i - 20)
+    const len = i - lo
+    if (len < 10) continue
+    const volume20 = (volSum[i]! - volSum[lo]!) / len
+
+    if (!highMax[i - 1]) {
+      let mx = 0
+      for (let j = lo; j < i; j++) mx = Math.max(mx, data[j]!.high)
+      highMax[i] = mx
+    }
+    const prevHigh = Math.max(highMax[i - 1] || 0, data[i - 1]!.high)
+    highMax[i] = prevHigh
+
+    const cur = data[i]!
+    const range = Math.max(cur.high - cur.low, 0.01)
+    const closePos = (cur.close - cur.low) / range
+    const body = Math.abs(cur.close - cur.open)
+    const upperShadow = cur.high - Math.max(cur.close, cur.open)
+
+    if (cur.close > prevHigh && cur.volume > volume20 * 1.35 && closePos > 0.65) {
+      markers.push({ time: cur.date as Time, position: 'belowBar', shape: 'arrowUp', color: '#ef4444', text: 'SOS', size: 1.2 })
+    } else if (cur.volume < volume20 * 0.55 && closePos > 0.55) {
+      markers.push({ time: cur.date as Time, position: 'belowBar', shape: 'circle', color: '#2563eb', text: '测试' })
     }
 
-    if (upperShadow > Math.max(body * 1.8, range * 0.35) && closePosition < 0.45 && current.volume > volume20 * 1.15) {
-      markers.push({ time: current.date as Time, position: 'aboveBar', shape: 'arrowDown', color: '#10b981', text: '供应' })
+    if (upperShadow > Math.max(body * 1.8, range * 0.35) && closePos < 0.45 && cur.volume > volume20 * 1.15) {
+      markers.push({ time: cur.date as Time, position: 'aboveBar', shape: 'arrowDown', color: '#10b981', text: '供应' })
     }
   }
   return markers.slice(-12)
@@ -313,10 +453,6 @@ function buildPriceLevels(data: KlineData[]) {
     support: Math.min(...recent.map((d) => d.low)),
     resistance: Math.max(...recent.map((d) => d.high)),
   }
-}
-
-function avg(values: number[]): number {
-  return values.length > 0 ? values.reduce((sum, value) => sum + value, 0) / values.length : 0
 }
 
 function formatPrice(value: number): string {

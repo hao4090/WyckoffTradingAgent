@@ -337,7 +337,7 @@ def _candidate_rows(
                 symbol,
                 {"symbol": symbol, "name": name_map.get(symbol, symbol), "score": 0.0, "triggers": []},
             )
-            item["score"] = float(item["score"]) + min(float(score), 10.0)
+            item["score"] = float(item["score"]) + float(score)
             item["triggers"].append(TRIGGER_LABELS.get(trigger, trigger))
     out = list(rows.values())
     for item in out:

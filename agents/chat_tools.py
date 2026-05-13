@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import ipaddress
 import logging
+import math
 import os
 import pathlib
 import re
@@ -34,6 +35,30 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+_MARKET_HISTORY_INDEXES = {
+    "sse": ("000001.SH", "上证指数"),
+    "csi300": ("000300.SH", "沪深300"),
+    "szse": ("399001.SZ", "深证成指"),
+    "chinext": ("399006.SZ", "创业板指"),
+    "sse50": ("000016.SH", "上证50"),
+    "csi500": ("000905.SH", "中证500"),
+}
+_MARKET_HISTORY_ALIASES = {
+    "sh": "sse",
+    "上证": "sse",
+    "上证指数": "sse",
+    "沪指": "sse",
+    "沪深300": "csi300",
+    "300": "csi300",
+    "sz": "szse",
+    "深证": "szse",
+    "深成指": "szse",
+    "深证成指": "szse",
+    "创业板": "chinext",
+    "创业板指": "chinext",
+    "上证50": "sse50",
+    "中证500": "csi500",
+}
 _NAME_MAP: dict[str, str] | None = None
 _MAX_AGENT_FILE_BYTES = 50 * 1024 * 1024
 _MAX_AGENT_TEXT_WRITE_BYTES = 2 * 1024 * 1024
@@ -1034,6 +1059,158 @@ def get_market_overview(tool_context: ToolContext) -> dict:
         return {"error": str(e)}
 
 
+def _resolve_market_history_index(index: str) -> tuple[str, str, str]:
+    raw = str(index or "sse").strip()
+    key = _MARKET_HISTORY_ALIASES.get(raw, _MARKET_HISTORY_ALIASES.get(raw.lower(), raw.lower()))
+    if key in _MARKET_HISTORY_INDEXES:
+        symbol, name = _MARKET_HISTORY_INDEXES[key]
+        return key, symbol, name
+    code = raw.upper()
+    for item_key, (symbol, name) in _MARKET_HISTORY_INDEXES.items():
+        if code in {symbol, symbol.split(".", 1)[0]}:
+            return item_key, symbol, name
+    symbol, name = _MARKET_HISTORY_INDEXES["sse"]
+    return "sse", symbol, name
+
+
+def _json_float(value: Any, digits: int = 2) -> float | None:
+    try:
+        out = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(out):
+        return None
+    return round(out, digits)
+
+
+def _prepare_market_history_frame(df: Any, days: int) -> Any:
+    import pandas as pd
+
+    out = df.copy()
+    for col in ("open", "high", "low", "close", "volume", "amount", "prev_close"):
+        if col in out.columns:
+            out[col] = pd.to_numeric(out[col], errors="coerce")
+    if "date" not in out.columns and "datetime" in out.columns:
+        out["date"] = pd.to_datetime(out["datetime"], errors="coerce").dt.strftime("%Y-%m-%d")
+    if "pct_chg" not in out.columns:
+        basis = out["prev_close"] if "prev_close" in out.columns else out["close"].shift(1)
+        out["pct_chg"] = (out["close"] / basis - 1.0) * 100.0
+    out["pct_chg"] = pd.to_numeric(out["pct_chg"], errors="coerce")
+    cols = ["date", "open", "high", "low", "close", "volume", "amount", "pct_chg"]
+    for col in cols:
+        if col not in out.columns:
+            out[col] = None
+    for col in ("open", "high", "low", "close", "volume", "amount", "pct_chg"):
+        out[col] = pd.to_numeric(out[col], errors="coerce")
+    out = out.dropna(subset=["date", "close"]).sort_values("date").tail(days)
+    return out[cols].reset_index(drop=True)
+
+
+def _fetch_market_history_frame(symbol: str, days: int, tool_context: ToolContext | None) -> tuple[Any, str, list[str]]:
+    errors: list[str] = []
+    api_key = _get_credential(tool_context, "tickflow_api_key", "TICKFLOW_API_KEY")
+    if api_key:
+        try:
+            from integrations.tickflow_client import TickFlowClient
+
+            client = TickFlowClient(api_key=api_key)
+            return client.get_klines(symbol, period="1d", count=days, adjust="none"), "tickflow", errors
+        except Exception as e:
+            errors.append(f"tickflow: {e}")
+    else:
+        errors.append("tickflow: TICKFLOW_API_KEY 未配置")
+    try:
+        _ensure_tushare_token(tool_context)
+        from integrations.data_source import fetch_index_hist
+
+        end = date.today()
+        start = end - timedelta(days=int(days * 2.4) + 30)
+        return fetch_index_hist(symbol, start, end), "tushare/akshare", errors
+    except Exception as e:
+        errors.append(f"tushare/akshare: {e}")
+    raise RuntimeError("; ".join(errors))
+
+
+def _market_history_summary(df: Any) -> dict[str, Any]:
+    close = df["close"]
+    volume = df["volume"]
+    latest = df.iloc[-1]
+    roll_max = close.cummax()
+    drawdown = ((close / roll_max) - 1.0) * 100.0
+    tail20 = df.tail(min(len(df), 20))
+    prior = df.iloc[:-20] if len(df) > 20 else df.iloc[:0]
+    prior_volume = prior["volume"].mean() if len(prior) else None
+    recent_volume = tail20["volume"].mean()
+    period_return = (float(close.iloc[-1]) / float(close.iloc[0]) - 1.0) * 100.0
+    recent_return = (float(tail20["close"].iloc[-1]) / float(tail20["close"].iloc[0]) - 1.0) * 100.0
+    return {
+        "latest_date": str(latest["date"]),
+        "latest_close": _json_float(latest["close"]),
+        "latest_pct_chg": _json_float(latest["pct_chg"]),
+        "period_return_pct": _json_float(period_return),
+        "recent_20d_return_pct": _json_float(recent_return),
+        "latest_volume_ratio_20d": _json_float(
+            float(latest["volume"]) / float(recent_volume) if recent_volume else None
+        ),
+        "recent_20d_volume_vs_prior": _json_float(float(recent_volume) / float(prior_volume) if prior_volume else None),
+        "max_drawdown_pct": _json_float(drawdown.min()),
+        "up_days": int((df["pct_chg"] > 0).sum()),
+        "down_days": int((df["pct_chg"] < 0).sum()),
+        "price_up_volume_up_days": int(((df["pct_chg"] > 0) & (volume > volume.shift(1))).sum()),
+        "price_down_volume_up_days": int(((df["pct_chg"] < 0) & (volume > volume.shift(1))).sum()),
+    }
+
+
+def _market_history_rows(df: Any) -> list[dict[str, Any]]:
+    rows = []
+    for row in df.to_dict("records"):
+        rows.append(
+            {
+                "date": str(row.get("date", "")),
+                "open": _json_float(row.get("open")),
+                "high": _json_float(row.get("high")),
+                "low": _json_float(row.get("low")),
+                "close": _json_float(row.get("close")),
+                "pct_chg": _json_float(row.get("pct_chg")),
+                "volume": _json_float(row.get("volume"), 0),
+            }
+        )
+    return rows
+
+
+def get_market_history(days: int = 100, index: str = "sse", tool_context: ToolContext = None) -> dict:
+    """回看 A 股主要指数过去 N 个交易日的日线量价关系。
+
+    Args:
+        days: 回看交易日数量，默认 100，最大 320。
+        index: 指数别名或代码，支持 sse/csi300/szse/chinext/sse50/csi500。
+
+    Returns:
+        历史大盘日线摘要、最近 N 个交易日量价切片和数据源。
+    """
+    try:
+        requested_days = max(1, min(int(days or 100), 320))
+        lookback = max(20, requested_days)
+        key, symbol, name = _resolve_market_history_index(index)
+        raw, source, errors = _fetch_market_history_frame(symbol, lookback, tool_context)
+        df = _prepare_market_history_frame(raw, lookback).tail(requested_days).reset_index(drop=True)
+        if df.empty:
+            return {"error": f"{name} {symbol} 没有可用历史 K 线", "source": source}
+        return {
+            "ok": True,
+            "index": {"key": key, "symbol": symbol, "name": name},
+            "requested_days": requested_days,
+            "returned_days": int(len(df)),
+            "source": source,
+            "fallback_errors": errors,
+            "summary": _market_history_summary(df),
+            "rows": _market_history_rows(df),
+        }
+    except Exception as e:
+        logger.exception("get_market_history error")
+        return {"error": str(e)}
+
+
 # ---------------------------------------------------------------------------
 # Tool 6: Wyckoff 漏斗筛选
 # ---------------------------------------------------------------------------
@@ -2021,6 +2198,7 @@ WYCKOFF_TOOLS = [
     analyze_stock,
     portfolio,
     get_market_overview,
+    get_market_history,
     screen_stocks,
     generate_ai_report,
     generate_strategy_decision,

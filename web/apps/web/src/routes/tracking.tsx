@@ -1,5 +1,6 @@
-import { useState, useMemo } from 'react'
+import { useCallback, useState, useMemo, useRef, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import { createChart, HistogramSeries, type Time } from 'lightweight-charts'
 import { supabase } from '@/lib/supabase'
 import { WyckoffLoading } from '@/components/loading'
 import { usePreferences } from '@/lib/preferences'
@@ -79,13 +80,17 @@ export function TrackingPage() {
   const latestDate = latestDates[0] ?? null
   const oldestDate = latestDates.at(-1) ?? null
   const activeOldestDate = activeDates.at(-1) ?? null
+  const handleSort = useCallback((next: SortBy) => {
+    if (next === sortBy) { setSortOrder((o) => o === 'desc' ? 'asc' : 'desc'); return }
+    setSortBy(next); setSortOrder('desc')
+  }, [sortBy])
 
   if (loading) {
     return <WyckoffLoading />
   }
 
   return (
-    <div className="flex h-full flex-col p-6">
+    <div className="h-full overflow-auto p-6">
       <TrackingHeader latestDate={latestDate} oldestDate={oldestDate} />
       <DateWindowFilter
         activeDateCount={activeDates.length}
@@ -96,6 +101,7 @@ export function TrackingPage() {
         onWindowChange={setSelectedWindow}
       />
       {stats && <SummaryCards selectedWindow={selectedWindow} stats={stats} />}
+      <WinRatePanel rows={visibleData} />
       <TrackingFilters
         filteredCount={filtered.length}
         onlyAI={onlyAI}
@@ -108,19 +114,7 @@ export function TrackingPage() {
         onSortByChange={setSortBy}
         onSortOrderChange={setSortOrder}
       />
-      <TrackingTable
-        rows={filtered}
-        sortBy={sortBy}
-        sortOrder={sortOrder}
-        onSortChange={(nextSortBy) => {
-          if (nextSortBy === sortBy) {
-            setSortOrder(sortOrder === 'desc' ? 'asc' : 'desc')
-            return
-          }
-          setSortBy(nextSortBy)
-          setSortOrder('desc')
-        }}
-      />
+      <TrackingTable rows={filtered} sortBy={sortBy} sortOrder={sortOrder} onSortChange={handleSort} />
     </div>
   )
 }
@@ -285,8 +279,8 @@ function TrackingTable({
   const { t } = usePreferences()
 
   return (
-    <div className="min-h-0 flex-1 overflow-hidden rounded-lg border border-border">
-      <div className="h-full overflow-auto">
+    <div className="overflow-hidden rounded-lg border border-border">
+      <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead className="sticky top-0 bg-muted/80 backdrop-blur">
             <tr>
@@ -384,6 +378,75 @@ function TrackingRow({ row }: { row: Recommendation }) {
       </td>
     </tr>
   )
+}
+
+function WinRatePanel({ rows }: { rows: Recommendation[] }) {
+  const { t } = usePreferences()
+  const values = useMemo(() => rows.map((r) => r.change_pct).filter(isFiniteNumber), [rows])
+  if (values.length < 3) return null
+  const wins = values.filter((v) => v > 0)
+  const losses = values.filter((v) => v <= 0)
+  const winRate = (wins.length / values.length) * 100
+  const avgWin = wins.length > 0 ? wins.reduce((a, b) => a + b, 0) / wins.length : 0
+  const avgLoss = losses.length > 0 ? losses.reduce((a, b) => a + b, 0) / losses.length : 0
+  return (
+    <div className="mb-5 space-y-3">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <StatCard label={t('tracking.winRate')} value={`${winRate.toFixed(1)}%`} color={winRate >= 50 ? 'text-up' : 'text-down'} />
+        <StatCard label={t('tracking.avgWin')} value={formatPct(avgWin)} color="text-up" />
+        <StatCard label={t('tracking.avgLoss')} value={formatPct(avgLoss)} color="text-down" />
+        <StatCard label={t('tracking.profitFactor')} value={avgLoss !== 0 ? Math.abs(avgWin / avgLoss).toFixed(2) : '--'} />
+      </div>
+      <ReturnHistogram values={values} />
+    </div>
+  )
+}
+
+function ReturnHistogram({ values }: { values: number[] }) {
+  const containerRef = useRef<HTMLDivElement>(null)
+  const buckets = useMemo(() => buildReturnBuckets(values), [values])
+  useEffect(() => {
+    if (!containerRef.current || buckets.length === 0) return
+    const isDark = document.documentElement.classList.contains('dark')
+    const chart = createChart(containerRef.current, {
+      height: 140,
+      layout: { background: { color: isDark ? '#0f172a' : '#ffffff' }, textColor: isDark ? '#94a3b8' : '#6b7194', fontSize: 10 },
+      grid: { vertLines: { visible: false }, horzLines: { color: isDark ? '#202938' : '#eef1f6' } },
+      rightPriceScale: { visible: false },
+      timeScale: { borderVisible: false, fixLeftEdge: true, fixRightEdge: true },
+    })
+    const series = chart.addSeries(HistogramSeries, { priceLineVisible: false, lastValueVisible: false })
+    series.setData(
+      buckets.map((b, i) => ({ time: (2020 * 10000 + 101 + i) as unknown as Time, value: b.count, color: b.midPct >= 0 ? '#ef4444a0' : '#10b981a0' })),
+    )
+    chart.timeScale().fitContent()
+    const resize = () => { if (containerRef.current) chart.applyOptions({ width: containerRef.current.clientWidth }) }
+    window.addEventListener('resize', resize)
+    resize()
+    return () => { window.removeEventListener('resize', resize); chart.remove() }
+  }, [buckets])
+  return (
+    <div>
+      <div className="mb-1 text-[11px] text-muted-foreground">收益分布</div>
+      <div ref={containerRef} className="w-full overflow-hidden rounded-lg border border-border" />
+      <div className="mt-1 flex justify-between text-[10px] text-muted-foreground">
+        {buckets.length > 0 && <span>{buckets[0]!.midPct.toFixed(0)}%</span>}
+        <span>0%</span>
+        {buckets.length > 0 && <span>{buckets[buckets.length - 1]!.midPct.toFixed(0)}%</span>}
+      </div>
+    </div>
+  )
+}
+
+function buildReturnBuckets(values: number[]): { midPct: number; count: number }[] {
+  if (values.length === 0) return []
+  const min = Math.min(...values), max = Math.max(...values)
+  const step = Math.max((max - min) / 15, 1)
+  const buckets: { midPct: number; count: number }[] = []
+  for (let lo = Math.floor(min / step) * step; lo < max + step; lo += step) {
+    buckets.push({ midPct: lo + step / 2, count: values.filter((v) => v >= lo && v < lo + step).length })
+  }
+  return buckets
 }
 
 function StatCard({ label, value, color }: { label: string; value: string; color?: string }) {

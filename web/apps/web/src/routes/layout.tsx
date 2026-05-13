@@ -1,5 +1,5 @@
 import { Outlet, NavLink, useNavigate } from 'react-router'
-import { MessageSquare, Briefcase, TrendingUp, Settings, LogOut, BarChart3, Moon, FileDown, BookOpen, Home, Github, Sun, Languages, type LucideIcon } from 'lucide-react'
+import { MessageSquare, Briefcase, TrendingUp, Settings, LogOut, BarChart3, Moon, FileDown, BookOpen, Home, Github, Sun, Languages, Swords, type LucideIcon } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/auth'
 import { MarketBar } from '@/components/market-bar'
@@ -8,7 +8,8 @@ import { usePreferences, type TranslationKey } from '@/lib/preferences'
 const navItems = [
   { to: '/chat', icon: MessageSquare, labelKey: 'nav.chat' },
   { to: '/analysis', icon: BarChart3, labelKey: 'nav.analysis' },
-{ to: '/portfolio', icon: Briefcase, labelKey: 'nav.portfolio' },
+  { to: '/battle', icon: Swords, labelKey: 'nav.battle' },
+  { to: '/portfolio', icon: Briefcase, labelKey: 'nav.portfolio' },
   { to: '/tracking', icon: TrendingUp, labelKey: 'nav.tracking' },
   { to: '/tail-buy', icon: Moon, labelKey: 'nav.tailBuy' },
   { to: '/export', icon: FileDown, labelKey: 'nav.export' },
