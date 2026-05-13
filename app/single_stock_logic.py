@@ -380,7 +380,7 @@ def render_single_stock_page(
     api_key,
     *,
     base_url: str = "",
-    feishu_webhook: str = "",
+    feishu_webhook: str = "",  # deprecated, kept for caller compat
 ):
     """渲染单股分析页面"""
     st.markdown("### 🔍 威科夫单股分析 (大师模式)")
@@ -416,7 +416,6 @@ def render_single_stock_page(
             model,
             api_key,
             base_url=base_url,
-            feishu_webhook=feishu_webhook,
         )
 
 
@@ -428,7 +427,6 @@ def _run_analysis(
     api_key,
     *,
     base_url: str = "",
-    feishu_webhook: str = "",
 ):
     """执行分析流程"""
     end_calendar = date.today() - timedelta(days=1)
@@ -560,23 +558,6 @@ def _run_analysis(
         report_text = _strip_code_blocks_for_ui(response_text)
         st.markdown("### 📝 威科夫大师研报")
         st.markdown(report_text or "（研报正文已生成）")
-
-        try:
-            from utils.notify import send_all_webhooks
-
-            effective_feishu_webhook = (
-                str(feishu_webhook or "").strip() or str(st.session_state.get("feishu_webhook") or "").strip()
-            )
-            send_all_webhooks(
-                effective_feishu_webhook,
-                st.session_state.get("wecom_webhook") or "",
-                st.session_state.get("dingtalk_webhook") or "",
-                f"AI 深度研报 (单股 - {symbol})",
-                response_text,
-            )
-        except Exception as e:
-            traceback.print_exc()
-            st.toast(f"通知推送失败: {e}", icon="⚠️")
 
         if code_block:
             st.markdown("### 📊 结构标注图")

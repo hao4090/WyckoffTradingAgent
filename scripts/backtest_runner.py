@@ -1243,7 +1243,7 @@ def _calc_max_drawdown_pct(ret: pd.Series) -> float | None:
     s = pd.to_numeric(ret, errors="coerce").dropna()
     if s.empty:
         return None
-    nav = (1.0 + s / 100.0).cumprod()
+    nav = 1.0 + (s / 100.0).cumsum()
     peak = nav.cummax()
     drawdown = nav / peak - 1.0
     if drawdown.empty:
@@ -1407,7 +1407,7 @@ def _calc_stratified_stats(trades_df: pd.DataFrame, hold_days: int = DEFAULT_HOL
 
 
 # ---------------------------------------------------------------------------
-# 组合级净值曲线 & 指标（替代逐笔 cumprod 的错误算法）
+# 组合级净值曲线 & 指标（单利 cumsum 口径）
 # ---------------------------------------------------------------------------
 
 
@@ -1422,12 +1422,12 @@ def _build_daily_nav(
     buy_friction_pct: float = 0.0,
 ) -> pd.DataFrame:
     """
-    从交易记录 + 每日 OHLCV 构建 mark-to-market 组合净值曲线。
+    从交易记录 + 每日 OHLCV 构建 mark-to-market 组合净值曲线（单利口径）。
 
     算法：等权归一化收益指数。
     - 每天对所有 open 持仓按收盘价 mark-to-market
     - 组合日收益 = open 持仓收益率的等权平均（无持仓日=0）
-    - NAV[t] = NAV[t-1] × (1 + portfolio_daily_ret)
+    - NAV[t] = 1.0 + Σ daily_ret[0:t]（cumsum，不做复利放大）
     """
     if not records:
         return pd.DataFrame(columns=["date", "nav", "daily_ret_pct", "positions_count"])
@@ -1471,7 +1471,7 @@ def _build_daily_nav(
     if not window:
         return pd.DataFrame(columns=["date", "nav", "daily_ret_pct", "positions_count"])
 
-    nav = 1.0
+    cum_ret = 0.0
     prev_mtm: dict[int, float] = {}  # position_idx -> 昨日 mtm 价格
     rows: list[dict] = []
 
@@ -1487,7 +1487,6 @@ def _build_daily_nav(
             ohlc = ohlc_cache.get(pos["code"], {})
             candle = ohlc.get(day)
             if candle is None:
-                # 无此日行情（停牌），沿用昨日 mtm
                 daily_rets.append(0.0)
                 continue
 
@@ -1505,7 +1504,8 @@ def _build_daily_nav(
         else:
             port_ret = 0.0
 
-        nav *= 1.0 + port_ret
+        cum_ret += port_ret
+        nav = 1.0 + cum_ret
         rows.append(
             {
                 "date": day,
@@ -1679,7 +1679,7 @@ def _build_summary_md(summary: dict) -> str:
     notes = [
         "- 该回测使用日线数据（qfq），含 T+1 与涨跌停成交约束（一字板不可成交）。",
         "- 入场口径：信号日收盘后出信号，次日开盘价买入（跳过一字涨停日）。",
-        "- 已纳入双边交易摩擦成本（买入/卖出各0.5%），用于近似滑点 + 佣金 + 税费影响。",
+        "- 已纳入双边摩擦成本（各0.5%）；累计收益走单利（cumsum）口径，不放大噪声，便于策略横向比较。",
         "- ⚠️ 仍存在幸存者偏差：股票池来自当前在市样本，未包含历史退市股票。",
     ]
     if use_current_meta:
@@ -1748,7 +1748,7 @@ def _build_summary_md(summary: dict) -> str:
         f"- 25%分位: {_fmt_metric(summary.get('q25_ret_pct'), 3)}%",
         f"- 75%分位: {_fmt_metric(summary.get('q75_ret_pct'), 3)}%",
         "",
-        "## 组合风险指标（基于每日净值曲线）",
+        "## 组合风险指标（单利口径 · 基于每日净值曲线）",
         f"- 夏普比 (Sharpe Ratio): {_fmt_metric(summary.get('sharpe_ratio'), 3)}",
         f"- 卡玛比 (Calmar Ratio): {_fmt_metric(summary.get('calmar_ratio'), 3)}",
         f"- 最大回撤: {_fmt_metric(summary.get('max_drawdown_pct'), 2)}%",

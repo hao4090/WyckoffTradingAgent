@@ -7,7 +7,7 @@ export type Provider = (typeof PROVIDERS)[number]
 export const PROVIDER_LABELS: Record<Provider, string> = {
   '1route': '1Route（推荐）',
   gemini: 'Gemini',
-  openai: 'OpenAI',
+  openai: '兼容OpenAI协议',
   deepseek: 'DeepSeek',
 }
 

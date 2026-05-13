@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useCallback, memo } from 'react'
 import { Send, RotateCcw, ChevronDown, ChevronRight, Wrench, Brain } from 'lucide-react'
 import { useAuthStore } from '@/stores/auth'
-import { loadLLMConfig, loadAllModels, runChatAgentStream, resetReasoningCache, type LLMConfig, type ModelOption, type StepInfo } from '@/lib/chat-agent'
+import { loadLLMConfig, loadAllModels, runChatAgentStream, createReasoningCache, type LLMConfig, type ModelOption, type StepInfo } from '@/lib/chat-agent'
 import { MarkdownContent } from '@/components/markdown'
 import { ScreenResultCard } from '@/components/screen-result-card'
 import { usePreferences, type TranslationKey } from '@/lib/preferences'
@@ -112,7 +112,8 @@ export function ChatPage() {
   const [liveSteps, setLiveSteps] = useState<StepInfo[]>([])
   const [streamingText, setStreamingText] = useState('')
   const scrollRef = useRef<HTMLDivElement>(null)
-  const abortRef = useRef(false)
+  const abortRef = useRef<AbortController | null>(null)
+  const reasoningCacheRef = useRef(createReasoningCache())
   const pickerRef = useRef<HTMLDivElement>(null)
   const scrollRafRef = useRef(0)
 
@@ -159,7 +160,6 @@ export function ChatPage() {
     setLoading(true)
     setLiveSteps([])
     setStreamingText('')
-    abortRef.current = false
 
     const chatHistory = newMessages
       .filter((m) => !m.isError)
@@ -168,29 +168,27 @@ export function ChatPage() {
         content: m.content,
       }))
 
-    await runChatAgentStream(
+    abortRef.current = runChatAgentStream(
       llmConfig,
       user!.id,
       chatHistory,
       {
         onStep: (step) => {
-          if (abortRef.current) return
           setLiveSteps((prev) => [...prev, step])
           setStreamingText('')
         },
         onTextDelta: (delta) => {
-          if (abortRef.current) return
           setStreamingText((prev) => prev + delta)
           scrollToBottom()
         },
         onFinish: (finalText, steps) => {
-          if (abortRef.current) return
           if (finalText) {
             setMessages((prev) => [...prev, { role: 'assistant', content: finalText, steps }])
           }
           setStreamingText('')
           setLiveSteps([])
           setLoading(false)
+          abortRef.current = null
         },
         onError: (err) => {
           const msg = err.message || t('chat.requestFailed')
@@ -199,23 +197,26 @@ export function ChatPage() {
           setStreamingText('')
           setLiveSteps([])
           setLoading(false)
+          abortRef.current = null
         },
       },
+      reasoningCacheRef.current,
     )
   }
 
   function handleNewChat() {
-    abortRef.current = true
-    resetReasoningCache()
+    abortRef.current?.abort()
+    abortRef.current = null
+    reasoningCacheRef.current = createReasoningCache()
     setMessages([])
     setLiveSteps([])
+    setStreamingText('')
     setError('')
     setLoading(false)
   }
 
   return (
     <div className="flex h-full flex-col">
-      {/* Header */}
       <div className="flex items-center justify-between border-b border-border px-6 py-3">
         <div className="flex items-center gap-3">
           <h1 className="text-lg font-semibold">{t('chat.title')}</h1>
@@ -264,7 +265,6 @@ export function ChatPage() {
         </button>
       </div>
 
-      {/* Messages */}
       <div ref={scrollRef} className="flex-1 overflow-auto px-6 py-4">
         {messages.length === 0 && !loading ? (
           <div className="flex h-full flex-col items-center justify-center text-muted-foreground">
@@ -303,7 +303,6 @@ export function ChatPage() {
               <MessageBubble key={i} msg={msg} />
             ))}
 
-            {/* Live streaming */}
             {loading && (
               <div className="flex justify-start">
                 <div className="max-w-[80%] rounded-2xl bg-muted px-4 py-2.5 text-sm text-foreground">
@@ -341,12 +340,10 @@ export function ChatPage() {
         )}
       </div>
 
-      {/* Error */}
       {error && (
         <div className="mx-6 mb-2 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700 dark:bg-red-500/10 dark:text-red-200">{error}</div>
       )}
 
-      {/* Input */}
       <div className="border-t border-border px-6 py-4">
         <form onSubmit={handleSubmit} className="flex items-center gap-2">
           <input

@@ -326,7 +326,7 @@ function TrackingTable({
                 </td>
               </tr>
             ) : (
-              rows.map((row, index) => <TrackingRow key={`${row.code}-${row.recommend_date}-${index}`} row={row} />)
+              rows.map((row) => <TrackingRow key={`${row.code}-${row.recommend_date}`} row={row} />)
             )}
           </tbody>
         </table>

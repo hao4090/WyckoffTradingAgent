@@ -300,7 +300,7 @@ def _validate_public_http_url(url: str) -> str | dict:
 
 
 def _code_to_name(code: str) -> str:
-    """根据股票代码查名称，基于 get_all_stocks() 缓存。"""
+    """根据股票代码查名称，基于 get_all_stocks() + ETF 池缓存。"""
     global _NAME_MAP
     if _NAME_MAP is None:
         try:
@@ -309,7 +309,36 @@ def _code_to_name(code: str) -> str:
             _NAME_MAP = {s["code"]: s["name"] for s in get_all_stocks()}
         except Exception:
             _NAME_MAP = {}
+        _NAME_MAP.update(_load_etf_name_map())
     return _NAME_MAP.get(code, code)
+
+
+def _load_etf_name_map() -> dict[str, str]:
+    """从 ETF meta 加载 ETF 代码→名称映射。"""
+    from pathlib import Path
+
+    try:
+        from tools.market_universe_meta import load_symbol_name_map
+
+        meta_map = load_symbol_name_map(("etf_cn",))
+        out = {code: name for code, name in meta_map.items() if len(code) == 6 and code.isdigit()}
+        if out:
+            return out
+    except Exception:
+        pass
+
+    path = Path(__file__).resolve().parent.parent / "data" / "market_universes" / "etf_cn.txt"
+    if not path.is_file():
+        return {}
+    result: dict[str, str] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.split("#", 1)[0].strip()
+        if not line:
+            continue
+        parts = line.split(None, 1)
+        if len(parts) == 2 and len(parts[0]) == 6 and parts[0].isdigit():
+            result[parts[0]] = f"{parts[1]}ETF"
+    return result
 
 
 def _collect_tickflow_limit_hints_from_df(df: Any) -> list[str]:
@@ -489,10 +518,10 @@ def _ensure_tushare_token(tool_context: ToolContext | None) -> None:
 
 
 def search_stock_by_name(keyword: str, tool_context: ToolContext) -> list[dict]:
-    """根据关键词搜索 A 股股票，支持名称和代码双向模糊搜索。
+    """根据关键词搜索 A 股 / ETF / 美股 / 港股，支持名称和代码双向模糊搜索。
 
     Args:
-        keyword: 搜索关键词，如 "宁德" 或 "300750" 或 "600519"
+        keyword: 搜索关键词，如 "宁德"、"300750"、"AAPL" 或 "00700"
 
     Returns:
         匹配的股票列表，每项包含 code、name、price、pct_chg、market_cap、news 字段。最多返回 10 条。
@@ -500,12 +529,9 @@ def search_stock_by_name(keyword: str, tool_context: ToolContext) -> list[dict]:
     try:
         from integrations.fetch_a_share_csv import get_all_stocks
 
-        stocks = get_all_stocks()
-        if not stocks:
-            return [{"error": "无法获取股票列表"}]
-
         kw = keyword.strip()
-        results = []
+        stocks = get_all_stocks()
+        results: list[dict] = []
         for s in stocks:
             code = s.get("code", "")
             name = s.get("name", "")
@@ -514,14 +540,40 @@ def search_stock_by_name(keyword: str, tool_context: ToolContext) -> list[dict]:
                 if len(results) >= 10:
                     break
 
+        _enrich_search_results(results[:3])
+        if len(results) < 10:
+            results.extend(_search_market_universe_meta(kw, 10 - len(results)))
         if not results:
             return [{"message": f"未找到与 '{kw}' 匹配的股票"}]
-
-        _enrich_search_results(results[:3])
         return results
     except Exception as e:
         logger.exception("search_stock_by_name error")
         return [{"error": str(e)}]
+
+
+def _search_market_universe_meta(keyword: str, limit: int) -> list[dict]:
+    """搜索结构化市场 meta，补充 ETF / 美股 / 港股结果。"""
+    try:
+        from tools.market_universe_meta import search_market_meta
+
+        rows = search_market_meta(keyword, limit=max(limit, 0))
+    except Exception:
+        return []
+    out: list[dict] = []
+    for row in rows:
+        symbol = str(row.get("symbol", "") or "")
+        code = str(row.get("code", "") or "")
+        out.append(
+            {
+                "code": code,
+                "symbol": symbol,
+                "name": str(row.get("name", "") or symbol or code),
+                "market": str(row.get("market", "") or ""),
+                "asset_type": str(row.get("asset_type", "") or ""),
+                "currency": str(row.get("currency", "") or ""),
+            }
+        )
+    return out
 
 
 def _enrich_search_results(items: list[dict]) -> None:

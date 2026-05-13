@@ -151,19 +151,6 @@ def main() -> int:
             ],
         ),
         VideoDef(
-            name="streamlit-demo",
-            masks=[(0, 160, 360, 300)],
-            frames=[
-                FrameDef("streamlit-chat.png", "Step 1/7 读盘室：多模型对话入口", 4),
-                FrameDef("streamlit-export.png", "Step 2/7 数据导出：历史行情导出工具", 4),
-                FrameDef("streamlit-screener.png", "Step 3/7 沙里淘金：漏斗参数与任务入口", 4),
-                FrameDef("streamlit-ai-analysis.png", "Step 4/7 大师模式：单股深度分析", 4),
-                FrameDef("streamlit-portfolio.png", "Step 5/7 持仓管理：编辑持仓与建议", 4),
-                FrameDef("streamlit-tracking.png", "Step 6/7 形态复盘：观察形态后续表现", 4),
-                FrameDef("streamlit-settings.png", "Step 7/7 设置：通知与数据源配置", 4),
-            ],
-        ),
-        VideoDef(
             name="cli-demo",
             masks=[],
             frames=[

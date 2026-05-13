@@ -9,6 +9,7 @@ import {
   type CandlestickData,
   type HistogramData,
   type IChartApi,
+  type ISeriesApi,
   type LineData,
   type SeriesMarker,
   type Time,
@@ -50,13 +51,22 @@ interface StructureSnapshot {
   tone: 'strong' | 'watch' | 'weak'
 }
 
+interface ChartRefs {
+  chart: IChartApi
+  candle: ISeriesApi<'Candlestick'>
+  ma5: ISeriesApi<'Line'>
+  ma20: ISeriesApi<'Line'>
+  ma50: ISeriesApi<'Line'>
+  volume: ISeriesApi<'Histogram'>
+}
+
 export function KlineChart({ data, height = 400, wyckoffMarkers, tradingRange, stage }: KlineChartProps) {
   const containerRef = useRef<HTMLDivElement>(null)
-  const chartRef = useRef<IChartApi | null>(null)
+  const chartRefs = useRef<ChartRefs | null>(null)
   const structure = useMemo(() => buildStructureSnapshot(data, tradingRange, stage), [data, tradingRange, stage])
 
   useEffect(() => {
-    if (!containerRef.current || data.length === 0) return
+    if (!containerRef.current) return
 
     const theme = readChartTheme()
     const chart = createChart(containerRef.current, {
@@ -70,71 +80,32 @@ export function KlineChart({ data, height = 400, wyckoffMarkers, tradingRange, s
         vertLines: { color: theme.grid },
         horzLines: { color: theme.grid },
       },
-      crosshair: {
-        mode: 0,
-      },
-      rightPriceScale: {
-        borderColor: theme.border,
-      },
-      timeScale: {
-        borderColor: theme.border,
-        timeVisible: false,
-      },
+      crosshair: { mode: 0 },
+      rightPriceScale: { borderColor: theme.border },
+      timeScale: { borderColor: theme.border, timeVisible: false },
     })
 
-    const candleSeries = chart.addSeries(CandlestickSeries, {
-      upColor: theme.up,
-      downColor: theme.down,
-      borderUpColor: theme.up,
-      borderDownColor: theme.down,
-      wickUpColor: theme.up,
-      wickDownColor: theme.down,
+    const candle = chart.addSeries(CandlestickSeries, {
+      upColor: theme.up, downColor: theme.down,
+      borderUpColor: theme.up, borderDownColor: theme.down,
+      wickUpColor: theme.up, wickDownColor: theme.down,
     })
 
     const maOpts = { priceLineVisible: false, lastValueVisible: false } as const
-    const ma5Series = chart.addSeries(LineSeries, { ...maOpts, color: '#f59e0b', lineWidth: 1 })
-    const ma20Series = chart.addSeries(LineSeries, { ...maOpts, color: '#2563eb', lineWidth: 2 })
-    const ma50Series = chart.addSeries(LineSeries, { ...maOpts, color: '#7c3aed', lineWidth: 2, lineStyle: LineStyle.Dashed })
+    const ma5 = chart.addSeries(LineSeries, { ...maOpts, color: '#f59e0b', lineWidth: 1 })
+    const ma20 = chart.addSeries(LineSeries, { ...maOpts, color: '#2563eb', lineWidth: 2 })
+    const ma50 = chart.addSeries(LineSeries, { ...maOpts, color: '#7c3aed', lineWidth: 2, lineStyle: LineStyle.Dashed })
 
-    const volumeSeries = chart.addSeries(HistogramSeries, {
+    const volume = chart.addSeries(HistogramSeries, {
       priceFormat: { type: 'volume' },
       priceScaleId: 'volume',
     })
+    chart.priceScale('volume').applyOptions({ scaleMargins: { top: 0.84, bottom: 0 } })
 
-    chart.priceScale('volume').applyOptions({
-      scaleMargins: { top: 0.84, bottom: 0 },
-    })
-
-    const candles: CandlestickData<Time>[] = data.map((d) => ({
-      time: d.date as Time,
-      open: d.open,
-      high: d.high,
-      low: d.low,
-      close: d.close,
-    }))
-
-    const volumes: HistogramData<Time>[] = data.map((d) => ({
-      time: d.date as Time,
-      value: d.volume,
-      color: d.close >= d.open ? `${theme.up}4d` : `${theme.down}4d`,
-    }))
-
-    candleSeries.setData(candles)
-    ma5Series.setData(movingAverage(data, 5))
-    ma20Series.setData(movingAverage(data, 20))
-    ma50Series.setData(movingAverage(data, 50))
-    volumeSeries.setData(volumes)
-    createSeriesMarkers(candleSeries, wyckoffMarkers ? toSeriesMarkers(wyckoffMarkers) : buildMarkers(data))
-
-    addPriceLines(candleSeries, tradingRange ?? buildPriceLevels(data), theme)
-
-    chart.timeScale().fitContent()
-    chartRef.current = chart
+    chartRefs.current = { chart, candle, ma5, ma20, ma50, volume }
 
     const handleResize = () => {
-      if (containerRef.current) {
-        chart.applyOptions({ width: containerRef.current.clientWidth })
-      }
+      if (containerRef.current) chart.applyOptions({ width: containerRef.current.clientWidth })
     }
     window.addEventListener('resize', handleResize)
     handleResize()
@@ -142,9 +113,34 @@ export function KlineChart({ data, height = 400, wyckoffMarkers, tradingRange, s
     return () => {
       window.removeEventListener('resize', handleResize)
       chart.remove()
-      chartRef.current = null
+      chartRefs.current = null
     }
-  }, [data, height, wyckoffMarkers, tradingRange])
+  }, [height])
+
+  useEffect(() => {
+    const refs = chartRefs.current
+    if (!refs || data.length === 0) return
+
+    const theme = readChartTheme()
+
+    const candles: CandlestickData<Time>[] = data.map((d) => ({
+      time: d.date as Time, open: d.open, high: d.high, low: d.low, close: d.close,
+    }))
+    const volumes: HistogramData<Time>[] = data.map((d) => ({
+      time: d.date as Time, value: d.volume,
+      color: d.close >= d.open ? `${theme.up}4d` : `${theme.down}4d`,
+    }))
+
+    refs.candle.setData(candles)
+    refs.ma5.setData(movingAverage(data, 5))
+    refs.ma20.setData(movingAverage(data, 20))
+    refs.ma50.setData(movingAverage(data, 50))
+    refs.volume.setData(volumes)
+    createSeriesMarkers(refs.candle, wyckoffMarkers ? toSeriesMarkers(wyckoffMarkers) : buildMarkers(data))
+
+    addPriceLines(refs.candle, tradingRange ?? buildPriceLevels(data), theme)
+    refs.chart.timeScale().fitContent()
+  }, [data, wyckoffMarkers, tradingRange])
 
   return (
     <div className="space-y-3">
@@ -204,7 +200,7 @@ function Legend({ color, label }: { color: string; label: string }) {
   )
 }
 
-function addPriceLines(series: ReturnType<IChartApi['addSeries']>, levels: { support: number; resistance: number }, theme: ReturnType<typeof readChartTheme>) {
+function addPriceLines(series: ISeriesApi<'Candlestick'>, levels: { support: number; resistance: number }, theme: ReturnType<typeof readChartTheme>) {
   if (levels.support > 0) {
     series.createPriceLine({ price: levels.support, color: theme.support, lineWidth: 1, lineStyle: LineStyle.Dashed, axisLabelVisible: true, title: '支撑' })
   }
@@ -268,32 +264,13 @@ function buildMarkers(data: KlineData[]): SeriesMarker<Time>[] {
     const upperShadow = current.high - Math.max(current.close, current.open)
 
     if (current.close > previousHigh && current.volume > volume20 * 1.35 && closePosition > 0.65) {
-      markers.push({
-        time: current.date as Time,
-        position: 'belowBar',
-        shape: 'arrowUp',
-        color: '#ef4444',
-        text: 'SOS',
-        size: 1.2,
-      })
+      markers.push({ time: current.date as Time, position: 'belowBar', shape: 'arrowUp', color: '#ef4444', text: 'SOS', size: 1.2 })
     } else if (current.volume < volume20 * 0.55 && closePosition > 0.55) {
-      markers.push({
-        time: current.date as Time,
-        position: 'belowBar',
-        shape: 'circle',
-        color: '#2563eb',
-        text: '测试',
-      })
+      markers.push({ time: current.date as Time, position: 'belowBar', shape: 'circle', color: '#2563eb', text: '测试' })
     }
 
     if (upperShadow > Math.max(body * 1.8, range * 0.35) && closePosition < 0.45 && current.volume > volume20 * 1.15) {
-      markers.push({
-        time: current.date as Time,
-        position: 'aboveBar',
-        shape: 'arrowDown',
-        color: '#10b981',
-        text: '供应',
-      })
+      markers.push({ time: current.date as Time, position: 'aboveBar', shape: 'arrowDown', color: '#10b981', text: '供应' })
     }
   }
   return markers.slice(-12)

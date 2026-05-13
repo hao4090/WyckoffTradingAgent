@@ -8,206 +8,13 @@ import { MarkdownContent } from '@/components/markdown'
 import { KlineChart } from '@/components/kline-chart'
 import { usePreferences } from '@/lib/preferences'
 import { detectWyckoffAnnotations } from '@/lib/wyckoff-detect'
-
-interface KlineData {
-  date: string
-  open: number
-  high: number
-  low: number
-  close: number
-  volume: number
-}
+import { fetchKline, getUserDataKeys, checkWhitelist, isCnSymbol, isSupportedKlineCode, type KlineData } from '@/lib/kline'
 
 interface AnalysisResult {
   report: string
   symbol: string
   name: string
   klineData: KlineData[]
-}
-
-async function getUserDataKeys(userId: string): Promise<{ tickflow: string | null; tushare: string | null }> {
-  const { data } = await supabase
-    .from('user_settings')
-    .select('tickflow_api_key, tushare_token')
-    .eq('user_id', userId)
-    .single()
-  return {
-    tickflow: data?.tickflow_api_key || null,
-    tushare: data?.tushare_token || null,
-  }
-}
-
-async function checkWhitelist(userId: string): Promise<boolean> {
-  const { data } = await supabase
-    .from('whitelist')
-    .select('user_id')
-    .eq('user_id', userId)
-    .limit(1)
-  return Array.isArray(data) && data.length > 0
-}
-
-function normalizeTushareCode(code: string): string {
-  if (code.startsWith('6')) return `${code}.SH`
-  if (code.startsWith('4') || code.startsWith('8') || code.startsWith('9')) return `${code}.BJ`
-  return `${code}.SZ`
-}
-
-async function tusharePost(token: string, api_name: string, params: Record<string, string>, fields: string) {
-  const resp = await fetch('/api/llm-proxy/', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-Target-URL': 'https://api.tushare.pro' },
-    body: JSON.stringify({ api_name, token, params, fields }),
-  })
-  if (!resp.ok) return null
-  return (await resp.json()) as { data?: { fields?: string[]; items?: unknown[][] } }
-}
-
-async function fetchKlineViaTushare(code: string, token: string, startDate: string, endDate: string): Promise<KlineData[]> {
-  const tsCode = normalizeTushareCode(code)
-  const [dailyJson, adjJson] = await Promise.all([
-    tusharePost(token, 'daily', { ts_code: tsCode, start_date: startDate, end_date: endDate }, 'trade_date,open,high,low,close,vol'),
-    tusharePost(token, 'adj_factor', { ts_code: tsCode, start_date: startDate, end_date: endDate }, 'trade_date,adj_factor'),
-  ])
-  const items = dailyJson?.data?.items
-  if (!Array.isArray(items) || items.length === 0) return []
-
-  const adjItems = adjJson?.data?.items
-  if (!Array.isArray(adjItems) || adjItems.length === 0) return []
-  const adjMap = new Map<string, number>()
-  let latestDate = ''
-  for (const row of adjItems) {
-    const dt = String(row[0])
-    adjMap.set(dt, Number(row[1]))
-    if (dt > latestDate) latestDate = dt
-  }
-  const latestFactor = adjMap.get(latestDate) || 1
-
-  return items.map(row => {
-    const dt = String(row[0] || '')
-    const factor = adjMap.get(dt) || latestFactor
-    const ratio = factor / latestFactor
-    return {
-      date: dt.replace(/(\d{4})(\d{2})(\d{2})/, '$1-$2-$3'),
-      open: Number(row[1] || 0) * ratio, high: Number(row[2] || 0) * ratio,
-      low: Number(row[3] || 0) * ratio, close: Number(row[4] || 0) * ratio,
-      volume: Number(row[5] || 0),
-    }
-  }).filter(d => d.date && d.close > 0)
-}
-
-async function fetchKlineViaTickFlow(code: string, apiKey: string): Promise<KlineData[]> {
-  const params = new URLSearchParams({
-    symbol: normalizeTickFlowSymbol(code), period: '1d', count: '320', adjust: 'forward',
-  })
-  const resp = await fetch(`/api/llm-proxy/v1/klines?${params}`, {
-    headers: { 'x-api-key': apiKey, 'X-Target-URL': 'https://api.tickflow.org' },
-  })
-  if (!resp.ok) return []
-  const json = await resp.json()
-  return parseKlinePayload(json).sort((a, b) => a.date.localeCompare(b.date)).slice(-320)
-}
-
-async function fetchKlineFromCache(code: string, startIso: string, endIso: string): Promise<KlineData[]> {
-  const { data } = await supabase
-    .from('stock_hist_cache')
-    .select('date,open,high,low,close,volume')
-    .eq('symbol', code)
-    .eq('adjust', 'qfq')
-    .gte('date', startIso)
-    .lte('date', endIso)
-    .order('date', { ascending: false })
-    .limit(320)
-  if (!data || data.length === 0) return []
-  return (data as Record<string, unknown>[]).map(r => ({
-    date: String(r.date || ''), open: Number(r.open || 0), high: Number(r.high || 0),
-    low: Number(r.low || 0), close: Number(r.close || 0), volume: Number(r.volume || 0),
-  })).filter(d => d.date && d.close > 0).reverse()
-}
-
-const TICKFLOW_PURCHASE = 'https://tickflow.org/auth/register?ref=5N4NKTCPL4'
-
-async function fetchKline(code: string, keys: { tickflow: string | null; tushare: string | null }, userId: string): Promise<KlineData[]> {
-  const end = new Date(); end.setDate(end.getDate() - 1)
-  const start = new Date(); start.setDate(start.getDate() - 500)
-  const fmtCompact = (d: Date) => d.toISOString().slice(0, 10).replace(/-/g, '')
-
-  if (keys.tickflow) {
-    try { const r = await fetchKlineViaTickFlow(code, keys.tickflow); if (r.length) return r } catch { /* */ }
-  }
-  if (keys.tushare) {
-    try {
-      const r = await fetchKlineViaTushare(code, keys.tushare, fmtCompact(start), fmtCompact(end))
-      if (r.length) return r.sort((a, b) => a.date.localeCompare(b.date)).slice(-320)
-    } catch { /* */ }
-  }
-  if (await checkWhitelist(userId)) {
-    const fmt = (d: Date) => d.toISOString().slice(0, 10)
-    const r = await fetchKlineFromCache(code, fmt(start), fmt(end))
-    if (r.length) return r
-  }
-  throw new Error(`无法获取K线数据。推荐购买 TickFlow 获取实时行情：${TICKFLOW_PURCHASE}`)
-}
-
-function parseKlinePayload(payload: unknown): KlineData[] {
-  if (!payload || typeof payload !== 'object') return []
-  const root = payload as Record<string, unknown>
-  const data = root.data
-  if (Array.isArray(data)) return parseRowArray(data)
-  if (Array.isArray(root.records)) return parseRowArray(root.records)
-  if (!data || typeof data !== 'object') return []
-
-  const table = data as Record<string, unknown>
-  const timestamps = valueArray(table.timestamp)
-  if (timestamps.length === 0) return []
-
-  const open = valueArray(table.open)
-  const high = valueArray(table.high)
-  const low = valueArray(table.low)
-  const close = valueArray(table.close)
-  const volume = valueArray(table.volume)
-
-  return timestamps
-    .map((ts, index) => ({
-      date: formatTimestampDate(ts),
-      open: Number(open[index] || 0),
-      high: Number(high[index] || 0),
-      low: Number(low[index] || 0),
-      close: Number(close[index] || 0),
-      volume: Number(volume[index] || 0),
-    }))
-    .filter((d) => d.date && d.close > 0)
-}
-
-function parseRowArray(rows: unknown[]): KlineData[] {
-  return rows
-    .filter((row): row is Record<string, unknown> => Boolean(row) && typeof row === 'object')
-    .map((r) => ({
-      date: String(r.date || r.trade_date || '').replace(/(\d{4})(\d{2})(\d{2})/, '$1-$2-$3'),
-      open: Number(r.open || 0),
-      high: Number(r.high || 0),
-      low: Number(r.low || 0),
-      close: Number(r.close || 0),
-      volume: Number(r.volume || r.vol || 0),
-    }))
-    .filter((d) => d.date && d.close > 0)
-}
-
-function valueArray(value: unknown): unknown[] {
-  return Array.isArray(value) ? value : []
-}
-
-function normalizeTickFlowSymbol(code: string): string {
-  if (code.startsWith('0') || code.startsWith('2') || code.startsWith('3')) return `${code}.SZ`
-  if (code.startsWith('4') || code.startsWith('8') || code.startsWith('9')) return `${code}.BJ`
-  return `${code}.SH`
-}
-
-function formatTimestampDate(value: unknown): string {
-  const numeric = Number(value)
-  if (Number.isFinite(numeric) && numeric > 0) {
-    return new Date(numeric + 8 * 3600_000).toISOString().slice(0, 10)
-  }
-  return String(value || '').slice(0, 10)
 }
 
 export function AnalysisPage() {
@@ -224,8 +31,8 @@ export function AnalysisPage() {
   const wyckoff = useMemo(() => (result?.klineData ? detectWyckoffAnnotations(result.klineData) : null), [result?.klineData])
 
   useEffect(() => {
-    const code = new URLSearchParams(window.location.search).get('code')
-    if (code && /^\d{6}$/.test(code)) setSymbol(code)
+    const code = new URLSearchParams(window.location.search).get('code')?.trim().toUpperCase()
+    if (code && isSupportedKlineCode(code)) setSymbol(code)
   }, [])
 
   useEffect(() => {
@@ -248,16 +55,11 @@ export function AnalysisPage() {
     }
   }
 
-  function getMissingRequirements(modelReady: boolean, dataReady: boolean): string[] {
-    const missing: string[] = []
-    if (!modelReady) missing.push(t('analysis.modelRequirement'))
-    if (!dataReady) missing.push(t('analysis.dataRequirement'))
-    return missing
-  }
-
   async function handleAnalyze() {
-    const code = symbol.trim().replace(/\D/g, '')
-    if (code.length !== 6) { setError(t('common.invalidStockCode')); return }
+    const raw = symbol.trim()
+    const isDigitsOnly = /^\d+$/.test(raw)
+    const code = isDigitsOnly ? raw : raw.toUpperCase()
+    if (!isSupportedKlineCode(code)) { setError(t('analysis.invalidStockCode')); return }
 
     setError('')
     setLoading(true)
@@ -271,20 +73,17 @@ export function AnalysisPage() {
       const modelReady = Boolean(config?.api_key && config?.model)
       setHasModelConfig(modelReady)
 
-      if (!modelReady) {
-        const missing = getMissingRequirements(modelReady, true)
-        setError(t('analysis.missingPrefix', { items: missing.join('、') }))
-        setLoading(false)
-        return
-      }
-      if (!config) {
-        setError(t('analysis.configError'))
+      if (!modelReady || !config) {
+        setError(t('analysis.missingPrefix', { items: t('analysis.modelRequirement') }))
         setLoading(false)
         return
       }
 
+      const isCnCode = isCnSymbol(code)
       const [stockInfoResult, klineData] = await Promise.all([
-        supabase.from('recommendation_tracking').select('name').eq('code', parseInt(code)).limit(1).single(),
+        isCnCode
+          ? supabase.from('recommendation_tracking').select('name').eq('code', parseInt(code)).limit(1).single()
+          : Promise.resolve({ data: null }),
         fetchKline(code, dataKeys, user!.id),
       ])
 
@@ -325,35 +124,39 @@ export function AnalysisPage() {
         </div>
       )}
 
-      {/* Input */}
-      <div className="mb-6 flex items-end gap-3">
-        <div className="flex-1 max-w-xs">
-          <label className="mb-1.5 block text-sm font-medium">{t('common.stockCode')}</label>
-          <input
-            type="text"
-            value={symbol}
-            onChange={(e) => setSymbol(e.target.value)}
-            placeholder={t('common.exampleCode')}
-            maxLength={6}
-            className="w-full rounded-lg border border-border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring/20"
-            onKeyDown={(e) => e.key === 'Enter' && handleAnalyze()}
-          />
+      <div className="mb-6">
+        <div className="flex items-end gap-3">
+          <div className="flex-1 max-w-xs">
+            <label className="mb-1.5 block text-sm font-medium">{t('common.stockCode')}</label>
+            <input
+              type="text"
+              value={symbol}
+              onChange={(e) => setSymbol(e.target.value)}
+              placeholder={t('analysis.exampleCode')}
+              maxLength={18}
+              className="w-full rounded-lg border border-border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring/20"
+              onKeyDown={(e) => e.key === 'Enter' && handleAnalyze()}
+            />
+          </div>
+          <button
+            onClick={handleAnalyze}
+            disabled={loading || !symbol.trim() || checkingConfig || !hasModelConfig || !hasDataSource}
+            className="flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50"
+          >
+            {loading ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} />}
+            {loading ? t('analysis.analyzing') : t('analysis.start')}
+          </button>
         </div>
-        <button
-          onClick={handleAnalyze}
-          disabled={loading || !symbol.trim() || checkingConfig || !hasModelConfig || !hasDataSource}
-          className="flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50"
-        >
-          {loading ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} />}
-          {loading ? t('analysis.analyzing') : t('analysis.start')}
-        </button>
+        <p className="mt-2 text-xs text-muted-foreground">
+          {t('analysis.marketHint')}
+          <a href="https://tickflow.org/auth/register?ref=5N4NKTCPL4" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">{t('common.tickflowLink')}</a>
+        </p>
       </div>
 
       {error && (
         <div className="mb-4 rounded-lg bg-red-50 px-4 py-2.5 text-sm text-red-700 dark:bg-red-500/10 dark:text-red-200">{error}</div>
       )}
 
-      {/* Result */}
       {result && (
         <div className="min-h-0 flex-1 overflow-auto">
           <div className="mb-4 flex items-center gap-2">
@@ -362,7 +165,6 @@ export function AnalysisPage() {
             </span>
           </div>
 
-          {/* K-line Chart */}
           {result.klineData.length > 0 && (
             <section className="mb-6">
               <div className="mb-3 flex flex-wrap items-end justify-between gap-2">
@@ -378,7 +180,6 @@ export function AnalysisPage() {
             </section>
           )}
 
-          {/* Report */}
           <div className="rounded-lg border border-border p-6">
             <h2 className="mb-4 text-base font-semibold">{t('analysis.reportTitle')}</h2>
             <article className="prose prose-sm max-w-none text-foreground">
@@ -417,32 +218,17 @@ function buildKlinePayload(data: KlineData[]): string {
     `近5日平均量：${avg(data.slice(-5).map((d) => d.volume)).toFixed(0)}`,
     `近20日平均量：${avg(prev20.map((d) => d.volume)).toFixed(0)}`,
   ].join('\n')
-  const csvRows = data.map((d) => [
-    d.date,
-    fixed(d.open),
-    fixed(d.high),
-    fixed(d.low),
-    fixed(d.close),
-    Math.round(d.volume),
-  ].join(','))
+  const csvRows = data.map((d) => [d.date, d.open.toFixed(2), d.high.toFixed(2), d.low.toFixed(2), d.close.toFixed(2), Math.round(d.volume)].join(','))
 
   return [
-    summary,
-    '',
+    summary, '',
     '以下是近320个交易日以内的完整日线OHLCV CSV数据。你必须读取这些数据进行判断，不要声称无法读取日线数据。',
-    '```csv',
-    'date,open,high,low,close,volume',
-    ...csvRows,
-    '```',
+    '```csv', 'date,open,high,low,close,volume', ...csvRows, '```',
   ].join('\n')
 }
 
 function avg(arr: number[]): number {
   return arr.length > 0 ? arr.reduce((a, b) => a + b, 0) / arr.length : 0
-}
-
-function fixed(value: number): string {
-  return Number.isFinite(value) ? value.toFixed(2) : '0.00'
 }
 
 async function callLLM(config: LLMConfig, code: string, name: string, klinePayload: string): Promise<string> {

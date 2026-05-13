@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from datetime import date
+from types import SimpleNamespace
+
 import pandas as pd
 
 # ── tools/funnel_config ──
@@ -129,7 +132,7 @@ class TestCandidateRanker:
         assert isinstance(TRIGGER_LABELS, dict)
         assert "sos" in TRIGGER_LABELS
         assert "spring" in TRIGGER_LABELS
-        assert len(TRIGGER_LABELS) == 4
+        assert len(TRIGGER_LABELS) == 5
 
 
 # ── tools/market_regime ──
@@ -166,13 +169,41 @@ class TestDataFetcher:
         assert latest_trade_date_from_hist(df) is None
 
     def test_latest_trade_date_from_hist_valid(self):
-        from datetime import date
-
         from tools.data_fetcher import latest_trade_date_from_hist
 
         df = pd.DataFrame({"date": ["2025-01-01", "2025-01-02"]})
         result = latest_trade_date_from_hist(df)
         assert result == date(2025, 1, 2)
+
+    def test_tickflow_batch_partial_returns_none(self, monkeypatch):
+        import tools.data_fetcher as dfetcher
+
+        class FakeTickFlowClient:
+            def __init__(self, api_key: str) -> None:
+                self.api_key = api_key
+
+            def get_klines_batch(self, *args, **kwargs):
+                return {
+                    "000001.SZ": pd.DataFrame(
+                        {
+                            "date": ["2025-01-01", "2025-01-02"],
+                            "open": [10.0, 10.1],
+                            "high": [10.5, 10.6],
+                            "low": [9.8, 9.9],
+                            "close": [10.2, 10.3],
+                            "volume": [1000, 1100],
+                        }
+                    )
+                }
+
+        window = SimpleNamespace(start_trade_date=date(2025, 1, 1), end_trade_date=date(2025, 1, 2))
+        monkeypatch.setenv("TICKFLOW_API_KEY", "dummy")
+        monkeypatch.setattr(dfetcher, "TICKFLOW_BATCH_ENABLED", True)
+        monkeypatch.setattr(dfetcher, "TickFlowClient", FakeTickFlowClient)
+
+        result = dfetcher._fetch_all_ohlcv_tickflow_batch(["000001", "000002"], window, False, 200, 0)
+
+        assert result is None
 
 
 # ── tools/symbol_pool ──

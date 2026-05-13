@@ -1,12 +1,13 @@
 import { memo, useState } from 'react'
+import { Link } from 'react-router'
 import { ChevronRight } from 'lucide-react'
 import type { ScreenResult, ScreenStockItem } from '@/lib/chat-tools'
 
 function StockRow({ s }: { s: ScreenStockItem }) {
   const chgColor = s.change_pct != null && s.change_pct >= 0 ? 'text-red-500' : 'text-green-600'
   return (
-    <a
-      href={`/analysis?code=${s.code}`}
+    <Link
+      to={`/analysis?code=${s.code}`}
       className="flex items-center gap-3 rounded px-2 py-1 text-xs hover:bg-muted/60 transition-colors"
     >
       <span className="font-mono w-14 shrink-0">{s.code}</span>
@@ -15,7 +16,7 @@ function StockRow({ s }: { s: ScreenStockItem }) {
       <span className={`w-16 text-right ${chgColor}`}>
         {s.change_pct != null ? `${s.change_pct >= 0 ? '+' : ''}${s.change_pct.toFixed(2)}%` : '--'}
       </span>
-    </a>
+    </Link>
   )
 }
 

@@ -178,6 +178,69 @@ def _load_step4_target() -> tuple[dict | None, str]:
     }, ("ok_supabase" if isinstance(p, dict) else "ok_env_fallback")
 
 
+def _run_signal_confirmation(
+    symbols_info: list[dict],
+    step2_details: dict,
+    benchmark_context: dict | None,
+    logs_path: str | None,
+) -> None:
+    """Step2.5: pending 信号确认，confirmed 追加到 symbols_info。"""
+    try:
+        from integrations.supabase_signal_pending import run_step2_5
+
+        triggers_raw = step2_details.get("triggers", {})
+        all_df_map = step2_details.get("all_df_map", {})
+        if triggers_raw and all_df_map:
+            confirmed_extra = run_step2_5(
+                signal_date=_latest_trade_date_str(),
+                triggers=triggers_raw,
+                df_map=all_df_map,
+                regime=(benchmark_context.get("regime") or "NEUTRAL").strip().upper()
+                if benchmark_context
+                else "NEUTRAL",
+                name_map=step2_details.get("name_map", {}),
+                sector_map=step2_details.get("sector_map", {}),
+            )
+            _log(f"Step2.5 信号确认: confirmed={len(confirmed_extra)}", logs_path)
+            existing_codes = {str(s.get("code", "")).strip() for s in symbols_info}
+            for cs in confirmed_extra:
+                if str(cs.get("code", "")).strip() not in existing_codes:
+                    symbols_info.append(cs)
+    except Exception as e:
+        _log(f"Step2.5 信号确认失败（已降级）: {e}", logs_path)
+
+
+def _run_springboard_scoring(
+    symbols_info: list[dict],
+    step2_details: dict,
+) -> int:
+    """从 triggers 反查 code→signal_type，调用量化评分器。"""
+    from core.signal_confirmation import score_springboard_abc
+
+    all_df_map = step2_details.get("all_df_map", {})
+    triggers = step2_details.get("triggers", {})
+    code_to_sig: dict[str, str] = {}
+    for sig_type, hits in triggers.items():
+        for code, _ in hits:
+            code_to_sig.setdefault(str(code).strip(), sig_type)
+
+    scored = 0
+    for item in symbols_info:
+        code = str(item.get("code", "")).strip()
+        sig_type = str(item.get("signal_type", "")).strip().lower() or code_to_sig.get(code, "")
+        df = all_df_map.get(code)
+        if df is None or df.empty or not sig_type:
+            item["springboard_grade"] = "none"
+            continue
+        result = score_springboard_abc(df, sig_type)
+        item["springboard_a"] = result["a"]
+        item["springboard_b"] = result["b"]
+        item["springboard_c"] = result["c"]
+        item["springboard_grade"] = result["grade"]
+        scored += 1
+    return scored
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="每日定时任务：Wyckoff Funnel → 批量研报")
     parser.add_argument("--dry-run", action="store_true", help="仅校验配置，不执行任务")
@@ -295,32 +358,22 @@ def main() -> int:
 
     # Step2.5: 信号确认（pending → confirmed/expired）
     if step2_ok and step2_details:
-        try:
-            from integrations.supabase_signal_pending import run_step2_5
+        _run_signal_confirmation(symbols_info, step2_details, benchmark_context, logs_path)
 
-            triggers_raw = step2_details.get("triggers", {})
-            all_df_map = step2_details.get("all_df_map", {})
-            if triggers_raw and all_df_map:
-                confirmed_extra = run_step2_5(
-                    signal_date=_latest_trade_date_str(),
-                    triggers=triggers_raw,
-                    df_map=all_df_map,
-                    regime=(benchmark_context.get("regime") or "NEUTRAL").strip().upper(),
-                    name_map=step2_details.get("name_map", {}),
-                    sector_map=step2_details.get("sector_map", {}),
-                )
-                _log(f"Step2.5 信号确认: confirmed={len(confirmed_extra)}", logs_path)
-                existing_codes = {str(s.get("code", "")).strip() for s in symbols_info}
-                for cs in confirmed_extra:
-                    if str(cs.get("code", "")).strip() not in existing_codes:
-                        symbols_info.append(cs)
-        except Exception as e:
-            _log(f"Step2.5 信号确认失败（已降级）: {e}", logs_path)
+    # Step2.7: 起跳板 A/B/C 量化评分
+    if symbols_info and step2_details:
+        _scored = _run_springboard_scoring(symbols_info, step2_details)
+        _log(f"Step2.7 起跳板评分: scored={_scored}/{len(symbols_info)}", logs_path)
 
     # Step3: 批量研报（可降级：失败不影响 Funnel 成功）
     step3_ok = True
     step3_err = None
     step3_springboard_codes: list[str] = []
+    _regime_for_step3 = (benchmark_context.get("regime") or "").strip().upper() if benchmark_context else ""
+    _step3_block_regimes = {"CRASH", "BLACK_SWAN", "RISK_OFF"}
+    if _regime_for_step3 in _step3_block_regimes:
+        _log(f"Step3 跳过: 当前 regime={_regime_for_step3} 在阻断名单，省略 LLM 推理", logs_path)
+        symbols_info = []
     if symbols_info:
         t0 = datetime.now(TZ)
         try:

@@ -125,7 +125,9 @@ export function ExportPage() {
     const a = document.createElement('a')
     a.href = url
     a.download = fileName
+    document.body.appendChild(a)
     a.click()
+    document.body.removeChild(a)
     URL.revokeObjectURL(url)
   }
 
@@ -133,7 +135,6 @@ export function ExportPage() {
     <div className="flex h-full flex-col p-6">
       <h1 className="mb-6 text-xl font-semibold">{t('export.title')}</h1>
 
-      {/* Form */}
       <div className="mb-6 flex flex-wrap items-end gap-3">
         <div>
           <label className="mb-1.5 block text-sm font-medium">{t('common.stockCode')}</label>
@@ -194,7 +195,6 @@ export function ExportPage() {
         </div>
       )}
 
-      {/* Download button */}
       {csvBlob && (
         <div className="mb-4 flex items-center gap-3">
           <button
@@ -210,7 +210,6 @@ export function ExportPage() {
         </div>
       )}
 
-      {/* Preview table */}
       {preview && preview.length > 0 && (
         <div className="min-h-0 flex-1 overflow-hidden rounded-lg border border-border">
           <div className="h-full overflow-auto">

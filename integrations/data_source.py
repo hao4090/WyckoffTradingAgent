@@ -50,6 +50,24 @@ _DATA_SOURCE_DEBUG = os.getenv("DATA_SOURCE_DEBUG", "").strip().lower() in {
     "yes",
     "on",
 }
+_SH_PREFIXES = (
+    "600",
+    "601",
+    "603",
+    "605",
+    "688",
+    "510",
+    "511",
+    "512",
+    "513",
+    "515",
+    "516",
+    "518",
+    "560",
+    "561",
+    "562",
+    "563",
+)
 _BAOSTOCK_MAX_SECONDS = float(os.getenv("BAOSTOCK_MAX_SECONDS", "6.0"))
 _BAOSTOCK_SOCKET_TIMEOUT = float(os.getenv("BAOSTOCK_SOCKET_TIMEOUT", "3.0"))
 _BAOSTOCK_CIRCUIT_THRESHOLD = int(os.getenv("BAOSTOCK_CIRCUIT_THRESHOLD", "10"))
@@ -150,7 +168,7 @@ def _to_ts_code(symbol: str) -> str:
     s = str(symbol).strip()
     if "." in s:
         return s
-    if s.startswith(("600", "601", "603", "605", "688")):
+    if s.startswith(_SH_PREFIXES):
         return f"{s}.SH"
     return f"{s}.SZ"
 
@@ -411,7 +429,7 @@ def _fetch_stock_akshare(symbol: str, start: str, end: str, adjust: str) -> pd.D
 
 
 def _fetch_stock_baostock(symbol: str, start: str, end: str) -> pd.DataFrame:
-    if symbol.startswith(("600", "601", "603", "605", "688")):
+    if symbol.startswith(_SH_PREFIXES):
         bs_code = f"sh.{symbol}"
     else:
         bs_code = f"sz.{symbol}"

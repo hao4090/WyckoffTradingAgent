@@ -240,7 +240,7 @@ Streamlit: **[wyckoff-analysis-youngcanphoenix.streamlit.app](https://wyckoff-an
 | L1 | 불량 종목 제거 | ST / BSE / STAR 시장 제외, 시가총액 >= 35억, 일평균 거래대금 >= 5천만 |
 | L2 | 6채널 선별 | 주상승 / 점화 / 잠복 / 매집 / 극저량 / 호가방어 |
 | L3 | 섹터 공명 | 업종 Top-N 분포 필터링 |
-| L4 | 미시 저격 | Spring / LPS / SOS / EVR 4대 트리거 시그널 |
+| L4 | 미시 저격 | Spring / LPS / SOS / EVR / Compression 5대 트리거 시그널 |
 | L5 | AI 심판 | LLM 3진영 분류: 논리 파산 / 비축 / 도약대 |
 
 ## 일일 자동화

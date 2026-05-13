@@ -84,37 +84,56 @@ wyckoff dashboard  # 启动本地可视化面板
 
 启动后 `/model` 选择模型（Gemini / Claude / OpenAI），输入 API Key 即可对话。
 
-| 启动界面 | 持仓查询 |
-|:---:|:---:|
-| <img src="attach/cli-home.png" width="450" /> | <img src="attach/cli-running.png" width="450" /> |
+<p align="center">
+  <img src="attach/cli-home.png" alt="CLI 启动界面" width="900" />
+</p>
 
-| 诊断报告 | 操作指令 |
-|:---:|:---:|
-| <img src="attach/cli-analysis.png" width="450" /> | <img src="attach/cli-result.png" width="450" /> |
+<details>
+<summary><strong>展开更多 CLI 截图</strong></summary>
+
+| 持仓查询 | 诊断报告 | 操作指令 |
+|:---:|:---:|:---:|
+| <img src="attach/cli-running.png" width="300" /> | <img src="attach/cli-analysis.png" width="300" /> | <img src="attach/cli-result.png" width="300" /> |
+
+</details>
 
 ### Web App
 
 在线地址：**[wyckoff-analysis.pages.dev](https://wyckoff-analysis.pages.dev/)**
 
-| 读盘室 | 漏斗选股 |
-|:---:|:---:|
-| <img src="docs/screenshots/web-chat.png" width="450" /> | <img src="docs/screenshots/web-screen.png" width="450" /> |
+<p align="center">
+  <img src="docs/screenshots/web-chat.png" alt="Web 读盘室" width="900" />
+</p>
 
-| 形态复盘 | 持仓管理 |
-|:---:|:---:|
-| <img src="docs/screenshots/web-track.png" width="450" /> | <img src="docs/screenshots/web-portfolio.png" width="450" /> |
+<details>
+<summary><strong>展开更多 Web App 截图</strong></summary>
 
-| 单股分析（脱敏样例） |
-|:---:|
-| <img src="docs/screenshots/web-analysis-redacted.png" width="900" /> |
+| 漏斗选股 | 形态复盘 |
+|:---:|:---:|
+| <img src="docs/screenshots/web-screen.png" width="450" /> | <img src="docs/screenshots/web-track.png" width="450" /> |
+
+| 持仓管理 | 单股分析（脱敏样例） |
+|:---:|:---:|
+| <img src="docs/screenshots/web-portfolio.png" width="450" /> | <img src="docs/screenshots/web-analysis-redacted.png" width="450" /> |
+
+</details>
 
 ### Streamlit（维护入口）
 
 在线地址：**[wyckoff-analysis-youngcanphoenix.streamlit.app](https://wyckoff-analysis-youngcanphoenix.streamlit.app/)**
 
-| 读盘室 | 数据导出 |
-|:---:|:---:|
-| <img src="attach/demo/streamlit-chat.png" width="450" /> | <img src="attach/demo/streamlit-export.png" width="450" /> |
+<p align="center">
+  <img src="attach/demo/streamlit-chat.png" alt="Streamlit 读盘室" width="900" />
+</p>
+
+<details>
+<summary><strong>展开更多 Streamlit 截图</strong></summary>
+
+| 数据导出 |
+|:---:|
+| <img src="attach/demo/streamlit-export.png" width="450" /> |
+
+</details>
 
 ### 本地可视化面板（Dashboard）
 
@@ -122,27 +141,41 @@ wyckoff dashboard  # 启动本地可视化面板
 wyckoff dashboard
 ```
 
-| 总览 | 形态复盘 | 信号池 |
-|:---:|:---:|:---:|
-| <img src="attach/demo/dashboard-overview-new.png" width="300" /> | <img src="attach/demo/dashboard-recommendations.png" width="300" /> | <img src="attach/demo/dashboard-signals.png" width="300" /> |
+<p align="center">
+  <img src="attach/demo/dashboard-overview-new.png" alt="Dashboard 总览" width="900" />
+</p>
 
-| 尾盘记录 | 持仓 | Agent 记忆 |
-|:---:|:---:|:---:|
-| <img src="attach/demo/dashboard-tail-buy.png" width="300" /> | <img src="attach/demo/dashboard-portfolio.png" width="300" /> | <img src="attach/demo/dashboard-memory.png" width="300" /> |
+<details>
+<summary><strong>展开更多 Dashboard 截图</strong></summary>
 
-| 后台任务 | 对话日志 | 同步状态 |
+| 形态复盘 | 信号池 | 尾盘记录 |
 |:---:|:---:|:---:|
-| <img src="attach/demo/dashboard-bgtasks.png" width="300" /> | <img src="attach/demo/dashboard-chatlog-new.png" width="300" /> | <img src="attach/demo/dashboard-sync.png" width="300" /> |
+| <img src="attach/demo/dashboard-recommendations.png" width="300" /> | <img src="attach/demo/dashboard-signals.png" width="300" /> | <img src="attach/demo/dashboard-tail-buy.png" width="300" /> |
 
-| 对话日志详情（Trace） |
-|:---:|
-| <img src="attach/demo/dashboard-chatlog-detail-content.png" width="920" /> |
+| 持仓 | Agent 记忆 | 后台任务 |
+|:---:|:---:|:---:|
+| <img src="attach/demo/dashboard-portfolio.png" width="300" /> | <img src="attach/demo/dashboard-memory.png" width="300" /> | <img src="attach/demo/dashboard-bgtasks.png" width="300" /> |
+
+| 对话日志 | 同步状态 | 对话日志详情（Trace） |
+|:---:|:---:|:---:|
+| <img src="attach/demo/dashboard-chatlog-new.png" width="300" /> | <img src="attach/demo/dashboard-sync.png" width="300" /> | <img src="attach/demo/dashboard-chatlog-detail-content.png" width="300" /> |
+
+</details>
 
 ### 回测网格
 
-| 最优参数 & 梯队表 | 参数矩阵 |
-|:---:|:---:|
-| <img src="attach/backtest-grid-1.png" width="450" /> | <img src="attach/backtest-grid-2.png" width="450" /> |
+<p align="center">
+  <img src="attach/backtest-grid-1.png" alt="回测网格最优参数与梯队表" width="900" />
+</p>
+
+<details>
+<summary><strong>展开更多回测截图</strong></summary>
+
+| 参数矩阵 |
+|:---:|
+| <img src="attach/backtest-grid-2.png" width="450" /> |
+
+</details>
 
 ---
 
@@ -161,23 +194,21 @@ wyckoff dashboard
 
 ---
 
-## 演示视频（含中文字幕）
+## 演示视频
 
-### 「从0到1读盘」Web 全流程（读盘室→设置）
+<details>
+<summary><strong>「从0到1读盘」Web 全流程（读盘室→设置）</strong></summary>
 
 <img src="attach/demo/web-demo.gif" width="900" />
 
-### 「老入口维护」Streamlit 全流程（8 个入口页）
+</details>
 
-<img src="attach/demo/streamlit-demo.gif" width="900" />
-
-### 「终端党最爱」CLI 流程（启动→执行→结果）
+<details>
+<summary><strong>「终端党最爱」CLI 流程（启动→执行→结果）</strong></summary>
 
 <img src="attach/demo/cli-demo.gif" width="900" />
 
-### 「数据可追踪」Dashboard 全流程（各 tab）
-
-<img src="attach/demo/dashboard-demo.gif" width="900" />
+</details>
 
 ---
 
@@ -189,8 +220,9 @@ wyckoff dashboard
 | 运营成本、规模化预算 | [docs/COST_MODEL.md](docs/COST_MODEL.md) |
 | 漏斗、AI 研报、OMS、回测 | [README_STRATEGY.md](README_STRATEGY.md) |
 | 术语速查 | [GLOSSARY.md](GLOSSARY.md) |
-| 方法论、运维排障 | [wiki_repo_new/Home.md](wiki_repo_new/Home.md) |
 | MCP Server 配置 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#mcp-server) |
+
+> **Wiki 深度阅读**：[交易方法论 Wiki](https://github.com/YoungCan-Wang/Wyckoff-Analysis/wiki/01_Finance_Wyckoff_Method) ｜ [技术架构 Wiki](https://github.com/YoungCan-Wang/Wyckoff-Analysis/wiki/03_Tech_Architecture)
 
 ---
 

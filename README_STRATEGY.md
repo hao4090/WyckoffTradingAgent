@@ -24,6 +24,7 @@
 | LPS | Last Point of Support | 缩量回踩，最后支撑点 |
 | EVR | Effort vs Result | 放量不跌，量价背离 |
 | Spring | 终极震仓 | 跌破支撑后迅速收回 |
+| Compression | 压缩蓄势 | 连续窄幅缩量，爆发前的能量压缩状态 |
 | SLTP | Stop Loss & Take Profit | 止损止盈退出机制 |
 
 ---
@@ -104,6 +105,7 @@
 | Spring | 假跌破后收回 | 跌破 60 日支撑，当日放量收回 |
 | LPS | 缩量回踩 | 回踩 MA20，近期量 ≤ 前 60 日均量的 48% |
 | EVR | 放量不跌 | 量 ≥ 1.3 倍，换手 ≥ 1%，跌幅 ≤ -2% |
+| Compression | 压缩蓄势 | 近 5 日 ATR 低于 20 日 ATR 的 20% 分位 + 量能萎缩至 70% 以下 |
 
 ### L5：退出信号
 

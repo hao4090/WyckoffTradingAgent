@@ -593,6 +593,15 @@ def _call_track_report(
     return (True, report, used_model or model)
 
 
+def _fill_wyckoff_score(df: pd.DataFrame) -> None:
+    """priority_score 优先，缺失时回退到 funnel_score。"""
+    df["wyckoff_score"] = pd.to_numeric(df.get("priority_score"), errors="coerce")
+    df["wyckoff_score"] = df["wyckoff_score"].where(
+        df["wyckoff_score"].notna(),
+        pd.to_numeric(df.get("funnel_score"), errors="coerce"),
+    )
+
+
 def run(
     symbols_info: list[dict] | list[str],
     webhook_url: str,
@@ -768,6 +777,7 @@ def run(
                     "bias_200": bias_200,
                     "rs_10": rs_10,
                     "min_vol_ratio_5d": min_vol_ratio_5d,
+                    "springboard_grade": str(item.get("springboard_grade", "") or ""),
                 }
             )
         except Exception as e:
@@ -790,14 +800,7 @@ def run(
     candidates_df.loc[~candidates_df["track"].isin(["Trend", "Accum"]), "track"] = "Trend"
     candidates_df["policy_tag"] = ""
     selected_df = candidates_df.copy()
-    selected_df["wyckoff_score"] = pd.to_numeric(
-        selected_df.get("priority_score"),
-        errors="coerce",
-    )
-    selected_df["wyckoff_score"] = selected_df["wyckoff_score"].where(
-        selected_df["wyckoff_score"].notna(),
-        pd.to_numeric(selected_df.get("funnel_score"), errors="coerce"),
-    )
+    _fill_wyckoff_score(selected_df)
     selected_df["industry_rank"] = pd.NA
     effective_context_cap = _resolve_step3_context_cap(len(candidates_df))
 
@@ -842,14 +845,7 @@ def run(
             f"default_cap={STEP3_DEFAULT_CONTEXT_CAP})"
         )
 
-    selected_df["wyckoff_score"] = pd.to_numeric(
-        selected_df.get("priority_score"),
-        errors="coerce",
-    )
-    selected_df["wyckoff_score"] = selected_df["wyckoff_score"].where(
-        selected_df["wyckoff_score"].notna(),
-        pd.to_numeric(selected_df.get("funnel_score"), errors="coerce"),
-    )
+    _fill_wyckoff_score(selected_df)
     if "industry_rank" not in selected_df.columns:
         selected_df["industry_rank"] = pd.NA
 
@@ -1031,6 +1027,7 @@ def run(
             exit_price=_exit_price,
             exit_reason=_exit_reason,
             financial_metrics=financial_map.get(code),
+            springboard_grade=str(row.get("springboard_grade", "")).strip() or None,
         )
         payloads_by_track.setdefault(track_key, []).append(payload)
         df_by_track[track_key] = pd.concat(

@@ -8,6 +8,7 @@ import { AppLayout } from '@/routes/layout'
 import { LoginPage } from '@/routes/login'
 import { ChatPage } from '@/routes/chat'
 import { WyckoffLoading } from '@/components/loading'
+import { ErrorBoundary } from '@/components/error-boundary'
 import { PreferencesProvider } from '@/lib/preferences'
 
 const PortfolioPage = lazy(() => import('@/routes/portfolio').then(m => ({ default: m.PortfolioPage })))
@@ -17,7 +18,6 @@ const AnalysisPage = lazy(() => import('@/routes/analysis').then(m => ({ default
 const TailBuyPage = lazy(() => import('@/routes/tail-buy').then(m => ({ default: m.TailBuyPage })))
 const ExportPage = lazy(() => import('@/routes/export').then(m => ({ default: m.ExportPage })))
 const FeatureGuidePage = lazy(() => import('@/routes/feature-guide').then(m => ({ default: m.FeatureGuidePage })))
-const ScreenerPage = lazy(() => import('@/routes/screener').then(m => ({ default: m.ScreenerPage })))
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -27,6 +27,7 @@ const queryClient = new QueryClient({
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
+    <ErrorBoundary>
     <QueryClientProvider client={queryClient}>
       <PreferencesProvider>
         <BrowserRouter>
@@ -40,7 +41,6 @@ createRoot(document.getElementById('root')!).render(
                   <Route path="/portfolio" element={<PortfolioPage />} />
                   <Route path="/tracking" element={<TrackingPage />} />
                   <Route path="/analysis" element={<AnalysisPage />} />
-                  <Route path="/screener" element={<ScreenerPage />} />
                   <Route path="/tail-buy" element={<TailBuyPage />} />
                   <Route path="/export" element={<ExportPage />} />
                   <Route path="/guide" element={<FeatureGuidePage />} />
@@ -52,5 +52,6 @@ createRoot(document.getElementById('root')!).render(
         </BrowserRouter>
       </PreferencesProvider>
     </QueryClientProvider>
+    </ErrorBoundary>
   </StrictMode>,
 )

@@ -1,6 +1,6 @@
 import random
 import time
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 
 import streamlit as st
 from dotenv import load_dotenv
@@ -411,31 +411,6 @@ with content_col:
                         zip_members,
                         prefix=file_name_zip.replace(".zip", ""),
                     )
-
-                    # 通知：飞书 + 企微 + 钉钉（任一配置则发送）
-                    feishu = st.session_state.get("feishu_webhook") or ""
-                    wecom = st.session_state.get("wecom_webhook") or ""
-                    dingtalk = st.session_state.get("dingtalk_webhook") or ""
-                    if feishu or wecom or dingtalk:
-                        success_count = len([r for r in results if r["status"] == "ok"])
-                        failed_count = len(results) - success_count
-                        notify_title = f"📦 批量下载完成 ({success_count}/{len(symbols)})"
-                        notify_text = (
-                            f"**任务状态**: 已完成\n"
-                            f"**成功**: {success_count} 个\n"
-                            f"**失败**: {failed_count} 个\n"
-                            f"**时间**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
-                            f"**文件**: {file_name_zip}"
-                        )
-                        if failed_count > 0:
-                            failed_details = "\\n".join(
-                                [f"- {r['symbol']}: {r['error']}" for r in results if r["status"] != "ok"]
-                            )
-                            notify_text += f"\\n\\n**失败详情**:\\n{failed_details}"
-                        from utils.notify import send_all_webhooks
-
-                        send_all_webhooks(feishu, wecom, dingtalk, notify_title, notify_text)
-                        st.toast("✅ 通知已发送", icon="🔔")
 
                 finally:
                     loading.empty()

@@ -21,6 +21,13 @@ SUPPLY_HEAVY_VOL_RATIO = 1.5
 SUPPLY_DRY_VOL_RATIO = 0.8
 SUPPLY_TEST_MAX_ABS_PCT = 1.0
 KEY_LEVEL_WINDOW = 20
+_SIGNAL_TAG_MAP = [
+    ("sos", "向上突破异动"),
+    ("spring", "假跌破回收异动"),
+    ("lps", "缩量回踩企稳异动"),
+    ("evr", "放量滞涨背离异动"),
+    ("compression", "窄幅缩量蓄势异动"),
+]
 
 
 # ── 报告解析工具 ──
@@ -289,6 +296,7 @@ def generate_stock_payload(
     exit_price: float | None = None,
     exit_reason: str | None = None,
     financial_metrics: dict | None = None,
+    springboard_grade: str | None = None,
 ) -> str:
     """
     将 320 个交易日 OHLCV 浓缩为发给 AI 的高密度文本。
@@ -352,21 +360,9 @@ def generate_stock_payload(
     tag_text = ""
     raw_tag = str(wyckoff_tag or "").strip()
     if raw_tag:
-        facts = []
         lowered = raw_tag.lower()
-        neutral_map = [
-            ("sos", "向上突破异动"),
-            ("spring", "假跌破回收异动"),
-            ("lps", "缩量回踩企稳异动"),
-            ("evr", "放量滞涨背离异动"),
-        ]
-        for token, label in neutral_map:
-            if token in lowered:
-                facts.append(label)
-        if facts:
-            tag_text = f" | 量化初筛假设：{'/'.join(facts)}"
-        else:
-            tag_text = f" | 量化初筛假设：{raw_tag}"
+        facts = [lbl for tok, lbl in _SIGNAL_TAG_MAP if tok in lowered]
+        tag_text = f" | 量化初筛假设：{'/'.join(facts)}" if facts else f" | 量化初筛假设：{raw_tag}"
 
     header = (
         f"\u2022 {stock_code} {stock_name}{policy_prefix}{tag_text}\n"
@@ -413,6 +409,10 @@ def generate_stock_payload(
                     pass
         if fm_parts:
             header += f"  [基本面快照] {' | '.join(fm_parts)}\n"
+
+    if springboard_grade:
+        _met = 0 if springboard_grade == "none" else springboard_grade.count("+") + 1
+        header += f"  [起跳板预判] 满足条件: {springboard_grade} ({_met}/3)\n"
 
     supply_summary = _build_supply_demand_summary(df)
 
