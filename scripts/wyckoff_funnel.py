@@ -22,10 +22,7 @@ import pandas as pd
 # Ensure project root is on sys.path for direct script invocation
 if __name__ == "__main__" or not __package__:
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from core.sector_rotation import (
-    SECTOR_STATE_LABELS,
-    analyze_sector_rotation,
-)
+from core.sector_rotation import analyze_sector_rotation
 from core.wyckoff_engine import (
     FunnelConfig,
     FunnelResult,
@@ -107,6 +104,10 @@ FUNNEL_EXPORT_DIR = os.getenv("FUNNEL_EXPORT_DIR", "data/funnel_snapshots").stri
 FUNNEL_AI_SELECTION_MODE = os.getenv("FUNNEL_AI_SELECTION_MODE", "legacy_full_hits").strip().lower()
 FUNNEL_CARD_STYLE = os.getenv("FUNNEL_CARD_STYLE", "legacy_compact").strip().lower()
 FUNNEL_EVR_POLICY = os.getenv("FUNNEL_EVR_POLICY", "all_regimes").strip().lower()
+try:
+    FUNNEL_BYPASS_DISPLAY_LIMIT = max(int(float(os.getenv("FUNNEL_BYPASS_DISPLAY_LIMIT", "20"))), 0)
+except Exception:
+    FUNNEL_BYPASS_DISPLAY_LIMIT = 20
 
 
 def _resolve_funnel_end_calendar_day() -> date:
@@ -944,17 +945,7 @@ def run(
             return (ok, symbols_for_report, benchmark_context, details)
         return (ok, symbols_for_report, benchmark_context)
 
-    def _channel_tags(code: str) -> set[str]:
-        raw = str(l2_channel_map.get(code, "")).strip()
-        if not raw:
-            return set()
-        return {x.strip() for x in raw.split("+") if x.strip()}
-
     hit_set = set(sorted_codes)
-    sos_hit_set = set(str(c).strip() for c, _ in triggers.get("sos", []))
-    spring_hit_set = set(str(c).strip() for c, _ in triggers.get("spring", []))
-    lps_hit_set = set(str(c).strip() for c, _ in triggers.get("lps", []))
-    evr_hit_set = set(str(c).strip() for c, _ in triggers.get("evr", []))
 
     def _stage_name(code: str) -> str:
         if code in markup_symbols:
@@ -963,46 +954,9 @@ def run(
 
     hit_selected_count = sum(1 for c in selected_for_ai if c in hit_set)
     l3_only_count = len(selected_for_ai) - hit_selected_count
-    trend_hit_selected = sum(1 for c in trend_selected if c in hit_set)
-    trend_l3_only = len(trend_selected) - trend_hit_selected
-    accum_hit_selected = sum(1 for c in accum_selected if c in hit_set)
-    accum_l3_only = len(accum_selected) - accum_hit_selected
-
-    channel_counts = {
-        "主升通道": 0,
-        "潜伏通道": 0,
-        "吸筹通道": 0,
-        "地量蓄势": 0,
-        "暗中护盘": 0,
-        "点火破局": 0,
-    }
-    for code in selected_for_ai:
-        tags = _channel_tags(code)
-        for key in channel_counts:
-            if key in tags:
-                channel_counts[key] += 1
     l3_score_map = metrics.get("layer3_score_map", {}) or {}
-    by_trigger = metrics.get("by_trigger", {}) or {}
-    l2_momentum = int(metrics.get("layer2_momentum", 0) or 0)
-    l2_ambush = int(metrics.get("layer2_ambush", 0) or 0)
-    l2_accum = int(metrics.get("layer2_accum", 0) or 0)
-    l2_dry_vol = int(metrics.get("layer2_dry_vol", 0) or 0)
-    l2_rs_div = int(metrics.get("layer2_rs_div", 0) or 0)
-    l2_sos = int(metrics.get("layer2_sos", 0) or 0)
     sector_rotation = metrics.get("sector_rotation", {}) or {}
     sector_rotation_map = sector_rotation.get("state_map", {}) or {}
-    markup_count = len(markup_symbols)
-    accum_a_count = sum(1 for v in accum_stage_map.values() if v == "Accum_A")
-    accum_b_count = sum(1 for v in accum_stage_map.values() if v == "Accum_B")
-    accum_c_count = sum(1 for v in accum_stage_map.values() if v == "Accum_C")
-    stop_loss_count = sum(1 for sig in exit_signals.values() if sig.get("signal") == "stop_loss")
-    dist_warning_count = sum(1 for sig in exit_signals.values() if sig.get("signal") == "distribution_warning")
-    blocked_exit_signals_set = {"stop_loss", "distribution_warning"}
-    blocked_exit_codes = [
-        code
-        for code in l3_ranked_symbols
-        if str((exit_signals.get(code, {}) or {}).get("signal", "")).strip() in blocked_exit_signals_set
-    ]
 
     total_cap = int(ai_policy["total_cap"])
     trend_quota = int(ai_policy["trend_quota"])
@@ -1025,183 +979,95 @@ def run(
     bench_line = "未知"
     pv_line = "暂无大盘量价推演"
     if benchmark_context:
-        breadth = benchmark_context.get("breadth", {}) or {}
-        breadth_text = (
-            f"，上涨家数占比 {breadth.get('ratio_pct'):.1f}%"
-            f"（前日 {breadth.get('prev_ratio_pct'):.1f}%，变化 {breadth.get('delta_pct'):+.1f}%，样本 {breadth.get('sample_size')} 只）"
-            if breadth
-            else ""
-        )
-        repair_text = (
-            f"，修复原因：{benchmark_context.get('repair_reasons')}"
-            if benchmark_context.get("repair_triggered")
-            else ""
-        )
-        smallcap_close = benchmark_context.get("smallcap_close")
-        smallcap_cum3 = benchmark_context.get("smallcap_recent3_cum_pct")
-        smallcap_text = (
-            f" | 创业板指 {smallcap_close:.2f}，近3日 {smallcap_cum3:+.2f}%"
-            if smallcap_close is not None and smallcap_cum3 is not None
-            else ""
-        )
+        _close = benchmark_context.get("close") or 0
+        _ma50 = benchmark_context.get("ma50") or 0
+        _ma200 = benchmark_context.get("ma200") or 0
+        _cum3 = benchmark_context.get("recent3_cum_pct") or 0
         bench_line = (
-            f"{benchmark_context.get('regime')} | 沪深300 {benchmark_context.get('close'):.2f}"
-            f"（MA50={benchmark_context.get('ma50'):.1f} MA200={benchmark_context.get('ma200'):.1f}）"
-            f"，近3日 {benchmark_context.get('recent3_cum_pct'):+.2f}%"
-            f"{smallcap_text}"
-            f"{breadth_text}{repair_text}"
+            f"{benchmark_context.get('regime')} | 收盘 {float(_close):.2f} | "
+            f"MA50 {float(_ma50):.2f} | MA200 {float(_ma200):.2f} | 近3日 {float(_cum3):+.2f}%"
         )
         pv_line = str(
             benchmark_context.get("market_pv_outlook") or benchmark_context.get("market_pv_summary") or pv_line
         )
 
-    data_quality_line = (
-        f"成功拉取 {metrics['fetch_ok']} 只"
-        + (f"，失败 {metrics['fetch_fail']} 只" if metrics["fetch_fail"] else "，无失败")
-        + (f"，日期不对齐跳过 {metrics.get('fetch_date_mismatch', 0)} 只" if metrics.get("fetch_date_mismatch") else "")
-        + (f"，实时快照补偿 {metrics.get('fetch_spot_patched', 0)} 只" if metrics.get("fetch_spot_patched") else "")
-    )
-    ai_channel_summary = (
-        " | ".join(
-            f"{k}{channel_counts[k]}"
-            for k in ["主升通道", "潜伏通道", "吸筹通道", "地量蓄势", "暗中护盘", "点火破局"]
-            if channel_counts[k] > 0
-        )
-        or "无"
-    )
-    l4_non_hit_count = max(int(metrics["layer3"]) - int(unique_hit_count), 0)
-    top_priority_count = sum(
-        1 for c in selected_for_ai if c in markup_symbols or c in sos_hit_set or c in spring_hit_set
-    )
-
     lines = [
-        "## 一览",
         (
-            f"- **股票池**：主板{metrics['pool_main']} + 创业板{metrics['pool_chinext']} "
-            f"→ 去重{metrics['pool_merged']} → 去ST{metrics['pool_st_excluded']} "
-            f"= **{metrics['total_symbols']}**（共{metrics['pool_batches']}批）"
+            f"**股票池**: 主板{metrics['pool_main']} + 创业板{metrics['pool_chinext']} "
+            f"-> 去重{metrics['pool_merged']} -> 去ST{metrics['pool_st_excluded']} "
+            f"= {metrics['total_symbols']} (共{metrics['pool_batches']}批)"
         ),
-        f"- **大盘水温**：{bench_line}",
-        f"- **大盘量价推演**：{pv_line}",
-        f"- **Top 行业**：{', '.join(metrics['top_sectors']) if metrics['top_sectors'] else '无'}",
-        f"- **板块轮动温度计**：{sector_rotation.get('headline', '无')}",
-        f"- **数据质量**：{data_quality_line}",
-        "",
-        "## 漏斗进度",
-        f"- **L1 通过**：{metrics['layer1']} / {metrics['total_symbols']}（剔除 {metrics['total_symbols'] - metrics['layer1']}）",
-        f"- **L2 通过**：{metrics['layer2']} / {metrics['layer1']}（至少满足一条二级通道）",
-        f"- **L3 保留**：{metrics['layer3']} / {metrics['layer2']}（当前仅做行业标记，不做硬剔除）",
-        f"- **L4 命中股票**：{unique_hit_count} 只（命中事件 {metrics['total_hits']} 次）",
-        f"- **L4 未命中**：{l4_non_hit_count} 只（仍留在 L3 观察池）",
-        "",
-        "## L2 通道与阶段",
-        f"- **L2 通道分布**：主升{l2_momentum} | 潜伏{l2_ambush} | 吸筹{l2_accum} | 地量{l2_dry_vol} | 护盘{l2_rs_div} | 点火{l2_sos}",
-        f"- **威科夫阶段**：Markup{markup_count} | Accum_A{accum_a_count} | Accum_B{accum_b_count} | Accum_C{accum_c_count}",
-        f"- **板块轮动状态**：分歧{int((sector_rotation.get('counts', {}) or {}).get('DISAGREEMENT_PULLBACK', 0))} | 健康{int((sector_rotation.get('counts', {}) or {}).get('HEALTHY_MAINLINE', 0))} | 高潮{int((sector_rotation.get('counts', {}) or {}).get('CONSENSUS_CLIMAX', 0))} | 退潮{int((sector_rotation.get('counts', {}) or {}).get('DISTRIBUTION_RISK', 0))}",
-        "",
-        "## L4 形态触发",
-        f"- **SOS（量价点火）**：{len(sos_hit_set)}",
-        f"- **Spring（终极震仓）**：{len(spring_hit_set)}",
-        f"- **LPS（缩量回踩）**：{len(lps_hit_set)}",
-        f"- **EVR（放量不跌）**：{len(evr_hit_set)}",
-        "",
-        "## 风控与 AI 筛后",
-        f"- **Exit 参考信号**：结构止损{stop_loss_count} | Distribution警告{dist_warning_count}",
-        f"- **硬剔除**：{len(blocked_exit_codes)} 只（已触发结构止损或派发警告，不再送入 AI）",
+        f"**漏斗概览**: {metrics['total_symbols']}只 → L1:{metrics['layer1']} → L2:{metrics['layer2']} → L3:{metrics['layer3']} → 命中:{unique_hit_count}",
+        f"**大盘水温**: {bench_line}",
+        f"**大盘量价推演**: {pv_line}",
         (
-            f"- **最终送 AI**：{len(selected_for_ai)} 只"
-            f"（{regime}->{quota_family}：Trend={trend_quota} / Accum={accum_quota} / 总上限={total_cap}）"
+            f"**候选分层**: 命中股票{unique_hit_count} -> AI输入{len(selected_for_ai)} "
+            f"(Trend {len(trend_selected)} / Accum {len(accum_selected)}; "
+            f"L4命中{hit_selected_count} / L3补充{l3_only_count})"
         ),
-        f"- **AI 入选构成**：L4命中 {hit_selected_count} | L3补充 {l3_only_count}",
-        f"- **Trend 轨**：{len(trend_selected)} 只（L4命中 {trend_hit_selected} | L3补充 {trend_l3_only}）",
-        f"- **Accum 轨**：{len(accum_selected)} 只（L4命中 {accum_hit_selected} | L3补充 {accum_l3_only}）",
-        f"- **L3 补位上限**：Trend {max_trend_l3_fill} | Accum {max_accum_l3_fill}",
-        f"- **高优先级候选**：{top_priority_count} 只",
-        f"- **AI 输入通道分布**：{ai_channel_summary}",
+        f"**Top 行业**: {', '.join(metrics['top_sectors']) if metrics['top_sectors'] else '无'}",
+        "",
     ]
-    rotation_overview_lines = sector_rotation.get("overview_lines", []) or []
-    if rotation_overview_lines:
-        lines.extend(["", "## 板块轮动水温计"])
-        lines.extend([f"- {x}" for x in rotation_overview_lines])
 
-    def _append_ai_section(lines_obj: list[str], section_title: str, section_desc: str, codes: list[str]) -> None:
-        lines_obj.extend(
-            [
-                "",
-                section_title,
-                f"- **说明**：{section_desc}",
-                "- **字段**：代码 名称 | 阶段 | 来源标签 | 风控提示 | 分值",
-                "",
-            ]
-        )
-        if not codes:
-            lines_obj.append("- 无")
-            return
-        for code in codes:
+    def _score_star(s: float) -> str:
+        if s >= 10:
+            return "★★"
+        if s >= 5:
+            return "★ "
+        return "  "
+
+    def _display_score(code: str) -> float:
+        trigger_score = float(code_to_total_score.get(code, 0.0) or 0.0)
+        return trigger_score if trigger_score > 0 else float(score_map.get(code, 0.0) or 0.0)
+
+    multi_signal = [c for c in selected_for_ai if len(code_to_trigger_keys.get(c, [])) > 1]
+    if multi_signal:
+        lines.append(f"**【🔥 多信号共振】{len(multi_signal)} 只**")
+        for code in sorted(multi_signal, key=lambda c: -_display_score(c)):
             name = name_map.get(code, code)
-            trigger_reason = "、".join(code_to_reasons.get(code, []))
+            short = "+".join(TRIGGER_SHORT_LABELS.get(k, k) for k in code_to_trigger_keys.get(code, []))
+            score = _display_score(code)
+            lines.append(f"{_score_star(score)} {code} {name}  {score:.2f}  {short}")
+        lines.append("")
+
+    grouped_codes = set(multi_signal)
+    single_signal_codes = [c for c in selected_for_ai if c not in grouped_codes and code_to_trigger_keys.get(c)]
+    code_primary_key = {code: code_to_trigger_keys.get(code, [""])[0] for code in single_signal_codes}
+    for group_key in TRIGGER_GROUP_ORDER:
+        group_codes = [c for c in single_signal_codes if code_primary_key.get(c) == group_key]
+        if not group_codes:
+            continue
+        group_title = TRIGGER_GROUP_TITLES.get(group_key, group_key)
+        lines.append(f"**【{group_title}】{len(group_codes)} 只**")
+        for code in sorted(group_codes, key=lambda c: -_display_score(c)):
+            name = name_map.get(code, code)
+            score = _display_score(code)
+            lines.append(f"{_score_star(score)} {code} {name}  {score:.2f}")
+        lines.append("")
+
+    fill_codes = [c for c in selected_for_ai if c not in grouped_codes and not code_to_trigger_keys.get(c)]
+    if fill_codes:
+        lines.append(f"**【🧭 L3/阶段补位】{len(fill_codes)} 只**")
+        for code in sorted(fill_codes, key=lambda c: -_display_score(c)):
+            name = name_map.get(code, code)
+            stage = _stage_name(code)
             channel = str(l2_channel_map.get(code, "")).strip()
-            industry = str(sector_map.get(code, "") or "未知行业")
-            sector_info = sector_rotation_map.get(industry, {}) or {}
-            sector_state_label = str(
-                sector_info.get("label", SECTOR_STATE_LABELS.get("NEUTRAL_MIXED", "中性混沌"))
-            ).strip()
-            stage = accum_stage_map.get(code, "")
-            if not stage and code in markup_symbols:
-                stage = "Markup"
-            stage_str = f"[{stage}]" if stage else ""
-            base_reason = trigger_reason or "威科夫候选"
-            sector_reason = f"板块:{sector_state_label}"
-            if channel:
-                reasons = f"{channel} | {sector_reason} | {base_reason}"
-            else:
-                reasons = f"{sector_reason} | {base_reason}"
-
-            exit_sig = exit_signals.get(code, {})
-            exit_str = ""
-            if exit_sig.get("signal") == "stop_loss":
-                exit_str = f"| ✗止损{exit_sig.get('price', 0):.2f}"
-            elif exit_sig.get("signal") == "distribution_warning":
-                exit_str = "| ⚠Distribution警告"
-
-            priority_score = float(score_map.get(code, 0.0))
-            l3_score = float(l3_score_map.get(code, 0.0))
-            lines_obj.append(
-                f"- {code} {name} {stage_str} | {reasons} {exit_str} | priority={priority_score:.2f}, l3={l3_score:.2f}"
-            )
-
-    _append_ai_section(
-        lines,
-        "## AI 输入·Trend轨",
-        "右侧主升，优先 SOS（量价点火）与 Markup 阶段。",
-        trend_selected,
-    )
-    _append_ai_section(
-        lines,
-        "## AI 输入·Accum轨",
-        "左侧潜伏，优先 Spring（终极震仓）/LPS（缩量回踩）与 Accum_C 阶段。",
-        accum_selected,
-    )
+            suffix = " / ".join(x for x in [stage, channel] if x)
+            score = _display_score(code)
+            lines.append(f"{_score_star(score)} {code} {name}  {score:.2f}" + (f"  {suffix}" if suffix else ""))
+        lines.append("")
 
     if not selected_for_ai:
-        lines.extend(
-            [
-                "",
-                "**为什么没候选**",
-                f"• 触发信号: SOS={int(by_trigger.get('sos', 0))}, Spring={int(by_trigger.get('spring', 0))}, LPS={int(by_trigger.get('lps', 0))}, EVR={int(by_trigger.get('evr', 0))}",
-                f"• 阶段分布: Markup={markup_count}, Accum_A={accum_a_count}, Accum_B={accum_b_count}, Accum_C={accum_c_count}",
-                f"• 水温判断: {regime} | 当前配额: Trend={trend_quota}, Accum={accum_quota}, 总上限={total_cap}",
-                "• 分析：候选股票尚未达到日线级别的威科夫触发信号（SOS/Spring/LPS）或阶段转折特征。"
-                if total_cap > 0
-                else "• 当前大盘水温，AI配额已关闭（total_cap=0）。",
-            ]
-        )
+        lines.append("无")
 
     if l2_bypass_pool:
         lines.append("")
         lines.append(f"**【👁 L2旁路观察】{len(l2_bypass_pool)} 只**")
         lines.append("形态先于强度，不进正式推荐")
-        for code in l2_bypass_pool:
+        display_pool = (
+            l2_bypass_pool if FUNNEL_BYPASS_DISPLAY_LIMIT <= 0 else l2_bypass_pool[:FUNNEL_BYPASS_DISPLAY_LIMIT]
+        )
+        for code in display_pool:
             bp_name = name_map.get(code, code)
             bp_reasons = []
             for key in TRIGGER_LABELS.keys():
@@ -1210,6 +1076,9 @@ def run(
                         bp_reasons.append(TRIGGER_SHORT_LABELS.get(key, key))
             bp_industry = str(sector_map.get(code, "") or "")
             lines.append(f"  {code} {bp_name}  {'+'.join(bp_reasons)}  [{bp_industry}]")
+        omitted = len(l2_bypass_pool) - len(display_pool)
+        if omitted > 0:
+            lines.append(f"  ... 另 {omitted} 只略")
 
     content = "\n".join(lines)
     title = f"🔬 Wyckoff Funnel {date.today().strftime('%Y-%m-%d')}"

@@ -1,8 +1,25 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
+import fs from 'node:fs/promises'
 import path from 'path'
 import type { Plugin } from 'vite'
+
+const MARKET_DATA_FILES = new Set([
+  'stock_list_cache.json',
+  'us_meta.json',
+  'hk_meta.json',
+  'etf_cn_meta.json',
+  'aliases.json',
+])
+const REPO_DATA_DIR = path.resolve(__dirname, '../../..', 'data')
+const MARKET_UNIVERSE_DIR = path.join(REPO_DATA_DIR, 'market_universes')
+
+function sourceForMarketDataFile(file: string): string {
+  return file === 'stock_list_cache.json'
+    ? path.join(REPO_DATA_DIR, file)
+    : path.join(MARKET_UNIVERSE_DIR, file)
+}
 
 function llmProxyPlugin(): Plugin {
   return {
@@ -66,8 +83,42 @@ function llmProxyPlugin(): Plugin {
   }
 }
 
+function marketDataPlugin(): Plugin {
+  return {
+    name: 'market-data',
+    configureServer(server) {
+      server.middlewares.use('/market-data', async (req, res, next) => {
+        const url = new URL(req.url || '/', 'http://localhost')
+        const file = path.basename(url.pathname)
+        if (!MARKET_DATA_FILES.has(file)) {
+          next()
+          return
+        }
+
+        try {
+          const body = await fs.readFile(sourceForMarketDataFile(file))
+          res.statusCode = 200
+          res.setHeader('content-type', 'application/json; charset=utf-8')
+          res.setHeader('cache-control', 'public, max-age=300')
+          res.end(body)
+        } catch (err: unknown) {
+          res.statusCode = 404
+          res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }))
+        }
+      })
+    },
+    async writeBundle() {
+      const outDir = path.resolve(__dirname, 'dist', 'market-data')
+      await fs.mkdir(outDir, { recursive: true })
+      await Promise.all(
+        Array.from(MARKET_DATA_FILES, (file) => fs.copyFile(sourceForMarketDataFile(file), path.join(outDir, file))),
+      )
+    },
+  }
+}
+
 export default defineConfig({
-  plugins: [react(), tailwindcss(), llmProxyPlugin()],
+  plugins: [react(), tailwindcss(), llmProxyPlugin(), marketDataPlugin()],
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),

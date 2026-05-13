@@ -97,6 +97,20 @@ MOCK_MARKET_OVERVIEW = {
     "source": "mock",
 }
 
+MOCK_MARKET_HISTORY = {
+    "ok": True,
+    "index": {"key": "sse", "symbol": "000001.SH", "name": "上证指数"},
+    "requested_days": 100,
+    "returned_days": 3,
+    "source": "mock",
+    "summary": {"period_return_pct": 1.0, "latest_close": 3383.5},
+    "rows": [
+        {"date": "2026-04-09", "close": 3350.0, "pct_chg": 0.2, "volume": 1000},
+        {"date": "2026-04-10", "close": 3370.0, "pct_chg": 0.6, "volume": 1200},
+        {"date": "2026-04-11", "close": 3383.5, "pct_chg": 0.4, "volume": 1100},
+    ],
+}
+
 MOCK_PRICE_RESULT = {
     "code": "600519",
     "days": 5,
@@ -242,6 +256,7 @@ class AgentTestHarness:
             "analyze_stock": MOCK_DIAGNOSE_RESULT,
             "portfolio": {"message": "当前没有持仓数据", "positions": []},
             "get_market_overview": MOCK_MARKET_OVERVIEW,
+            "get_market_history": MOCK_MARKET_HISTORY,
             "screen_stocks": {
                 "ok": True,
                 "summary": {"total_scanned": 4500, "layer1_passed": 800, "layer2_passed": 200, "layer3_passed": 50},

@@ -1,3 +1,5 @@
+import { avg } from './math'
+
 interface KlineRow {
   date: string
   open: number
@@ -171,8 +173,4 @@ function quantile(values: number[], q: number): number {
   const lo = Math.floor(pos)
   const hi = Math.ceil(pos)
   return sorted[lo]! + (sorted[hi]! - sorted[lo]!) * (pos - lo)
-}
-
-function avg(values: number[]): number {
-  return values.length > 0 ? values.reduce((s, v) => s + v, 0) / values.length : 0
 }

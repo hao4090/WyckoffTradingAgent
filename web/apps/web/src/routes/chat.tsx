@@ -4,12 +4,14 @@ import { useAuthStore } from '@/stores/auth'
 import { loadLLMConfig, loadAllModels, runChatAgentStream, createReasoningCache, type LLMConfig, type ModelOption, type StepInfo } from '@/lib/chat-agent'
 import { MarkdownContent } from '@/components/markdown'
 import { ScreenResultCard } from '@/components/screen-result-card'
+import { AIDisclaimer } from '@/components/ai-disclaimer'
 import { usePreferences, type TranslationKey } from '@/lib/preferences'
 
 const TOOL_LABEL_KEYS: Record<string, TranslationKey> = {
   search_stock: 'tool.search_stock',
   view_portfolio: 'tool.view_portfolio',
   market_overview: 'tool.market_overview',
+  market_history: 'tool.market_history',
   query_recommendations: 'tool.query_recommendations',
   query_tail_buy: 'tool.query_tail_buy',
   plan_portfolio_update: 'tool.plan_portfolio_update',
@@ -20,7 +22,10 @@ const TOOL_LABEL_KEYS: Record<string, TranslationKey> = {
   generate_strategy_decision: 'tool.generate_strategy_decision',
 }
 
+let msgIdCounter = 0
+
 interface Message {
+  id: number
   role: 'user' | 'assistant'
   content: string
   isError?: boolean
@@ -41,6 +46,8 @@ function StepsCollapsible({ steps }: { steps: StepInfo[] }) {
   return (
     <div className="mb-2">
       <button
+        type="button"
+        aria-expanded={expanded}
         onClick={() => setExpanded(!expanded)}
         className="flex items-center gap-1 text-[11px] text-muted-foreground/70 hover:text-muted-foreground transition-colors"
       >
@@ -99,6 +106,33 @@ const MessageBubble = memo(function MessageBubble({ msg }: { msg: Message }) {
   )
 })
 
+function ChatComposer(props: {
+  input: string
+  loading: boolean
+  onInput: (value: string) => void
+  onSubmit: (e: React.FormEvent) => void
+}) {
+  const { t } = usePreferences()
+  return (
+    <div className="border-t border-border px-6 py-3">
+      <form onSubmit={props.onSubmit} className="flex items-center gap-2">
+        <input
+          type="text"
+          value={props.input}
+          onChange={(e) => props.onInput(e.target.value)}
+          placeholder={t('chat.placeholder')}
+          aria-label={t('chat.placeholder')}
+          className="flex-1 rounded-xl border border-border bg-background px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-ring/20"
+        />
+        <button type="submit" disabled={!props.input.trim() || props.loading} className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary text-primary-foreground disabled:opacity-40">
+          <Send size={16} />
+        </button>
+      </form>
+      <div className="mt-2 text-center"><AIDisclaimer /></div>
+    </div>
+  )
+}
+
 export function ChatPage() {
   const user = useAuthStore((s) => s.user)
   const { t } = usePreferences()
@@ -111,6 +145,8 @@ export function ChatPage() {
   const [showModelPicker, setShowModelPicker] = useState(false)
   const [liveSteps, setLiveSteps] = useState<StepInfo[]>([])
   const [streamingText, setStreamingText] = useState('')
+  const streamBufRef = useRef('')
+  const streamFlushRef = useRef(0)
   const scrollRef = useRef<HTMLDivElement>(null)
   const abortRef = useRef<AbortController | null>(null)
   const reasoningCacheRef = useRef(createReasoningCache())
@@ -141,9 +177,17 @@ export function ChatPage() {
     })
   }, [])
 
+  useEffect(() => {
+    return () => {
+      abortRef.current?.abort()
+      cancelAnimationFrame(scrollRafRef.current)
+      cancelAnimationFrame(streamFlushRef.current)
+    }
+  }, [])
+
   useEffect(() => { scrollToBottom() }, [messages, liveSteps, scrollToBottom])
 
-  async function handleSubmit(e: React.FormEvent) {
+  const handleSubmit = useCallback(async (e: React.FormEvent) => {
     e.preventDefault()
     if (!input.trim() || loading) return
 
@@ -152,21 +196,17 @@ export function ChatPage() {
       return
     }
 
-    const userMsg: Message = { role: 'user', content: input.trim() }
-    const newMessages = [...messages, userMsg]
-    setMessages(newMessages)
+    const userMsg: Message = { id: ++msgIdCounter, role: 'user', content: input.trim() }
+    const nextMessages = [...messages, userMsg]
+    const chatHistory = nextMessages
+      .filter((m) => !m.isError)
+      .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content }))
+    setMessages(nextMessages)
     setInput('')
     setError('')
     setLoading(true)
     setLiveSteps([])
     setStreamingText('')
-
-    const chatHistory = newMessages
-      .filter((m) => !m.isError)
-      .map((m) => ({
-        role: m.role as 'user' | 'assistant',
-        content: m.content,
-      }))
 
     abortRef.current = runChatAgentStream(
       llmConfig,
@@ -175,15 +215,25 @@ export function ChatPage() {
       {
         onStep: (step) => {
           setLiveSteps((prev) => [...prev, step])
+          streamBufRef.current = ''
           setStreamingText('')
         },
         onTextDelta: (delta) => {
-          setStreamingText((prev) => prev + delta)
-          scrollToBottom()
+          streamBufRef.current += delta
+          if (!streamFlushRef.current) {
+            streamFlushRef.current = requestAnimationFrame(() => {
+              setStreamingText(streamBufRef.current)
+              scrollToBottom()
+              streamFlushRef.current = 0
+            })
+          }
         },
         onFinish: (finalText, steps) => {
+          cancelAnimationFrame(streamFlushRef.current)
+          streamFlushRef.current = 0
+          streamBufRef.current = ''
           if (finalText) {
-            setMessages((prev) => [...prev, { role: 'assistant', content: finalText, steps }])
+            setMessages((prev) => [...prev, { id: ++msgIdCounter, role: 'assistant', content: finalText, steps }])
           }
           setStreamingText('')
           setLiveSteps([])
@@ -191,9 +241,12 @@ export function ChatPage() {
           abortRef.current = null
         },
         onError: (err) => {
+          cancelAnimationFrame(streamFlushRef.current)
+          streamFlushRef.current = 0
+          streamBufRef.current = ''
           const msg = err.message || t('chat.requestFailed')
           setError(msg)
-          setMessages((prev) => [...prev, { role: 'assistant', content: `⚠️ ${msg}`, isError: true }])
+          setMessages((prev) => [...prev, { id: ++msgIdCounter, role: 'assistant', content: `⚠️ ${msg}`, isError: true }])
           setStreamingText('')
           setLiveSteps([])
           setLoading(false)
@@ -202,7 +255,7 @@ export function ChatPage() {
       },
       reasoningCacheRef.current,
     )
-  }
+  }, [input, loading, llmConfig, messages, t, user, scrollToBottom])
 
   function handleNewChat() {
     abortRef.current?.abort()
@@ -299,8 +352,8 @@ export function ChatPage() {
           </div>
         ) : (
           <div className="space-y-4">
-            {messages.map((msg, i) => (
-              <MessageBubble key={i} msg={msg} />
+            {messages.map((msg) => (
+              <MessageBubble key={msg.id} msg={msg} />
             ))}
 
             {loading && (
@@ -344,24 +397,7 @@ export function ChatPage() {
         <div className="mx-6 mb-2 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700 dark:bg-red-500/10 dark:text-red-200">{error}</div>
       )}
 
-      <div className="border-t border-border px-6 py-4">
-        <form onSubmit={handleSubmit} className="flex items-center gap-2">
-          <input
-            type="text"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            placeholder={t('chat.placeholder')}
-            className="flex-1 rounded-xl border border-border bg-background px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-ring/20"
-          />
-          <button
-            type="submit"
-            disabled={!input.trim() || loading}
-            className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary text-primary-foreground disabled:opacity-40"
-          >
-            <Send size={16} />
-          </button>
-        </form>
-      </div>
+      <ChatComposer input={input} loading={loading} onInput={setInput} onSubmit={handleSubmit} />
     </div>
   )
 }

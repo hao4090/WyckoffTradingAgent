@@ -61,8 +61,8 @@ export async function fetchUserDataKeys(deps: ToolDeps, userId: string): Promise
     .eq('user_id', userId)
     .single()
   return {
-    tickflow: data?.tickflow_api_key || null,
-    tushare: data?.tushare_token || null,
+    tickflow: String(data?.tickflow_api_key || '').trim() || null,
+    tushare: String(data?.tushare_token || '').trim() || null,
   }
 }
 
@@ -142,12 +142,7 @@ function parseKlineRows(rows: unknown[]): KlineRow[] {
   })).filter(d => d.date && d.close > 0)
 }
 
-function parseTickFlowPayload(json: Record<string, unknown>): KlineRow[] {
-  const data = json.data
-  if (Array.isArray(data)) return parseKlineRows(data)
-  if (Array.isArray(json.records)) return parseKlineRows(json.records)
-  if (!data || typeof data !== 'object') return []
-  const table = data as Record<string, unknown[]>
+function parseTickFlowTable(table: Record<string, unknown[]>): KlineRow[] {
   const ts = Array.isArray(table.timestamp) ? table.timestamp : []
   if (ts.length === 0) return []
   const o = table.open || [], h = table.high || [], l = table.low || [], c = table.close || [], v = table.volume || []
@@ -157,21 +152,56 @@ function parseTickFlowPayload(json: Record<string, unknown>): KlineRow[] {
   })).filter(d => d.date && d.close > 0)
 }
 
+function findTickFlowTable(data: unknown, symbol: string): Record<string, unknown[]> | null {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return null
+  const obj = data as Record<string, unknown>
+  if (Array.isArray(obj.timestamp)) return obj as Record<string, unknown[]>
+  const direct = obj[symbol]
+  if (direct && typeof direct === 'object' && !Array.isArray(direct)) {
+    const table = direct as Record<string, unknown>
+    if (Array.isArray(table.timestamp)) return table as Record<string, unknown[]>
+  }
+  for (const value of Object.values(obj)) {
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      const table = value as Record<string, unknown>
+      if (Array.isArray(table.timestamp)) return table as Record<string, unknown[]>
+    }
+  }
+  return null
+}
+
+function parseTickFlowPayload(json: Record<string, unknown>, symbol: string): KlineRow[] {
+  const data = json.data
+  if (Array.isArray(data)) return parseKlineRows(data)
+  if (Array.isArray(json.records)) return parseKlineRows(json.records)
+  const table = findTickFlowTable(data, symbol)
+  return table ? parseTickFlowTable(table) : []
+}
+
 function formatTimestamp(value: unknown): string {
   const n = Number(value)
   if (Number.isFinite(n) && n > 0) return new Date(n + 8 * 3600_000).toISOString().slice(0, 10)
   return String(value || '').replace(/(\d{4})(\d{2})(\d{2})/, '$1-$2-$3').slice(0, 10)
 }
 
-async function fetchKlineViaTickFlow(deps: ToolDeps, code: string, apiKey: string): Promise<KlineRow[]> {
+async function fetchKlineViaTickFlow(deps: ToolDeps, code: string, apiKey: string, count = 250): Promise<KlineRow[]> {
+  const symbol = normalizeTickFlowSymbol(code)
   const params = new URLSearchParams({
-    symbol: normalizeTickFlowSymbol(code), period: '1d', count: '250', adjust: 'forward',
+    symbol, period: '1d', count: String(count), adjust: 'forward',
   })
   const resp = await deps.fetch(`/api/llm-proxy/v1/klines?${params}`, {
     headers: { 'x-api-key': apiKey, 'X-Target-URL': 'https://api.tickflow.org' },
   })
-  if (!resp.ok) return []
-  return parseTickFlowPayload(await resp.json())
+  if (resp.ok) {
+    const rows = parseTickFlowPayload(await resp.json(), symbol)
+    if (rows.length) return rows
+  }
+  const batchParams = new URLSearchParams({ symbols: symbol, period: '1d', count: String(count), adjust: 'forward' })
+  const batchResp = await deps.fetch(`/api/llm-proxy/v1/klines/batch?${batchParams}`, {
+    headers: { 'x-api-key': apiKey, 'X-Target-URL': 'https://api.tickflow.org' },
+  })
+  if (!batchResp.ok) return []
+  return parseTickFlowPayload(await batchResp.json(), symbol)
 }
 
 async function fetchKlineFromCache(deps: ToolDeps, code: string, startIso: string, endIso: string): Promise<KlineRow[]> {
@@ -347,6 +377,66 @@ export async function execMarketOverview(deps: ToolDeps): Promise<string> {
   ].filter(Boolean).join('\n')
 }
 
+type MarketIndexKey = 'sse' | 'csi300' | 'szse' | 'chinext'
+
+const MARKET_INDEXES: Record<MarketIndexKey, { code: string; name: string }> = {
+  sse: { code: '000001.SH', name: '上证指数' },
+  csi300: { code: '000300.SH', name: '沪深300' },
+  szse: { code: '399001.SZ', name: '深证成指' },
+  chinext: { code: '399006.SZ', name: '创业板指' },
+}
+
+export async function execMarketHistory(
+  deps: ToolDeps,
+  userId: string,
+  model: unknown,
+  days = 100,
+  index: MarketIndexKey = 'sse',
+): Promise<string> {
+  const key = await fetchTickFlowKey(deps, userId)
+  if (!key) return '无法回看大盘历史K线：请先在设置页配置 TickFlow API Key。'
+  const requestedDays = Math.min(Math.max(Math.trunc(days) || 100, 1), 250)
+  const fetchDays = Math.max(requestedDays, 20)
+  const target = MARKET_INDEXES[index] || MARKET_INDEXES.sse
+  const rows = await fetchKlineViaTickFlow(deps, target.code, key, fetchDays)
+  if (rows.length === 0) return `无法获取 ${target.name} 过去 ${requestedDays} 个交易日K线。请检查 TickFlow 数据权限或稍后重试。`
+  const digest = buildMarketHistoryDigest(target.name, rows.slice(-requestedDays))
+  const result = await deps.generateText({
+    model: model as Parameters<typeof GenerateTextFn>[0]['model'],
+    system: '你是威科夫大盘量价分析师。基于指数历史OHLCV，判断过去一段时间的大盘阶段、供需关系、量价背离、关键支撑压力与当前市场位置。不得只引用当天水温，不得编造数据。',
+    prompt: digest,
+  })
+  return result.text || digest
+}
+
+function buildMarketHistoryDigest(name: string, rows: KlineRow[]): string {
+  const last = rows[rows.length - 1]!
+  const first = rows[0]!
+  const avg = (values: number[]) => values.reduce((sum, v) => sum + v, 0) / Math.max(values.length, 1)
+  const latest20 = rows.slice(-20)
+  const high = Math.max(...rows.map((r) => r.high))
+  const low = Math.min(...rows.map((r) => r.low))
+  const ret = first.close > 0 ? (last.close / first.close - 1) * 100 : 0
+  const vol5 = avg(rows.slice(-5).map((r) => r.volume))
+  const vol20 = avg(latest20.map((r) => r.volume))
+  const closePos = high > low ? ((last.close - low) / (high - low)) * 100 : 0
+  const recent = rows.slice(-30).map((r) => [
+    r.date, r.open.toFixed(2), r.high.toFixed(2), r.low.toFixed(2), r.close.toFixed(2), Math.round(r.volume),
+  ].join(','))
+  return [
+    `指数：${name}`,
+    `样本：最近${rows.length}个交易日，${first.date} 至 ${last.date}`,
+    `区间涨跌：${ret >= 0 ? '+' : ''}${ret.toFixed(2)}%，区间高点 ${high.toFixed(2)}，低点 ${low.toFixed(2)}，当前区间位置 ${closePos.toFixed(1)}%`,
+    `近5日均量 ${vol5.toFixed(0)}，近20日均量 ${vol20.toFixed(0)}，量比(5/20) ${(vol5 / (vol20 || 1)).toFixed(2)}`,
+    '',
+    '请结合以下最近30根K线判断量价关系和威科夫阶段：',
+    '```csv',
+    'date,open,high,low,close,volume',
+    ...recent,
+    '```',
+  ].join('\n')
+}
+
 export async function execQueryRecommendations(deps: ToolDeps, limit: number): Promise<string> {
   const { data } = await deps.supabase
     .from('recommendation_tracking')
@@ -466,6 +556,9 @@ export async function execAnalyzeStock(
   deps: ToolDeps, userId: string, _config: LLMToolConfig, model: unknown, code: string, name: string | null,
 ): Promise<string> {
   const keys = await fetchUserDataKeys(deps, userId)
+  if (!isCnSymbol(code) && !keys.tickflow) {
+    return `无法获取 ${code} ${name || ''} 的K线数据。美股/港股诊断需要先在设置页配置 TickFlow API Key，并使用标准代码（如 AAPL.US / 00700.HK）。`
+  }
   const kline = await fetchKlineForAgent(deps, code, keys, userId)
   if (kline.length === 0) {
     return `无法获取 ${code} ${name || ''} 的K线数据。美股/港股请使用 TickFlow 标准代码（如 AAPL.US / 00700.HK）。推荐购买 TickFlow 获取实时行情：https://tickflow.org/auth/register?ref=5N4NKTCPL4`

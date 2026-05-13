@@ -9,6 +9,8 @@ import {
   execQueryTailBuy,
   execExecutePortfolioUpdate,
   execScreenStocks,
+  execAnalyzeStock,
+  execMarketHistory,
 } from '../chat-tools'
 
 function createMockChain(resolvedData: unknown = null, error: unknown = null) {
@@ -144,6 +146,47 @@ describe('execMarketOverview', () => {
   })
 })
 
+describe('execMarketHistory', () => {
+  it('uses TickFlow index K-line history for historical market questions', async () => {
+    const deps = createMockDeps({ user_settings: { tickflow_api_key: ' tf-test ', tushare_token: '' } })
+    deps.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({
+        data: {
+          '000001.SH': {
+            timestamp: [1704067200000, 1704153600000, 1704240000000],
+            open: [3000, 3010, 3020],
+            high: [3030, 3040, 3050],
+            low: [2990, 3000, 3010],
+            close: [3020, 3030, 3040],
+            volume: [1000, 1200, 1300],
+          },
+        },
+      }),
+    } as Response) as unknown as ToolDeps['fetch']
+
+    const result = await execMarketHistory(deps, 'user1', {}, 100, 'sse')
+
+    expect(result).toBe('mocked LLM response')
+    expect(deps.fetch).toHaveBeenCalledWith(
+      expect.stringContaining('symbol=000001.SH'),
+      expect.objectContaining({ headers: expect.objectContaining({ 'x-api-key': 'tf-test' }) }),
+    )
+    expect(deps.generateText).toHaveBeenCalledWith(expect.objectContaining({
+      prompt: expect.stringContaining('最近3个交易日'),
+    }))
+  })
+
+  it('explains missing TickFlow key', async () => {
+    const deps = createMockDeps({ user_settings: { tickflow_api_key: '', tushare_token: '' } })
+
+    const result = await execMarketHistory(deps, 'user1', {}, 100, 'sse')
+
+    expect(result).toContain('配置 TickFlow API Key')
+    expect(deps.fetch).not.toHaveBeenCalled()
+  })
+})
+
 describe('execQueryRecommendations', () => {
   it('returns no-data message when empty', async () => {
     const deps = createMockDeps({ recommendation_tracking: [] })
@@ -201,5 +244,61 @@ describe('execScreenStocks', () => {
     const parsed = JSON.parse(result)
     expect(parsed.stocks).toEqual([])
     expect(parsed.meta.ai_count).toBe(0)
+  })
+})
+
+describe('execAnalyzeStock', () => {
+  it('uses TickFlow batch fallback for market symbols', async () => {
+    const deps = createMockDeps({ user_settings: { tickflow_api_key: ' tf-test ', tushare_token: '' } })
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ data: {} }) })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({
+          data: {
+            'AAPL.US': {
+              timestamp: [1704067200000, 1704153600000],
+              open: [100, 101],
+              high: [102, 103],
+              low: [99, 100],
+              close: [101, 102],
+              volume: [1000, 1200],
+            },
+          },
+        }),
+      })
+    deps.fetch = fetchMock as unknown as ToolDeps['fetch']
+
+    const result = await execAnalyzeStock(
+      deps,
+      'user1',
+      { api_key: 'llm-key', model: 'test-model', base_url: 'https://example.com/v1' },
+      {},
+      'AAPL.US',
+      '苹果',
+    )
+
+    expect(result).toBe('mocked LLM response')
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      expect.stringContaining('/api/llm-proxy/v1/klines/batch?'),
+      expect.objectContaining({ headers: expect.objectContaining({ 'x-api-key': 'tf-test' }) }),
+    )
+  })
+
+  it('explains missing TickFlow key for market symbols', async () => {
+    const deps = createMockDeps({ user_settings: { tickflow_api_key: '', tushare_token: '' } })
+
+    const result = await execAnalyzeStock(
+      deps,
+      'user1',
+      { api_key: 'llm-key', model: 'test-model', base_url: 'https://example.com/v1' },
+      {},
+      'AAPL.US',
+      '苹果',
+    )
+
+    expect(result).toContain('设置页配置 TickFlow API Key')
+    expect(deps.fetch).not.toHaveBeenCalled()
   })
 })

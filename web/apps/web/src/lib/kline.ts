@@ -11,6 +11,11 @@ export interface KlineData {
 
 export const TICKFLOW_PURCHASE = 'https://tickflow.org/auth/register?ref=5N4NKTCPL4'
 
+export function normalizeCode(code: string | number): string {
+  const raw = String(code || '').trim().toUpperCase()
+  return /^\d+$/.test(raw) && raw.length < 6 ? raw.padStart(6, '0') : raw
+}
+
 export function isCnSymbol(code: string): boolean {
   return /^\d{6}$/.test(code.trim())
 }
@@ -70,21 +75,11 @@ function parseRowArray(rows: unknown[]): KlineData[] {
     .filter((d) => d.date && d.close > 0)
 }
 
-function parseKlinePayload(payload: unknown): KlineData[] {
-  if (!payload || typeof payload !== 'object') return []
-  const root = payload as Record<string, unknown>
-  const data = root.data
-  if (Array.isArray(data)) return parseRowArray(data)
-  if (Array.isArray(root.records)) return parseRowArray(root.records)
-  if (!data || typeof data !== 'object') return []
-
-  const table = data as Record<string, unknown[]>
+function parseTickFlowTable(table: Record<string, unknown[]>): KlineData[] {
   const timestamps = Array.isArray(table.timestamp) ? table.timestamp : []
   if (timestamps.length === 0) return []
-
   const open = table.open || [], high = table.high || [], low = table.low || []
   const close = table.close || [], volume = table.volume || []
-
   return timestamps
     .map((ts, i) => ({
       date: formatTimestampDate(ts),
@@ -95,6 +90,49 @@ function parseKlinePayload(payload: unknown): KlineData[] {
       volume: Number(volume[i] || 0),
     }))
     .filter((d) => d.date && d.close > 0)
+}
+
+function findTickFlowTable(data: unknown, symbol: string): Record<string, unknown[]> | null {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return null
+  const obj = data as Record<string, unknown>
+  if (Array.isArray(obj.timestamp)) return obj as Record<string, unknown[]>
+  const direct = obj[symbol]
+  if (direct && typeof direct === 'object' && !Array.isArray(direct)) {
+    const table = direct as Record<string, unknown>
+    if (Array.isArray(table.timestamp)) return table as Record<string, unknown[]>
+  }
+  for (const value of Object.values(obj)) {
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      const table = value as Record<string, unknown>
+      if (Array.isArray(table.timestamp)) return table as Record<string, unknown[]>
+    }
+  }
+  return null
+}
+
+function parseKlinePayload(payload: unknown, symbol: string): KlineData[] {
+  if (!payload || typeof payload !== 'object') return []
+  const root = payload as Record<string, unknown>
+  const data = root.data
+  if (Array.isArray(data)) return parseRowArray(data)
+  if (Array.isArray(root.records)) return parseRowArray(root.records)
+  const table = findTickFlowTable(data, symbol)
+  return table ? parseTickFlowTable(table) : []
+}
+
+async function readTickFlowError(resp: Response): Promise<string> {
+  const text = await resp.text().catch(() => '')
+  try {
+    const json = JSON.parse(text)
+    return String(json?.error?.message || json?.message || json?.error || '').trim()
+  } catch {
+    return text.slice(0, 160).trim()
+  }
+}
+
+function tickFlowUpgradeError(status: number, detail: string): Error {
+  const reason = detail ? `：${detail}` : ''
+  return new Error(`TickFlow 数据源返回 ${status}${reason}。可能是数据权限、额度或并发限制，请升级数据源后重试：${TICKFLOW_PURCHASE}`)
 }
 
 async function tusharePost(token: string, api_name: string, params: Record<string, string>, fields: string) {
@@ -141,15 +179,29 @@ export async function fetchKlineViaTushare(code: string, token: string, startDat
 }
 
 export async function fetchKlineViaTickFlow(code: string, apiKey: string): Promise<KlineData[]> {
+  const symbol = normalizeTickFlowSymbol(code)
   const params = new URLSearchParams({
-    symbol: normalizeTickFlowSymbol(code), period: '1d', count: '320', adjust: 'forward',
+    symbol, period: '1d', count: '320', adjust: 'forward',
   })
+  let apiError: Error | null = null
   const resp = await fetch(`/api/llm-proxy/v1/klines?${params}`, {
     headers: { 'x-api-key': apiKey, 'X-Target-URL': 'https://api.tickflow.org' },
   })
-  if (!resp.ok) return []
-  const json = await resp.json()
-  return parseKlinePayload(json).sort((a, b) => a.date.localeCompare(b.date)).slice(-320)
+  if (resp.ok) {
+    const rows = parseKlinePayload(await resp.json(), symbol)
+    if (rows.length) return rows.sort((a, b) => a.date.localeCompare(b.date)).slice(-320)
+  } else {
+    apiError = tickFlowUpgradeError(resp.status, await readTickFlowError(resp))
+  }
+  const batchParams = new URLSearchParams({ symbols: symbol, period: '1d', count: '320', adjust: 'forward' })
+  const batchResp = await fetch(`/api/llm-proxy/v1/klines/batch?${batchParams}`, {
+    headers: { 'x-api-key': apiKey, 'X-Target-URL': 'https://api.tickflow.org' },
+  })
+  if (!batchResp.ok) throw tickFlowUpgradeError(batchResp.status, await readTickFlowError(batchResp))
+  const batchRows = parseKlinePayload(await batchResp.json(), symbol).sort((a, b) => a.date.localeCompare(b.date)).slice(-320)
+  if (batchRows.length) return batchRows
+  if (apiError) throw apiError
+  return []
 }
 
 export async function fetchKlineFromCache(code: string, startIso: string, endIso: string): Promise<KlineData[]> {
@@ -173,8 +225,8 @@ export async function getUserDataKeys(userId: string): Promise<{ tickflow: strin
     .eq('user_id', userId)
     .single()
   return {
-    tickflow: data?.tickflow_api_key || null,
-    tushare: data?.tushare_token || null,
+    tickflow: String(data?.tickflow_api_key || '').trim() || null,
+    tushare: String(data?.tushare_token || '').trim() || null,
   }
 }
 
@@ -197,20 +249,24 @@ export async function fetchKline(
   const fmtCompact = (d: Date) => d.toISOString().slice(0, 10).replace(/-/g, '')
   const fmtIso = (d: Date) => d.toISOString().slice(0, 10)
   const isCn = isCnSymbol(code)
+  let tickflowError: Error | null = null
 
   if (keys.tickflow) {
-    try { const r = await fetchKlineViaTickFlow(code, keys.tickflow); if (r.length) return r } catch { /* fallthrough */ }
+    try { const r = await fetchKlineViaTickFlow(code, keys.tickflow); if (r.length) return r } catch (err) { tickflowError = err instanceof Error ? err : new Error(String(err)) }
   }
   if (isCn && keys.tushare) {
+    if (tickflowError) console.warn(`[kline] TickFlow failed for ${code}, falling back to Tushare:`, tickflowError.message)
     try {
       const r = await fetchKlineViaTushare(code, keys.tushare, fmtCompact(start), fmtCompact(end))
       if (r.length) return r.sort((a, b) => a.date.localeCompare(b.date)).slice(-320)
     } catch { /* fallthrough */ }
   }
   if (isCn && await checkWhitelist(userId)) {
+    if (tickflowError) console.warn(`[kline] All live sources failed for ${code}, falling back to cache`)
     const r = await fetchKlineFromCache(code, fmtIso(start), fmtIso(end))
     if (r.length) return r
   }
+  if (tickflowError) throw tickflowError
   const suffixHint = isCn ? '' : '美股/港股请使用 TickFlow 标准代码（如 AAPL.US / 00700.HK）。'
   throw new Error(`无法获取K线数据。${suffixHint}请检查股票代码、TickFlow Key 或稍后重试：${TICKFLOW_PURCHASE}`)
 }
