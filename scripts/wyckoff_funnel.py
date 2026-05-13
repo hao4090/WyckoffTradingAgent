@@ -47,6 +47,7 @@ from integrations.data_source import (
 from integrations.fetch_a_share_csv import (
     _resolve_trading_window,
 )
+from integrations.tickflow_notice import TICKFLOW_UPGRADE_URL
 
 # ── tools/ 层导入 ──
 from tools.candidate_ranker import (
@@ -67,8 +68,8 @@ RETRY_BASE_DELAY = float(os.getenv("FUNNEL_RETRY_BASE_DELAY", "1.0"))
 SOCKET_TIMEOUT = int(os.getenv("FUNNEL_SOCKET_TIMEOUT", "20"))
 FETCH_TIMEOUT = int(os.getenv("FUNNEL_FETCH_TIMEOUT", "45"))
 BATCH_TIMEOUT = int(os.getenv("FUNNEL_BATCH_TIMEOUT", "420"))
-BATCH_SIZE = int(os.getenv("FUNNEL_BATCH_SIZE", "250"))
-BATCH_SLEEP = float(os.getenv("FUNNEL_BATCH_SLEEP", "2"))
+BATCH_SIZE = int(os.getenv("FUNNEL_BATCH_SIZE", "200"))
+BATCH_SLEEP = float(os.getenv("FUNNEL_BATCH_SLEEP", "0.55"))
 MAX_WORKERS = int(os.getenv("FUNNEL_MAX_WORKERS", "8"))
 EXECUTOR_MODE = os.getenv("FUNNEL_EXECUTOR_MODE", "process").strip().lower()
 if EXECUTOR_MODE not in {"thread", "process"}:
@@ -264,6 +265,126 @@ def _dump_full_fetch_snapshot(
         return None
 
 
+_ETF_UNIVERSE_PATH = Path(__file__).resolve().parent.parent / "data" / "market_universes" / "etf_cn.txt"
+
+
+def _load_etf_universe() -> tuple[list[str], dict[str, str]]:
+    """读取 ETF 板块增强池，返回 (etf_codes, {code: sector_tag})。"""
+    if not _ETF_UNIVERSE_PATH.is_file():
+        return [], {}
+    codes: list[str] = []
+    sector_map: dict[str, str] = {}
+    for line in _ETF_UNIVERSE_PATH.read_text(encoding="utf-8").splitlines():
+        line = line.split("#", 1)[0].strip()
+        if not line:
+            continue
+        parts = line.split(None, 1)
+        if len(parts) < 2:
+            continue
+        code, tag = parts[0].strip(), parts[1].strip()
+        if len(code) == 6 and code.isdigit() and tag:
+            codes.append(code)
+            sector_map[code] = tag
+    return codes, sector_map
+
+
+def _fetch_etf_ohlcv(etf_symbols: list[str], window, *, batch_size: int = 50) -> dict[str, pd.DataFrame]:
+    """拉取 ETF 行情，无数据源时优雅降级。"""
+    if not etf_symbols:
+        return {}
+    has_tickflow = bool(os.getenv("TICKFLOW_API_KEY", "").strip())
+    has_tushare = bool(os.getenv("TUSHARE_TOKEN", "").strip())
+    if not has_tickflow and not has_tushare:
+        print(f"[funnel] ⚠️ ETF 板块增强需要数据源，跳过。购买 TickFlow：{TICKFLOW_UPGRADE_URL}")
+        return {}
+    df_map, _ = fetch_all_ohlcv(
+        symbols=etf_symbols,
+        window=window,
+        batch_size=batch_size,
+        max_workers=4,
+        batch_timeout=120,
+        batch_sleep=1,
+        executor_mode="thread",
+    )
+    if not df_map:
+        print("[funnel] ETF 行情拉取失败，跳过板块增强")
+    return df_map
+
+
+def _build_etf_funnel_config(base_cfg: FunnelConfig) -> FunnelConfig:
+    """ETF 专属漏斗配置：波动率低，放宽触发门槛。"""
+    cfg = FunnelConfig(trading_days=base_cfg.trading_days)
+    cfg.require_cn_main_or_chinext = False
+    cfg.min_market_cap_yi = 0.0
+    cfg.min_avg_amount_wan = 50.0
+    cfg.enable_rs_filter = False
+    cfg.enable_rps_filter = False
+    cfg.enable_rs_divergence_channel = False
+    cfg.require_bench_latest_alignment = False
+    cfg.sos_pct_min = 3.5
+    cfg.sos_vol_ratio = 2.0
+    cfg.spring_vol_ratio = 1.0
+    cfg.evr_min_turnover = 0.3
+    cfg.evr_max_rise = 2.0
+    return cfg
+
+
+def _load_benchmark_indices(start_s: str, end_s: str):
+    """加载大盘和小盘基准指数，失败时优雅降级。"""
+    bench_df = smallcap_df = None
+    try:
+        bench_df = fetch_index_hist("000001", start_s, end_s)
+        print("[funnel] 大盘基准加载成功")
+    except Exception as e:
+        print(f"[funnel] 大盘基准加载失败: {e}")
+    try:
+        smallcap_df = fetch_index_hist(SMALLCAP_BENCH_CODE, start_s, end_s)
+        print(f"[funnel] 小盘基准加载成功: {SMALLCAP_BENCH_CODE}")
+    except Exception as e:
+        print(f"[funnel] 小盘基准加载失败 {SMALLCAP_BENCH_CODE}: {e}")
+    return bench_df, smallcap_df
+
+
+def _run_etf_enhancement(
+    base_cfg: FunnelConfig,
+    window,
+    bench_df: pd.DataFrame | None,
+    sector_map: dict[str, str],
+    all_df_map: dict[str, pd.DataFrame],
+) -> tuple[list[str], dict[str, str], dict[str, pd.DataFrame], list[str]]:
+    """加载 ETF 并跑 L1/L2，过 L2 的 ETF 注入 sector_map 和 all_df_map。"""
+    etf_symbols, etf_sector_map = _load_etf_universe()
+    etf_df_map = _fetch_etf_ohlcv(etf_symbols, window)
+    etf_l2_passed: list[str] = []
+    if etf_df_map:
+        etf_cfg = _build_etf_funnel_config(base_cfg)
+        etf_l1 = layer1_filter(list(etf_df_map.keys()), {}, {}, etf_df_map, etf_cfg)
+        if etf_l1:
+            etf_l2, _, _ = layer2_strength_detailed(
+                etf_l1,
+                etf_df_map,
+                bench_df,
+                etf_cfg,
+                rps_universe=etf_l1,
+            )
+            etf_l2_passed = etf_l2
+            sector_map.update(etf_sector_map)
+            all_df_map.update(etf_df_map)
+        print(f"[funnel] ETF板块增强: fetched={len(etf_df_map)}, L1={len(etf_l1)}, L2={len(etf_l2_passed)}")
+    else:
+        print("[funnel] ETF板块增强: 跳过")
+    return etf_symbols, etf_sector_map, etf_df_map, etf_l2_passed
+
+
+def _etf_metrics(syms, df_map, l2_passed, sector_map) -> dict:
+    return {
+        "pool": len(syms),
+        "fetched": len(df_map),
+        "l2_passed": len(l2_passed),
+        "boosted_sectors": sorted(set(sector_map.get(s, "") for s in l2_passed) - {""}),
+    }
+
+
 def run_funnel_job(
     include_debug_context: bool = False,
 ) -> tuple[dict[str, list[tuple[str, float]]], dict]:
@@ -336,20 +457,7 @@ def run_funnel_job(
         print(f"[funnel] 股票名称加载失败，降级为代码展示: {e}")
         name_map = {}
 
-    # 大盘基准
-    bench_df = None
-    smallcap_df = None
-    try:
-        bench_df = fetch_index_hist("000001", start_s, end_s)
-        print("[funnel] 大盘基准加载成功")
-    except Exception as e:
-        print(f"[funnel] 大盘基准加载失败: {e}")
-    try:
-        smallcap_df = fetch_index_hist(SMALLCAP_BENCH_CODE, start_s, end_s)
-        print(f"[funnel] 小盘基准加载成功: {SMALLCAP_BENCH_CODE}")
-    except Exception as e:
-        print(f"[funnel] 小盘基准加载失败 {SMALLCAP_BENCH_CODE}: {e}")
-    # 并发拉取日线（委托 tools/data_fetcher）
+    bench_df, smallcap_df = _load_benchmark_indices(start_s, end_s)
     all_df_map, fetch_stats = fetch_all_ohlcv(
         symbols=all_symbols,
         window=window,
@@ -369,7 +477,10 @@ def run_funnel_job(
         smallcap_df=smallcap_df,
     )
 
-    # Step 0: 大盘总闸 + 全市场广度 + 动态阈值
+    etf_symbols, etf_sector_map, etf_df_map, etf_l2_passed = _run_etf_enhancement(
+        cfg, window, bench_df, sector_map, all_df_map
+    )
+
     breadth_context = _calc_market_breadth(all_df_map, BREADTH_MA_WINDOW)
     benchmark_context = _analyze_benchmark_and_tune_cfg(
         bench_df,
@@ -390,15 +501,12 @@ def run_funnel_job(
         f"tuned={benchmark_context['tuned']}"
     )
 
-    # 统一漏斗计算：L1 -> L2 -> L3 -> L4
     print("[funnel] 开始执行全量漏斗筛选...")
     report_progress("漏斗筛选", "L1~L4 计算中", 0.85)
 
-    # Layer 1
     l1_input = list(all_df_map.keys())
     l1_passed = layer1_filter(l1_input, name_map, market_cap_map, all_df_map, cfg, financial_map=financial_map)
 
-    # Layer 2
     l2_passed, l2_channel_map, l2_pre_ignition = layer2_strength_detailed(
         l1_passed,
         all_df_map,
@@ -414,14 +522,16 @@ def run_funnel_job(
     l2_rs_div = sum(1 for v in l2_channel_map.values() if "暗中护盘" in v)
     l2_sos = sum(1 for v in l2_channel_map.values() if "点火破局" in v)
 
-    # Layer 3 (Sector Resonance)
-    l3_passed, top_sectors = layer3_sector_resonance(
-        l2_passed,
+    # Layer 3 (Sector Resonance) — ETF L2 结果注入板块热度
+    _etf_codes = set(etf_sector_map)
+    l3_raw, top_sectors = layer3_sector_resonance(
+        l2_passed + etf_l2_passed,
         sector_map,
         cfg,
-        base_symbols=l1_passed,
+        base_symbols=l1_passed + list(_etf_codes & set(etf_df_map)),
         df_map=all_df_map,
     )
+    l3_passed = [s for s in l3_raw if s not in _etf_codes]
     sector_rotation = analyze_sector_rotation(
         all_df_map,
         sector_map,
@@ -502,6 +612,7 @@ def run_funnel_job(
         "layer2_channel_map": l2_channel_map,
         "layer3": len(l3_passed),
         "top_sectors": top_sectors,
+        "etf_enhancement": _etf_metrics(etf_symbols, etf_df_map, etf_l2_passed, etf_sector_map),
         "sector_rotation": sector_rotation,
         "layer3_symbols": ranked_l3_symbols or l3_passed,
         "layer3_score_map": l3_score_map,

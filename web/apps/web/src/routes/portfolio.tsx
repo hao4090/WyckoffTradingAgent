@@ -153,6 +153,9 @@ function SummaryCard({ label, value, onClick }: { label: string; value: string; 
   return (
     <div
       onClick={onClick}
+      onKeyDown={onClick ? (e) => { if (e.key === 'Enter') onClick() } : undefined}
+      role={onClick ? 'button' : undefined}
+      tabIndex={onClick ? 0 : undefined}
       className={`rounded-lg border border-border p-4 ${onClick ? 'cursor-pointer hover:bg-muted/30' : ''}`}
     >
       <div className="text-xs text-muted-foreground">{label}</div>

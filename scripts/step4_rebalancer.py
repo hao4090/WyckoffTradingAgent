@@ -105,6 +105,7 @@ STEP4_MAX_NEW_BUYS_RISK_OFF = max(int(os.getenv("STEP4_MAX_NEW_BUYS_RISK_OFF", "
 BENCHMARK_REGIME_SEVERITY = {
     "RISK_ON": 0,
     "NEUTRAL": 1,
+    "PANIC_REPAIR": 2,
     "RISK_OFF": 3,
     "CRASH": 4,
     "BLACK_SWAN": 5,
@@ -1424,7 +1425,7 @@ def _max_new_buy_names(market_regime: str) -> int:
     regime = _clean_text(market_regime).upper() or "NEUTRAL"
     if regime == "RISK_ON":
         return STEP4_MAX_NEW_BUYS_RISK_ON
-    if regime == "CAUTION":
+    if regime in {"CAUTION", "PANIC_REPAIR"}:
         return STEP4_MAX_NEW_BUYS_CAUTION
     if regime == "RISK_OFF":
         return STEP4_MAX_NEW_BUYS_RISK_OFF

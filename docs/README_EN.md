@@ -240,7 +240,7 @@ Tool call order and frequency are decided by the LLM at runtime — no pre-chore
 | L1 | Garbage Filter | Remove ST / BSE / STAR Market; market cap >= 3.5 B CNY; avg daily turnover >= 50 M CNY |
 | L2 | Six-Channel Selection | Rally / Ignition / Stealth / Accumulation / Dry Volume / Support |
 | L3 | Sector Resonance | Top-N industry distribution filter |
-| L4 | Micro Triggers | Spring / LPS / SOS / EVR — four trigger signals |
+| L4 | Micro Triggers | Spring / LPS / SOS / EVR / Compression — five trigger signals |
 | L5 | AI Verdict | LLM three-camp classification: Logic Bankrupt / Reserve / Springboard |
 
 ## Daily Automation

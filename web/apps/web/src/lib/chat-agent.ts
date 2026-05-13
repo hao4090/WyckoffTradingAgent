@@ -24,7 +24,7 @@ const SYSTEM_PROMPT = `# 角色设定
 5. **尾盘记录** — query_tail_buy：查询尾盘买入记录
 6. **调仓方案** — plan_portfolio_update：生成调仓方案（不直接执行）
 11. **确认执行** — execute_portfolio_update：用户确认后执行调仓方案
-7. **个股诊断** — analyze_stock：对单只股票做威科夫深度诊断（K线+量价+阶段）
+7. **个股诊断** — analyze_stock：对单只股票做威科夫深度诊断（K线+量价+阶段，A股6位/美股AAPL.US/港股00700.HK）
 8. **漏斗选股** — screen_stocks：查看最新一期漏斗选股结果
 9. **AI 研报** — generate_ai_report：为指定股票生成威科夫深度研报
 10. **策略建议** — generate_strategy_decision：基于持仓+大盘给出操作建议
@@ -63,6 +63,7 @@ export interface ModelOption {
 }
 
 const RETIRED_PROVIDERS = new Set(['zhipu', 'minimax', 'qwen', 'volcengine'])
+const CHAT_STREAM_TIMEOUT_MS = 120_000
 
 export async function loadLLMConfig(userId: string): Promise<LLMConfig | null> {
   const { data } = await supabase
@@ -155,58 +156,59 @@ export async function loadAllModels(userId: string): Promise<ModelOption[]> {
 }
 
 
-const reasoningCache: string[] = []
-
-export function resetReasoningCache() {
-  reasoningCache.length = 0
+export function createReasoningCache(): string[] {
+  return []
 }
 
-const reasoningFetch: typeof globalThis.fetch = async (input, init) => {
-  if (init?.body && typeof init.body === 'string') {
-    try {
-      const body = JSON.parse(init.body)
-      if (Array.isArray(body.messages)) {
-        let idx = 0
-        for (const msg of body.messages) {
-          if (msg.role === 'assistant' && !msg.reasoning_content && idx < reasoningCache.length) {
-            msg.reasoning_content = reasoningCache[idx]
-          }
-          if (msg.role === 'assistant') idx++
-        }
-        init = { ...init, body: JSON.stringify(body) }
+function restoreReasoningMessages(init: RequestInit | undefined, cache: string[]): RequestInit | undefined {
+  if (!init?.body || typeof init.body !== 'string') return init
+  try {
+    const body = JSON.parse(init.body)
+    if (!Array.isArray(body.messages)) return init
+    let idx = 0
+    for (const msg of body.messages) {
+      if (msg.role === 'assistant' && !msg.reasoning_content && idx < cache.length) {
+        msg.reasoning_content = cache[idx]
       }
-    } catch {}
+      if (msg.role === 'assistant') idx++
+    }
+    return { ...init, body: JSON.stringify(body) }
+  } catch {
+    return init
   }
+}
 
-  const res = await globalThis.fetch(input, init)
+async function throwForApiError(res: Response): Promise<void> {
+  if (res.ok) return
+  const text = await res.clone().text().catch(() => '')
+  let msg = `API ${res.status}`
+  try {
+    const j = JSON.parse(text)
+    msg = j?.error?.message || j?.error || msg
+  } catch {}
+  throw new Error(msg)
+}
 
-  if (!res.ok) {
-    const text = await res.clone().text().catch(() => '')
-    let msg = `API ${res.status}`
-    try { const j = JSON.parse(text); msg = j?.error?.message || j?.error || msg } catch {}
-    throw new Error(msg)
-  }
-
-  const contentType = res.headers.get('content-type') || ''
-  if (!contentType.includes('text/event-stream') || !res.body) return res
-
+function wrapReasoningStream(res: Response, cache: string[]): Response {
+  if (!res.body) return res
   let reasoning = ''
-  const original = res.body
-  const transformed = original.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
-    transform(chunk, controller) {
-      controller.enqueue(chunk)
-      const text = new TextDecoder().decode(chunk)
-      for (const line of text.split('\n')) {
-        if (!line.startsWith('data: ') || line === 'data: [DONE]') continue
-        try {
-          const evt = JSON.parse(line.slice(6))
-          const rc = evt?.choices?.[0]?.delta?.reasoning_content
-          if (rc) reasoning += rc
-        } catch {}
-      }
-    },
-    flush() { if (reasoning) reasoningCache.push(reasoning) },
-  }))
+  const transformed = res.body.pipeThrough(
+    new TransformStream<Uint8Array, Uint8Array>({
+      transform(chunk, controller) {
+        controller.enqueue(chunk)
+        const text = new TextDecoder().decode(chunk)
+        for (const line of text.split('\n')) {
+          if (!line.startsWith('data: ') || line === 'data: [DONE]') continue
+          try {
+            const evt = JSON.parse(line.slice(6))
+            const rc = evt?.choices?.[0]?.delta?.reasoning_content
+            if (rc) reasoning += rc
+          } catch {}
+        }
+      },
+      flush() { if (reasoning) cache.push(reasoning) },
+    }),
+  )
 
   return new Response(transformed, {
     status: res.status,
@@ -215,18 +217,28 @@ const reasoningFetch: typeof globalThis.fetch = async (input, init) => {
   })
 }
 
-function createProxiedProvider(config: LLMConfig) {
+function buildReasoningFetch(cache: string[]): typeof globalThis.fetch {
+  return async (input, init) => {
+    const res = await globalThis.fetch(input, restoreReasoningMessages(init, cache))
+    await throwForApiError(res)
+    const contentType = res.headers.get('content-type') || ''
+    if (!contentType.includes('text/event-stream')) return res
+    return wrapReasoningStream(res, cache)
+  }
+}
+
+function createProxiedProvider(config: LLMConfig, reasoningCache: string[]) {
   return createOpenAI({
     apiKey: config.api_key,
     baseURL: '/api/llm-proxy',
     headers: { 'X-Target-URL': config.base_url },
-    fetch: reasoningFetch,
+    fetch: buildReasoningFetch(reasoningCache),
   })
 }
 
-function buildTools(userId: string, config: LLMConfig) {
+function buildTools(userId: string, config: LLMConfig, reasoningCache: string[]) {
   const deps: ToolDeps = { supabase, fetch: globalThis.fetch, generateText }
-  const model = createProxiedProvider(config).chat(config.model)
+  const model = createProxiedProvider(config, reasoningCache).chat(config.model)
   return {
     search_stock: tool({
       description: '搜索股票，支持代码或名称。返回匹配的股票列表及最新行情。',
@@ -298,7 +310,7 @@ function buildTools(userId: string, config: LLMConfig) {
     analyze_stock: tool({
       description: '对单只股票做威科夫深度诊断：K线走势、量价关系、均线形态、阶段判断。需要股票代码。',
       inputSchema: z.object({
-        code: z.string().describe('6位股票代码'),
+        code: z.string().describe('股票代码：A股6位数字；美股/港股使用 TickFlow 标准代码，如 AAPL.US / 00700.HK'),
         name: z.string().nullable().describe('股票名称'),
       }),
       execute: ({ code, name }) => execAnalyzeStock(deps, userId, config, model, code, name),
@@ -312,7 +324,7 @@ function buildTools(userId: string, config: LLMConfig) {
 
     generate_ai_report: tool({
       description: '为指定股票生成威科夫深度研报（AI分析），支持多只股票批量生成。',
-      inputSchema: z.object({ codes: z.array(z.string()).describe('股票代码数组，如 ["600519", "000858"]') }),
+      inputSchema: z.object({ codes: z.array(z.string()).describe('股票代码数组，如 ["600519", "AAPL.US", "00700.HK"]') }),
       execute: ({ codes }) => execGenerateAiReport(deps, userId, config, model, codes),
     }),
 
@@ -338,57 +350,70 @@ export interface StreamCallbacks {
   onError: (error: Error) => void
 }
 
-export async function runChatAgentStream(
+export function runChatAgentStream(
   config: LLMConfig,
   userId: string,
   messages: { role: 'user' | 'assistant'; content: string }[],
   callbacks: StreamCallbacks,
-): Promise<void> {
-  const provider = createProxiedProvider(config)
+  reasoningCache: string[],
+): AbortController {
+  const provider = createProxiedProvider(config, reasoningCache)
 
-  const tools = buildTools(userId, config)
+  const tools = buildTools(userId, config, reasoningCache)
   const steps: StepInfo[] = []
 
   const abort = new AbortController()
-  const timer = setTimeout(() => abort.abort(), 120_000)
+  let timedOut = false
+  const timer = setTimeout(() => {
+    timedOut = true
+    abort.abort()
+  }, CHAT_STREAM_TIMEOUT_MS)
 
-  try {
-    const result = streamText({
-      model: provider.chat(config.model),
-      system: SYSTEM_PROMPT,
-      messages,
-      tools,
-      stopWhen: stepCountIs(10),
-      abortSignal: abort.signal,
-    })
+  void (async () => {
+    try {
+      const result = streamText({
+        model: provider.chat(config.model),
+        system: SYSTEM_PROMPT,
+        messages,
+        tools,
+        stopWhen: stepCountIs(10),
+        abortSignal: abort.signal,
+      })
 
-    let finalText = ''
-    for await (const event of result.fullStream) {
-      switch (event.type) {
-        case 'text-delta':
-          finalText += event.text
-          callbacks.onTextDelta(event.text)
-          break
-        case 'tool-call': {
-          const step: StepInfo = { type: 'tool_call', toolName: event.toolName }
-          steps.push(step)
-          callbacks.onStep(step)
-          break
+      let finalText = ''
+      for await (const event of result.fullStream) {
+        switch (event.type) {
+          case 'text-delta':
+            finalText += event.text
+            callbacks.onTextDelta(event.text)
+            break
+          case 'tool-call': {
+            const step: StepInfo = { type: 'tool_call', toolName: event.toolName }
+            steps.push(step)
+            callbacks.onStep(step)
+            break
+          }
+          case 'tool-result': {
+            const s = steps.findLast(s => s.toolName === event.toolName)
+            if (s) s.toolResult = typeof event.output === 'string' ? event.output : JSON.stringify(event.output)
+            break
+          }
+          case 'error':
+            throw event.error
         }
-        case 'tool-result': {
-          const s = steps.findLast(s => s.toolName === event.toolName)
-          if (s) s.toolResult = typeof event.output === 'string' ? event.output : JSON.stringify(event.output)
-          break
-        }
-        case 'error':
-          throw event.error
       }
-    }
 
-    clearTimeout(timer)
-    callbacks.onFinish(finalText, steps)
-  } catch (err) {
-    clearTimeout(timer)
-    callbacks.onError(err instanceof Error ? err : new Error(String(err)))
-  }
+      callbacks.onFinish(finalText, steps)
+    } catch (err) {
+      if (timedOut) {
+        callbacks.onError(new Error('请求超过 120 秒已自动停止，请缩短问题或稍后重试。'))
+      } else if (!abort.signal.aborted) {
+        callbacks.onError(err instanceof Error ? err : new Error(String(err)))
+      }
+    } finally {
+      clearTimeout(timer)
+    }
+  })()
+
+  return abort
 }

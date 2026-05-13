@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { ExternalLink } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/auth'
@@ -26,11 +26,14 @@ export function SettingsPage() {
   const [saving, setSaving] = useState(false)
   const [toast, setToast] = useState('')
   const [toastKind, setToastKind] = useState<'success' | 'error'>('success')
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined)
 
   useEffect(() => {
     if (!user) return
     loadSettings()
   }, [user])
+
+  useEffect(() => () => clearTimeout(toastTimerRef.current), [])
 
   async function loadSettings() {
     const { data } = await supabase
@@ -131,7 +134,8 @@ export function SettingsPage() {
     setSaving(false)
     setToastKind(error ? 'error' : 'success')
     setToast(error ? t('settings.saveFailed', { message: error.message }) : t('settings.saved'))
-    setTimeout(() => setToast(''), 3000)
+    clearTimeout(toastTimerRef.current)
+    toastTimerRef.current = setTimeout(() => setToast(''), 3000)
   }
 
   return (
@@ -145,7 +149,6 @@ export function SettingsPage() {
         </div>
       )}
 
-      {/* Account */}
       {user && (
         <section className="mb-8">
           <h2 className="mb-3 text-sm font-medium text-muted-foreground">{t('settings.account')}</h2>
@@ -162,7 +165,6 @@ export function SettingsPage() {
         </section>
       )}
 
-      {/* Data Sources */}
       <section className="mb-8">
         <h2 className="mb-3 text-sm font-medium text-muted-foreground">{t('settings.dataSources')}</h2>
         <div className="space-y-3">
@@ -182,7 +184,6 @@ export function SettingsPage() {
         </div>
       </section>
 
-      {/* LLM Providers */}
       <section className="mb-8">
         <h2 className="mb-3 text-sm font-medium text-muted-foreground">{t('settings.modelConfig')}</h2>
         <div className="mb-4 rounded-lg border border-indigo-200 bg-indigo-50/60 px-3 py-2 text-xs text-indigo-800 dark:border-indigo-500/30 dark:bg-indigo-500/10 dark:text-indigo-200">
@@ -256,7 +257,6 @@ export function SettingsPage() {
         </div>
       </section>
 
-      {/* Notifications */}
       <section className="mb-8">
         <h2 className="mb-3 text-sm font-medium text-muted-foreground">{t('settings.notifications')}</h2>
         <div className="space-y-3">

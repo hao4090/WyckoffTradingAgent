@@ -274,7 +274,7 @@ def _daily_return_mdd_pct(daily_return: pd.DataFrame | None) -> float | None:
     ret = pd.to_numeric(daily_return["total"], errors="coerce").dropna()
     if ret.empty:
         return None
-    nav = (1.0 + ret).cumprod()
+    nav = 1.0 + ret.cumsum()
     nav = pd.concat([pd.Series([1.0]), nav], ignore_index=True)
     peak = nav.cummax()
     drawdown = nav / peak - 1.0

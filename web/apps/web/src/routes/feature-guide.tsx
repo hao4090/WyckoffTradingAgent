@@ -1,4 +1,4 @@
-import { BarChart3, Bot, Briefcase, Download, Filter, MessageSquare, Moon, RadioTower, Settings, TrendingUp, type LucideIcon } from 'lucide-react'
+import { BarChart3, Bot, Briefcase, Download, MessageSquare, Moon, RadioTower, Settings, TrendingUp, type LucideIcon } from 'lucide-react'
 import { usePreferences, type TranslationKey } from '@/lib/preferences'
 
 const workflows = [
@@ -11,11 +11,6 @@ const workflows = [
     icon: BarChart3,
     titleKey: 'guide.workflow.analysis.title',
     descKey: 'guide.workflow.analysis.desc',
-  },
-  {
-    icon: Filter,
-    titleKey: 'guide.workflow.screener.title',
-    descKey: 'guide.workflow.screener.desc',
   },
   {
     icon: Briefcase,
@@ -82,7 +77,7 @@ export function FeatureGuidePage() {
             <p className="mt-1 text-sm text-muted-foreground">{t('guide.coreDesc')}</p>
           </div>
         </div>
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <div className="grid gap-4 md:grid-cols-3">
           {workflows.map(({ icon: Icon, titleKey, descKey }) => (
             <article key={titleKey} className="rounded-lg border border-border bg-background p-4 shadow-sm shadow-primary/5">
               <Icon className="mb-3 text-primary" size={20} />

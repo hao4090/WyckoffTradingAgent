@@ -66,8 +66,8 @@ export function TailBuyPage() {
                 </tr>
               </thead>
               <tbody>
-                {data.map((r, i) => (
-                  <tr key={`${r.code}-${r.run_date}-${i}`} className="border-t border-border hover:bg-muted/20">
+                {data.map((r) => (
+                  <tr key={`${r.code}-${r.run_date}`} className="border-t border-border hover:bg-muted/20">
                     <td className="px-3 py-2 font-mono">{String(r.code).padStart(6, '0')}</td>
                     <td className="px-3 py-2">{r.name}</td>
                     <td className="px-3 py-2 text-right text-muted-foreground">{r.run_date}</td>

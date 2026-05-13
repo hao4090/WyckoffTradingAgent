@@ -240,7 +240,7 @@ El orden y la frecuencia de las llamadas los decide el LLM en tiempo real, sin o
 | L1 | Eliminar basura | Excluye ST / BSE / STAR Market; capitalizacion >= 3 500 M CNY; volumen diario >= 50 M CNY |
 | L2 | Seleccion de 6 canales | Impulso / Ignicion / Latente / Acumulacion / Volumen minimo / Soporte |
 | L3 | Resonancia sectorial | Filtro por distribucion Top-N de sectores |
-| L4 | Micro-disparo | Cuatro senales clave: Spring / LPS / SOS / EVR |
+| L4 | Micro-disparo | Cinco senales clave: Spring / LPS / SOS / EVR / Compression |
 | L5 | Juicio IA | Clasificacion LLM en 3 campamentos: Logica rota / Reserva / Plataforma de despegue |
 
 ## Automatizacion diaria

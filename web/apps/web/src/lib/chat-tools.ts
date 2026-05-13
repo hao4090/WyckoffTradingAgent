@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { generateText as GenerateTextFn } from 'ai'
+import { isCnSymbol, normalizeTickFlowSymbol } from './kline'
 
 export interface KlineRow {
   date: string
@@ -130,13 +131,6 @@ async function fetchKlineViaTushare(deps: ToolDeps, code: string, token: string,
   }).filter((d): d is KlineRow => d !== null && d.date !== '' && d.close > 0)
 }
 
-function normalizeTickFlowSymbol(code: string): string {
-  const c = code.replace(/\.\w+$/, '')
-  if (c.startsWith('0') || c.startsWith('2') || c.startsWith('3')) return `${c}.SZ`
-  if (c.startsWith('4') || c.startsWith('8') || c.startsWith('9')) return `${c}.BJ`
-  return `${c}.SH`
-}
-
 function parseKlineRows(rows: unknown[]): KlineRow[] {
   return (rows as Record<string, unknown>[]).map(r => ({
     date: String(r.date || r.trade_date || '').replace(/(\d{4})(\d{2})(\d{2})/, '$1-$2-$3'),
@@ -198,14 +192,15 @@ export async function fetchKlineForAgent(deps: ToolDeps, code: string, keys: { t
   const end = new Date(); end.setDate(end.getDate() - 1)
   const start = new Date(); start.setDate(start.getDate() - 500)
   const fmt = (d: Date) => d.toISOString().slice(0, 10).replace(/-/g, '')
+  const isCn = isCnSymbol(code)
 
   if (keys.tickflow) {
     try { const r = await fetchKlineViaTickFlow(deps, code, keys.tickflow); if (r.length) return r } catch { /* */ }
   }
-  if (keys.tushare) {
+  if (isCn && keys.tushare) {
     try { const r = await fetchKlineViaTushare(deps, code, keys.tushare, fmt(start), fmt(end)); if (r.length) return r.sort((a, b) => a.date.localeCompare(b.date)) } catch { /* */ }
   }
-  if (!(await checkWhitelist(deps, userId))) return []
+  if (!isCn || !(await checkWhitelist(deps, userId))) return []
   const toIso = (s: string) => `${s.slice(0, 4)}-${s.slice(4, 6)}-${s.slice(6, 8)}`
   return fetchKlineFromCache(deps, code, toIso(fmt(start)), toIso(fmt(end)))
 }
@@ -473,7 +468,7 @@ export async function execAnalyzeStock(
   const keys = await fetchUserDataKeys(deps, userId)
   const kline = await fetchKlineForAgent(deps, code, keys, userId)
   if (kline.length === 0) {
-    return `无法获取 ${code} ${name || ''} 的K线数据。推荐购买 TickFlow 获取实时行情：https://tickflow.org/auth/register?ref=5N4NKTCPL4`
+    return `无法获取 ${code} ${name || ''} 的K线数据。美股/港股请使用 TickFlow 标准代码（如 AAPL.US / 00700.HK）。推荐购买 TickFlow 获取实时行情：https://tickflow.org/auth/register?ref=5N4NKTCPL4`
   }
 
   const digest = buildKlineDigest(kline)
@@ -503,7 +498,7 @@ export async function execGenerateAiReport(
   for (const code of codes.slice(0, 3)) {
     const kline = await fetchKlineForAgent(deps, code, keys, userId)
     if (kline.length === 0) {
-      results.push(`## ${code}\n无法获取K线数据\n`)
+      results.push(`## ${code}\n无法获取K线数据。美股/港股请使用 TickFlow 标准代码（如 AAPL.US / 00700.HK）。\n`)
       continue
     }
     const digest = buildKlineDigest(kline)

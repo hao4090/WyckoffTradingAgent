@@ -145,6 +145,33 @@ def _summarize_tool_result(name: str, content: str, max_len: int = 400) -> str:
     return content[:max_len] + "…"
 
 
+SHRINK_THRESHOLD = 800
+
+
+def shrink_stale_tool_results(messages: list[dict[str, Any]]) -> int:
+    """就地压缩旧轮次的大 tool result，保留最新一轮完整结果。
+
+    返回压缩掉的字符数。只影响 messages in-memory，scratchpad 原始记录不变。
+    """
+    boundary = 0
+    for i in range(len(messages) - 1, -1, -1):
+        if messages[i].get("role") == "assistant":
+            boundary = i
+            break
+    saved = 0
+    for i in range(boundary):
+        m = messages[i]
+        if m.get("role") != "tool":
+            continue
+        content = m.get("content", "")
+        if len(content) <= SHRINK_THRESHOLD:
+            continue
+        shrunk = _summarize_tool_result(m.get("name", ""), content, max_len=600)
+        saved += len(content) - len(shrunk)
+        m["content"] = shrunk
+    return saved
+
+
 def serialize_messages_for_compaction(messages: list[dict[str, Any]]) -> str:
     """将消息序列化为压缩输入，工具结果做智能摘要而非粗暴截断。"""
     lines: list[str] = []

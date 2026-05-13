@@ -240,7 +240,7 @@ Streamlit：**[wyckoff-analysis-youngcanphoenix.streamlit.app](https://wyckoff-a
 | L1 | ゴミ除去 | ST / BSE / STAR Market を除外、時価総額 >= 35億元、日次平均出来高 >= 5,000万元 |
 | L2 | 6チャネル選別 | 主要上昇 / 点火 / 潜伏 / アキュムレーション / 閑散出来高 / 支持 |
 | L3 | セクター共鳴 | 業種 Top-N 分布フィルター |
-| L4 | ミクロ狙撃 | Spring / LPS / SOS / EVR の4大トリガーシグナル |
+| L4 | ミクロ狙撃 | Spring / LPS / SOS / EVR / Compression の5大トリガーシグナル |
 | L5 | AI 審判 | LLM による3陣営分類：ロジック破綻 / 備蓄 / 発射台 |
 
 ## 日次自動化

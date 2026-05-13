@@ -22,6 +22,7 @@ TRIGGER_LABELS = {
     "spring": "Spring（终极震仓）",
     "lps": "LPS（缩量回踩）",
     "evr": "Effort vs Result（放量不跌）",
+    "compression": "Compression（压缩蓄势）",
 }
 STATE_KEY = "funnel_background_job"
 
