@@ -550,8 +550,6 @@ def layer2_strength_detailed(
 
             # 线性回归斜率：判断累计涨幅曲线是否在爬升
             if len(recent_closes) >= 2:
-                import numpy as np
-
                 base_price = recent_closes[0]
                 if base_price > 0:
                     cum_returns = [(p - base_price) / base_price * 100.0 for p in recent_closes]
