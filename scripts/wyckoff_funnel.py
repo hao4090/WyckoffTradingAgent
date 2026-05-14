@@ -294,7 +294,13 @@ def _load_etf_universe() -> tuple[list[str], dict[str, str]]:
     return codes, sector_map
 
 
-def _fetch_etf_ohlcv(etf_symbols: list[str], window, *, batch_size: int = 50) -> dict[str, pd.DataFrame]:
+def _fetch_etf_ohlcv(
+    etf_symbols: list[str],
+    window,
+    *,
+    batch_size: int = 50,
+    direct_source: bool = False,
+) -> dict[str, pd.DataFrame]:
     """拉取 ETF 行情，无数据源时优雅降级。"""
     if not etf_symbols:
         return {}
@@ -311,6 +317,7 @@ def _fetch_etf_ohlcv(etf_symbols: list[str], window, *, batch_size: int = 50) ->
         batch_timeout=120,
         batch_sleep=1,
         executor_mode="thread",
+        direct_source=direct_source,
     )
     if not df_map:
         print("[funnel] ETF 行情拉取失败，跳过板块增强")
@@ -424,10 +431,12 @@ def _run_etf_enhancement(
     bench_df: pd.DataFrame | None,
     sector_map: dict[str, str],
     all_df_map: dict[str, pd.DataFrame],
+    *,
+    direct_source: bool = False,
 ) -> tuple[list[str], dict[str, str], dict[str, pd.DataFrame], list[str], list[dict]]:
     """加载 ETF 并跑 L1/L2，过 L2 的 ETF 注入 sector_map 和 all_df_map。"""
     etf_symbols, etf_sector_map = _load_etf_universe()
-    etf_df_map = _fetch_etf_ohlcv(etf_symbols, window)
+    etf_df_map = _fetch_etf_ohlcv(etf_symbols, window, direct_source=direct_source)
     etf_l2_passed: list[str] = []
     etf_candidates: list[dict] = []
     if etf_df_map:
@@ -506,6 +515,7 @@ def _append_etf_section(lines: list[str], etf_metrics: dict, etf_candidates: lis
 
 def run_funnel_job(
     include_debug_context: bool = False,
+    direct_source: bool = False,
 ) -> tuple[dict[str, list[tuple[str, float]]], dict]:
     """执行 Wyckoff Funnel，返回 (triggers, metrics)。"""
     cfg = FunnelConfig(trading_days=TRADING_DAYS)
@@ -586,6 +596,7 @@ def run_funnel_job(
         batch_timeout=BATCH_TIMEOUT,
         batch_sleep=BATCH_SLEEP,
         executor_mode=EXECUTOR_MODE,
+        direct_source=direct_source,
     )
     snapshot_dir = _dump_full_fetch_snapshot(
         df_map=all_df_map,
@@ -597,7 +608,7 @@ def run_funnel_job(
     )
 
     etf_symbols, etf_sector_map, etf_df_map, etf_l2_passed, etf_candidates = _run_etf_enhancement(
-        cfg, window, bench_df, sector_map, all_df_map
+        cfg, window, bench_df, sector_map, all_df_map, direct_source=direct_source
     )
 
     breadth_context = _calc_market_breadth(all_df_map, BREADTH_MA_WINDOW)

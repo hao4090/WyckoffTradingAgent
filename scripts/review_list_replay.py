@@ -215,6 +215,7 @@ def _load_today_review_codes(all_codes: list[str], name_map_today: dict[str, str
         symbols=all_codes,
         window=today_window,
         enforce_target_trade_date=True,
+        direct_source=True,
     )
     print(
         "[review] 今日数据拉取完成: "
@@ -465,7 +466,7 @@ def main() -> int:
     os.environ["END_CALENDAR_DAY"] = previous_trade_date.strftime("%Y-%m-%d")
 
     try:
-        triggers, metrics = run_funnel_job(include_debug_context=True)
+        triggers, metrics = run_funnel_job(include_debug_context=True, direct_source=True)
     finally:
         if original_end_day:
             os.environ["END_CALENDAR_DAY"] = original_end_day
