@@ -30,7 +30,7 @@ with st.sidebar:
     st.divider()
 
     # ── 读盘室供应商快捷切换 ──
-    from integrations.llm_client import PROVIDER_LABELS, SUPPORTED_PROVIDERS
+    from integrations._llm_types import PROVIDER_LABELS, SUPPORTED_PROVIDERS
 
     st.session_state.setdefault("chat_provider", "gemini")
     _current_provider = st.session_state.get("chat_provider", "gemini")
@@ -112,7 +112,7 @@ def _get_chat_config() -> tuple[str, str, str, str]:
         )
     else:
         # 非 Gemini：读对应 provider 的 key/model/base_url
-        from integrations.llm_client import OPENAI_COMPATIBLE_BASE_URLS
+        from integrations._llm_types import OPENAI_COMPATIBLE_BASE_URLS
 
         key_prefix = provider.lower()
         env_prefix = key_prefix.upper()
@@ -279,7 +279,7 @@ def _inject_chat_css() -> None:
 
 
 def _render_header_card(provider: str, model: str) -> None:
-    from integrations.llm_client import PROVIDER_LABELS
+    from integrations._llm_types import PROVIDER_LABELS
 
     provider_label = PROVIDER_LABELS.get(provider, provider)
     model_text = (model or "gemini-2.0-flash").strip()

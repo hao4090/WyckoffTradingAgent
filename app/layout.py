@@ -4,7 +4,7 @@ import streamlit as st
 
 from app.auth_component import check_auth, login_form
 from core.token_storage import ensure_query_params_synced, restore_tokens_from_storage
-from integrations.llm_client import DEFAULT_GEMINI_MODEL, OPENAI_COMPATIBLE_BASE_URLS
+from integrations._llm_types import DEFAULT_GEMINI_MODEL, OPENAI_COMPATIBLE_BASE_URLS
 from integrations.supabase_market_signal import compose_market_banner, load_latest_market_signal_daily
 
 

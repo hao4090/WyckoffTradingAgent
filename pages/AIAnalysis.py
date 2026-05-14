@@ -5,13 +5,13 @@ import streamlit as st
 from app.layout import setup_page
 from app.navigation import show_right_nav
 from app.single_stock_logic import render_single_stock_page
-from integrations.llm_client import (
+from integrations._llm_types import (
     GEMINI_MODELS,
     OPENAI_COMPATIBLE_BASE_URLS,
     PROVIDER_LABELS,
     SUPPORTED_PROVIDERS,
-    get_provider_credentials,
 )
+from integrations.llm_client import get_provider_credentials
 
 _get_provider_credentials = get_provider_credentials
 

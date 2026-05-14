@@ -39,8 +39,9 @@ from core.tail_buy_strategy import (
     score_tail_features,
     select_llm_overlay_candidates,
 )
+from integrations._llm_types import DEFAULT_GEMINI_MODEL, OPENAI_COMPATIBLE_BASE_URLS
 from integrations.fetch_a_share_csv import _resolve_trading_window
-from integrations.llm_client import DEFAULT_GEMINI_MODEL, OPENAI_COMPATIBLE_BASE_URLS, call_llm
+from integrations.llm_client import call_llm
 from integrations.supabase_base import create_admin_client, is_admin_configured
 from integrations.supabase_market_signal import (
     load_latest_market_signal_daily,

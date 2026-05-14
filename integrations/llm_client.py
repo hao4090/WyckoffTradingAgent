@@ -14,60 +14,17 @@ import logging
 import os
 import time
 
+from integrations._llm_types import (
+    DEFAULT_GEMINI_MODEL,
+    OPENAI_COMPATIBLE_BASE_URLS,
+    SUPPORTED_PROVIDERS,
+)
+
 logger = logging.getLogger(__name__)
 
-# 多厂商：Gemini + OpenAI 兼容（OpenAI/智谱/Minimax/DeepSeek/Qwen/火山引擎）
-SUPPORTED_PROVIDERS = (
-    "1route",
-    "gemini",
-    "openai",
-    "longcat",
-    "efficiency",
-    "openai_compatible",
-    "zhipu",
-    "minimax",
-    "deepseek",
-    "qwen",
-    "volcengine",
-)
-# OpenAI 兼容接口的默认 base_url（可被调用方 base_url 覆盖）
-OPENAI_COMPATIBLE_BASE_URLS = {
-    "1route": "https://www.1route.dev/v1",
-    "openai": "https://api.openai.com/v1",
-    "longcat": "https://api.longcat.chat/openai",
-    "efficiency": "",
-    "openai_compatible": "",
-    "zhipu": "https://open.bigmodel.cn/api/paas/v4",
-    "minimax": "https://api.minimax.chat/v1",
-    "deepseek": "https://api.deepseek.com/v1",
-    "qwen": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-    "volcengine": "https://ark.cn-beijing.volces.com/api/v3",
-}
-DEFAULT_GEMINI_MODEL = "gemini-3.1-flash-lite-preview"
-GEMINI_MODELS = (
-    DEFAULT_GEMINI_MODEL,
-    "gemini-2.5-flash-lite",
-    "gemini-3-pro-preview",
-    "gemini-3-flash-preview",
-)
 GEMINI_MAX_OUTPUT_TOKENS_DEFAULT = 32768
 GEMINI_MAX_RETRIES = 3
 GEMINI_RETRY_DELAY = 2.0
-
-# 供应商展示名（供 UI selectbox 的 format_func 使用）
-PROVIDER_LABELS: dict[str, str] = {
-    "1route": "1Route（推荐）",
-    "gemini": "Gemini",
-    "openai": "OpenAI",
-    "longcat": "LongCat",
-    "efficiency": "Efficiency（OpenAI兼容）",
-    "openai_compatible": "OpenAI兼容",
-    "zhipu": "智谱",
-    "minimax": "Minimax",
-    "deepseek": "DeepSeek",
-    "qwen": "Qwen",
-    "volcengine": "火山引擎",
-}
 
 
 def get_provider_credentials(provider: str) -> tuple[str, str, str]:
