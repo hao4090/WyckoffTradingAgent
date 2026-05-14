@@ -205,6 +205,49 @@ class TestDataFetcher:
 
         assert result is None
 
+    def test_fetch_hist_direct_source_bypasses_cached_repository(self, monkeypatch):
+        import integrations.data_source as data_source
+        import integrations.fetch_a_share_csv as fetch_csv
+        import tools.data_fetcher as dfetcher
+
+        calls: list[dict] = []
+
+        def fake_source(**kwargs):
+            calls.append(kwargs)
+            return pd.DataFrame(
+                {
+                    "日期": ["2026-05-12", "2026-05-13"],
+                    "开盘": [10.0, 10.5],
+                    "最高": [10.2, 10.8],
+                    "最低": [9.9, 10.4],
+                    "收盘": [10.1, 10.7],
+                    "成交量": [1000, 1200],
+                    "成交额": [10100, 12840],
+                    "涨跌幅": [0.0, 5.94],
+                    "换手率": [pd.NA, pd.NA],
+                    "振幅": [pd.NA, pd.NA],
+                }
+            )
+
+        def cached_fetch(**kwargs):
+            raise AssertionError(f"should bypass cached repository: {kwargs}")
+
+        monkeypatch.setattr(data_source, "fetch_stock_hist", fake_source)
+        monkeypatch.setattr(fetch_csv, "_fetch_hist", cached_fetch)
+        window = SimpleNamespace(start_trade_date=date(2026, 5, 12), end_trade_date=date(2026, 5, 13))
+
+        result = dfetcher._fetch_hist("000001", window, "qfq", direct_source=True)
+
+        assert result["close"].tolist() == [10.1, 10.7]
+        assert calls == [
+            {
+                "symbol": "000001",
+                "start": date(2026, 5, 12),
+                "end": date(2026, 5, 13),
+                "adjust": "qfq",
+            }
+        ]
+
 
 # ── tools/symbol_pool ──
 

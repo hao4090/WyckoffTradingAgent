@@ -55,28 +55,38 @@ def _normalize_hist(df: pd.DataFrame) -> pd.DataFrame:
     return normalize_hist_from_fetch(df)
 
 
-def _fetch_hist(symbol: str, window, adjust: str) -> pd.DataFrame:
-    from integrations.fetch_a_share_csv import _fetch_hist as _fh
+def _fetch_hist(symbol: str, window, adjust: str, *, direct_source: bool = False) -> pd.DataFrame:
+    if direct_source:
+        from integrations.data_source import fetch_stock_hist
 
-    df = _fh(symbol=symbol, window=window, adjust=adjust)
+        df = fetch_stock_hist(
+            symbol=symbol,
+            start=window.start_trade_date,
+            end=window.end_trade_date,
+            adjust=adjust,
+        )
+    else:
+        from integrations.fetch_a_share_csv import _fetch_hist as _fh
+
+        df = _fh(symbol=symbol, window=window, adjust=adjust)
     return _normalize_hist(df)
 
 
-def _run_with_timeout(sym: str, window, timeout_s: int) -> pd.DataFrame:
+def _run_with_timeout(sym: str, window, timeout_s: int, *, direct_source: bool = False) -> pd.DataFrame:
     """
     在 worker 进程内给单票请求加硬超时（Unix 下用 SIGALRM）。
     若平台不支持 SIGALRM（例如 Windows），则退化为直接调用。
     """
     if timeout_s <= 0:
-        return _fetch_hist(sym, window, "qfq")
+        return _fetch_hist(sym, window, "qfq", direct_source=direct_source)
 
     try:
         import signal
     except Exception:
-        return _fetch_hist(sym, window, "qfq")
+        return _fetch_hist(sym, window, "qfq", direct_source=direct_source)
 
     if not hasattr(signal, "SIGALRM"):
-        return _fetch_hist(sym, window, "qfq")
+        return _fetch_hist(sym, window, "qfq", direct_source=direct_source)
 
     def _alarm_handler(signum, frame):  # pragma: no cover - signal handler
         raise TimeoutError(f"single fetch timeout>{timeout_s}s")
@@ -84,18 +94,23 @@ def _run_with_timeout(sym: str, window, timeout_s: int) -> pd.DataFrame:
     old = signal.signal(signal.SIGALRM, _alarm_handler)
     signal.alarm(timeout_s)
     try:
-        return _fetch_hist(sym, window, "qfq")
+        return _fetch_hist(sym, window, "qfq", direct_source=direct_source)
     finally:
         signal.alarm(0)
         signal.signal(signal.SIGALRM, old)
 
 
-def fetch_one_with_retry(sym: str, window, max_retries: int = MAX_RETRIES) -> tuple[str, pd.DataFrame | None]:
+def fetch_one_with_retry(
+    sym: str,
+    window,
+    max_retries: int = MAX_RETRIES,
+    direct_source: bool = False,
+) -> tuple[str, pd.DataFrame | None]:
     """在子进程中执行，单票硬超时 + 重试，避免个别数据源卡死拖慢整批。"""
     socket.setdefaulttimeout(SOCKET_TIMEOUT)
     for attempt in range(max_retries):
         try:
-            df = _run_with_timeout(sym, window, FETCH_TIMEOUT)
+            df = _run_with_timeout(sym, window, FETCH_TIMEOUT, direct_source=direct_source)
             return (sym, df)
         except Exception:
             if attempt < max_retries - 1:
@@ -104,13 +119,18 @@ def fetch_one_with_retry(sym: str, window, max_retries: int = MAX_RETRIES) -> tu
     return (sym, None)
 
 
-def fetch_one_with_retry_thread(sym: str, window, max_retries: int = MAX_RETRIES) -> tuple[str, pd.DataFrame | None]:
+def fetch_one_with_retry_thread(
+    sym: str,
+    window,
+    max_retries: int = MAX_RETRIES,
+    direct_source: bool = False,
+) -> tuple[str, pd.DataFrame | None]:
     """
     线程模式：避免 signal，依赖数据源请求超时与重试。
     """
     for attempt in range(max_retries):
         try:
-            df = _fetch_hist(sym, window, "qfq")
+            df = _fetch_hist(sym, window, "qfq", direct_source=direct_source)
             return (sym, df)
         except Exception:
             if attempt < max_retries - 1:
@@ -399,6 +419,7 @@ def fetch_all_ohlcv(
     batch_timeout: int = BATCH_TIMEOUT,
     batch_sleep: float = BATCH_SLEEP,
     executor_mode: str = EXECUTOR_MODE,
+    direct_source: bool = False,
 ) -> tuple[dict[str, pd.DataFrame], dict[str, int]]:
     """批量拉取 OHLCV，TickFlow 可用时先走批量接口，否则退回并行单票链路。"""
     batch_result = _fetch_all_ohlcv_tickflow_batch(symbols, window, enforce_target_trade_date, batch_size, batch_sleep)
@@ -434,7 +455,7 @@ def fetch_all_ohlcv(
             ProcessPoolExecutor(max_workers=max_workers) if use_process else ThreadPoolExecutor(max_workers=max_workers)
         )
         fetch_fn = fetch_one_with_retry if use_process else fetch_one_with_retry_thread
-        futures = {ex.submit(fetch_fn, s, window): s for s in batch}
+        futures = {ex.submit(fetch_fn, s, window, MAX_RETRIES, direct_source): s for s in batch}
         try:
             for f in as_completed(futures, timeout=batch_timeout):
                 sym = futures[f]
