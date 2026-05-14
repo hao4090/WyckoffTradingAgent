@@ -22,6 +22,7 @@ const ALLOWED_TARGET_ORIGINS = new Set([
 ])
 
 const JSON_CONTENT_RE = /\bapplication\/json\b/i
+const SSE_CONTENT_RE = /\btext\/event-stream\b/i
 
 function normalizeTargetUrl(raw: string): URL | null {
   try {
@@ -43,6 +44,10 @@ function isOneRouteChatCompletion(targetUrl: URL, proxyPath: string): boolean {
   return targetUrl.origin === 'https://www.1route.dev' && proxyPath.endsWith('/chat/completions')
 }
 
+function isGeminiChatCompletion(targetUrl: URL, proxyPath: string): boolean {
+  return targetUrl.origin === 'https://generativelanguage.googleapis.com' && proxyPath.endsWith('/chat/completions')
+}
+
 function buildOneRouteChatBody(body: ArrayBuffer, contentType: string): BodyInit {
   if (!JSON_CONTENT_RE.test(contentType) || body.byteLength === 0) return body
 
@@ -62,6 +67,68 @@ function buildOneRouteChatBody(body: ArrayBuffer, contentType: string): BodyInit
   } catch {
     return body
   }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+}
+
+function normalizeGeminiChunk(payload: unknown): unknown {
+  if (!isRecord(payload) || !Array.isArray(payload.choices)) return payload
+
+  payload.choices = payload.choices.map((choice, choiceIndex) => {
+    if (!isRecord(choice)) return choice
+    if (typeof choice.index !== 'number') choice.index = choiceIndex
+    if (!isRecord(choice.delta) || !Array.isArray(choice.delta.tool_calls)) return choice
+
+    choice.delta.tool_calls = choice.delta.tool_calls.map((toolCall, toolCallIndex) => {
+      if (!isRecord(toolCall)) return toolCall
+      const normalized = { ...toolCall }
+      if (typeof normalized.index !== 'number') normalized.index = toolCallIndex
+      delete normalized.extra_content
+      return normalized
+    })
+    return choice
+  })
+
+  return payload
+}
+
+function normalizeGeminiSseLine(line: string): string {
+  if (!line.startsWith('data: ')) return line
+  const data = line.slice(6).trim()
+  if (!data || data === '[DONE]') return line
+
+  try {
+    return `data: ${JSON.stringify(normalizeGeminiChunk(JSON.parse(data)))}`
+  } catch {
+    return line
+  }
+}
+
+function normalizeGeminiStream(body: ReadableStream<Uint8Array>): ReadableStream<Uint8Array> {
+  const decoder = new TextDecoder()
+  const encoder = new TextEncoder()
+  let buffer = ''
+
+  return body.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
+    transform(chunk, controller) {
+      buffer += decoder.decode(chunk, { stream: true })
+      const lines = buffer.split('\n')
+      buffer = lines.pop() || ''
+      for (const line of lines) {
+        controller.enqueue(encoder.encode(`${normalizeGeminiSseLine(line.replace(/\r$/, ''))}\n`))
+      }
+    },
+    flush(controller) {
+      buffer += decoder.decode()
+      if (!buffer) return
+      const lines = buffer.split('\n')
+      for (const line of lines) {
+        if (line) controller.enqueue(encoder.encode(`${normalizeGeminiSseLine(line.replace(/\r$/, ''))}\n`))
+      }
+    },
+  }))
 }
 
 export const onRequest: PagesFunction = async (context) => {
@@ -112,7 +179,13 @@ export const onRequest: PagesFunction = async (context) => {
     respHeaders.set('Access-Control-Allow-Origin', '*')
     respHeaders.set('X-Wyckoff-Proxy-Target', target.origin)
 
-    return new Response(response.body, {
+    const respBody = response.body
+    const contentType = response.headers.get('content-type') || ''
+    const responseBody = respBody && isGeminiChatCompletion(target, proxyPath) && SSE_CONTENT_RE.test(contentType)
+      ? normalizeGeminiStream(respBody)
+      : respBody
+
+    return new Response(responseBody, {
       status: response.status,
       headers: respHeaders,
     })
