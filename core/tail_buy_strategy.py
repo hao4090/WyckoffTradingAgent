@@ -108,24 +108,23 @@ def _normalize_signal_date(raw: Any) -> str:
 def pick_tail_candidates(
     rows: list[dict[str, Any]],
     *,
-    target_signal_date: str,
+    cutoff_date: str,
     statuses: tuple[str, ...] = ("pending", "confirmed"),
 ) -> list[TailBuyCandidate]:
-    """
-    从 signal_pending 原始行中过滤候选：
-    - signal_date == target_signal_date
+    """从 signal_pending 原始行中过滤候选：
+    - signal_date >= cutoff_date
     - status in statuses
-    - 同代码只保留更优记录（confirmed > pending；分数更高优先）
+    - 同代码只保留更优记录（confirmed > pending；日期更新优先；分数更高优先）
     """
     allowed = {str(x).strip().lower() for x in statuses}
-    target_date = _normalize_signal_date(target_signal_date)
+    cutoff = _normalize_signal_date(cutoff_date)
     by_code: dict[str, TailBuyCandidate] = {}
 
     for row in rows or []:
         if not isinstance(row, dict):
             continue
         signal_date = _normalize_signal_date(row.get("signal_date"))
-        if signal_date != target_date:
+        if signal_date < cutoff:
             continue
         status = _normalize_status(row.get("status"))
         if status not in allowed:
@@ -145,8 +144,8 @@ def pick_tail_candidates(
         if old is None:
             by_code[code] = candidate
             continue
-        old_rank = 1 if old.status == "confirmed" else 0
-        new_rank = 1 if candidate.status == "confirmed" else 0
+        old_rank = (1 if old.status == "confirmed" else 0, old.signal_date)
+        new_rank = (1 if candidate.status == "confirmed" else 0, candidate.signal_date)
         if (new_rank, candidate.signal_score) > (old_rank, old.signal_score):
             by_code[code] = candidate
 
@@ -642,6 +641,7 @@ def build_tail_buy_markdown(
     extra_sections_first: bool = False,
     max_error_items_per_block: int = 5,
     candidate_source: str | None = None,
+    buy_only: bool = False,
 ) -> str:
     counts = summarize_decision_counts(candidates)
     llm_route_plan = list(llm_route_plan or [])
@@ -656,7 +656,8 @@ def build_tail_buy_markdown(
         "",
         f"- 候选来源: {source_text}",
         f"- 扫描数量: {len(candidates)}",
-        f"- 分层结果: BUY={counts[DECISION_BUY]} / WATCH={counts[DECISION_WATCH]} / SKIP={counts[DECISION_SKIP]}",
+        f"- 分层结果: BUY={counts[DECISION_BUY]}"
+        + ("" if buy_only else f" / WATCH={counts[DECISION_WATCH]} / SKIP={counts[DECISION_SKIP]}"),
         f"- LLM 二判: {llm_success}/{llm_total}",
         f"- LLM 路由: {route_line}",
         f"- LLM 命中: {route_hits}",
@@ -707,8 +708,9 @@ def build_tail_buy_markdown(
             lines.append("")
 
     _append_block("BUY（优先关注）", DECISION_BUY)
-    _append_block("WATCH（观察）", DECISION_WATCH)
-    _append_block("SKIP（暂不买入）", DECISION_SKIP)
+    if not buy_only:
+        _append_block("WATCH（观察）", DECISION_WATCH)
+        _append_block("SKIP（暂不买入）", DECISION_SKIP)
 
     if not extra_sections_first:
         for text in cleaned_sections:
