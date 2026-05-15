@@ -489,6 +489,36 @@ def main() -> int:
                 f"Step4 私人再平衡: 候选收口为 Step3 起跳板 {len(step4_candidate_meta)} 只",
                 logs_path,
             )
+            holdings_diag_text = ""
+            tickflow_api_key = os.getenv("TICKFLOW_API_KEY", "").strip()
+            if tickflow_api_key:
+                from integrations.tickflow_client import TickFlowClient
+                from scripts.tail_buy_intraday_job import (
+                    _analyze_holdings_actions,
+                    _build_holdings_markdown,
+                )
+
+                try:
+                    tf_client = TickFlowClient(api_key=tickflow_api_key)
+                    h_list, h_limit, h_meta = _analyze_holdings_actions(
+                        tickflow_client=tf_client,
+                        portfolio_id=portfolio_id,
+                        signal_map={},
+                        style="conservative",
+                        intraday_batch_size=200,
+                        hard_stop_pct=6.0,
+                        deadline_at=datetime.now(TZ) + timedelta(minutes=5),
+                        logs_path=logs_path,
+                    )
+                    holdings_diag_text = _build_holdings_markdown(
+                        holdings=h_list,
+                        portfolio_meta=h_meta,
+                        tickflow_limit_hit=h_limit,
+                    )
+                    _log(f"持仓分时诊断: {len(h_list)} positions", logs_path)
+                except Exception as e:
+                    _log(f"持仓分时诊断失败（降级继续）: {e}", logs_path)
+
             step4_ok = True
             step4_reason = "ok"
             step4_err = None
@@ -502,6 +532,7 @@ def main() -> int:
                     portfolio_id=portfolio_id,
                     tg_bot_token=tg_bot_token,
                     tg_chat_id=tg_chat_id,
+                    holdings_intraday_report=holdings_diag_text,
                 )
                 step4_err = None if step4_ok else STEP4_REASON_MAP.get(step4_reason, step4_reason)
             except Exception as e:

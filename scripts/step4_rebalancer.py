@@ -1600,6 +1600,7 @@ def run(
     portfolio_id: str,
     tg_bot_token: str,
     tg_chat_id: str,
+    holdings_intraday_report: str = "",
 ) -> tuple[bool, str]:
     if not api_key or not api_key.strip():
         return (False, "missing_api_key")
@@ -1728,6 +1729,8 @@ def run(
     data_notes.extend(candidate_failures)
     if data_notes:
         user_message += "\n\n[数据注意]\n" + "\n".join(f"- {x}" for x in data_notes)
+    if holdings_intraday_report and holdings_intraday_report.strip():
+        user_message += "\n\n[持仓分钟级诊断]\n" + holdings_intraday_report.strip()
     if (not candidate_payload) and external_report and external_report.strip():
         user_message += "\n\n[Step3参考摘要-仅在候选切片缺失时启用]\n" + external_report.strip()
 
