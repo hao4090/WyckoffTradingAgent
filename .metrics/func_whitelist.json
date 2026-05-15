@@ -34,7 +34,7 @@
   "cli/tools.py::execute": 51,
   "cli/tui.py::_handle_command": 93,
   "cli/tui.py::_handle_interactive_input": 133,
-  "cli/tui.py::_run_agent": 369,
+  "cli/tui.py::_run_agent": 381,
   "cli/tui.py::_resume_session": 75,
   "cli/ui.py::configure_model": 65,
   "core/compliance_report.py::build_public_payload": 94,
