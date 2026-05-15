@@ -340,6 +340,11 @@ def main() -> int:
     elif benchmark_context:
         _persist_benchmark_context(benchmark_context, logs_path)
 
+    # Step2.5: 信号确认（pending → confirmed/expired）— 必须在推荐写入前执行，
+    # 使 confirmed 信号能沉淀进 recommendation_tracking
+    if step2_ok and step2_details:
+        _run_signal_confirmation(symbols_info, step2_details, benchmark_context, logs_path)
+
     # 形态复盘写库（按 recommend_date=最近交易日）
     if step2_ok and symbols_info:
         try:
@@ -351,10 +356,6 @@ def main() -> int:
             )
         except Exception as e:
             _log(f"推荐记录入库失败: {e}", logs_path)
-
-    # Step2.5: 信号确认（pending → confirmed/expired）
-    if step2_ok and step2_details:
-        _run_signal_confirmation(symbols_info, step2_details, benchmark_context, logs_path)
 
     # Step2.7: 起跳板 A/B/C 量化评分
     if symbols_info and step2_details:
