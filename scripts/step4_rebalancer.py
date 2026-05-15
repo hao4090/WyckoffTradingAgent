@@ -78,7 +78,7 @@ STEP4_BUY_HARD_STOP_ENABLED = os.getenv("STEP4_BUY_HARD_STOP_ENABLED", "1").stri
     "on",
 }
 STEP4_BUY_HARD_STOP_PCT = max(
-    float(os.getenv("STEP4_BUY_HARD_STOP_PCT", "9.0")),
+    float(os.getenv("STEP4_BUY_HARD_STOP_PCT", "8.0")),
     0.0,
 )
 STEP4_BUY_STOP_MODE = os.getenv("STEP4_BUY_STOP_MODE", "floor").strip().lower()
@@ -1719,6 +1719,14 @@ def run(
         + "[系统硬规则]\n"
         + f"buy_stop_mode={STEP4_BUY_STOP_MODE}, buy_stop_pct={STEP4_BUY_HARD_STOP_PCT:.1f}\n"
         + "仅允许依据结构止损、Distribution 信号与量价破坏做减仓/清仓，不得因为持有天数到期而机械离场。\n\n"
+        + "[持仓管理经验规则（基于历史回放统计）]\n"
+        + "信号优先级: SOS+EVR共振 > SOS > EVR > LPS（LPS不作为主仓买点，仅低仓位观察）\n"
+        + "默认持有: 8-10个交易日；强共振(SOS+EVR)允许持有到15个交易日\n"
+        + "止盈: 普通票+5%先止盈一半；强共振票目标+8%~10%\n"
+        + "止损: -5%减仓预警；-8%硬止损（不解释形态）\n"
+        + "持有3个交易日仍收益<0且无走强迹象: 考虑减仓\n"
+        + "持有10个交易日未达+5%: 不恋战，减仓或退出\n"
+        + "反复入选漏斗(recommend_count>5)但持续不涨的票: 视为钝化/滞涨，不加仓\n\n"
         + "[内部持仓量价切片]\n"
         + (positions_payload if positions_payload else "当前无持仓，仅现金。")
         + "\n\n[漏斗候选量价切片]\n"
