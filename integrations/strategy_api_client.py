@@ -135,6 +135,85 @@ def _pnl_pct(latest_close: Any, cost: float) -> float | None:
     return round((close / float(cost) - 1.0) * 100.0, 2)
 
 
+def _normalize_screen_board(board: str) -> str:
+    board_norm = str(board or "all").strip().lower()
+    board_norm = {
+        "gem": "chinext",
+        "创业板": "chinext",
+        "主板": "main",
+        "全部": "all",
+        "main_chinext": "all",
+        "main-chinext": "all",
+        "main+chinext": "all",
+    }.get(board_norm, board_norm)
+    if board_norm not in {"all", "main", "chinext"}:
+        raise StrategyApiError(f"Unsupported strategy API board: {board}")
+    return board_norm
+
+
+def _screen_payload(
+    *,
+    board: str,
+    universe: list[str] | None,
+    top_n: int,
+    trade_date: str | None,
+    strategy_version: str,
+) -> dict[str, Any]:
+    return {
+        "trade_date": trade_date,
+        "universe": [_clean_code(code) for code in universe] if universe else None,
+        "board": _normalize_screen_board(board),
+        "top_n": max(1, min(int(top_n or 20), 200)),
+        "strategy_version": strategy_version,
+    }
+
+
+def _screen_candidate_rows(candidates: list[Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    symbols_for_report: list[dict[str, Any]] = []
+    trigger_rows: list[dict[str, Any]] = []
+    for item in candidates:
+        if not isinstance(item, dict):
+            continue
+        score = _json_float(item.get("score")) or 0.0
+        row = {
+            "code": str(item.get("code") or ""),
+            "name": str(item.get("name") or item.get("code") or ""),
+            "score": score,
+            "priority_score": score,
+            "track": str(item.get("phase") or ""),
+            "tag": "strategy_api",
+            "risk_level": str(item.get("risk_level") or ""),
+            "reasons": item.get("reasons") or [],
+        }
+        symbols_for_report.append(row)
+        trigger_rows.append({"code": row["code"], "name": row["name"], "score": row["score"]})
+    return symbols_for_report, trigger_rows
+
+
+def _screen_legacy_result(data: dict[str, Any]) -> dict[str, Any]:
+    candidates = data.get("candidates") or []
+    if not isinstance(candidates, list):
+        candidates = []
+    symbols_for_report, trigger_rows = _screen_candidate_rows(candidates)
+    total_scanned = int(data.get("total_scanned") or len(symbols_for_report))
+    return {
+        "ok": True,
+        "source": "strategy_api",
+        "strategy_version": data.get("strategy_version"),
+        "trade_date": data.get("trade_date"),
+        "summary": {
+            "total_scanned": total_scanned,
+            "layer1_passed": total_scanned,
+            "layer2_passed": len(symbols_for_report),
+            "layer3_passed": len(symbols_for_report),
+        },
+        "trigger_groups": {"strategy_api": trigger_rows},
+        "top_sectors": [],
+        "symbols_for_report": symbols_for_report,
+        "candidates": candidates,
+    }
+
+
 def analyze_stock_legacy(
     code: str,
     *,
@@ -192,66 +271,79 @@ def screen_stocks_legacy(
     trade_date: str | None = None,
 ) -> dict[str, Any]:
     cfg = _require_config()
-    board_norm = str(board or "all").strip().lower()
-    board_norm = {
-        "gem": "chinext",
-        "创业板": "chinext",
-        "主板": "main",
-        "全部": "all",
-        "main_chinext": "all",
-        "main-chinext": "all",
-        "main+chinext": "all",
-    }.get(board_norm, board_norm)
-    if board_norm not in {"all", "main", "chinext"}:
-        raise StrategyApiError(f"Unsupported strategy API board: {board}")
-    top_n = max(1, min(int(top_n or 20), 200))
     data = _request(
         "POST",
         "/v1/screen",
-        json_payload={
-            "trade_date": trade_date,
-            "universe": [_clean_code(code) for code in universe] if universe else None,
-            "board": board_norm,
-            "top_n": top_n,
-            "strategy_version": cfg.strategy_version,
-        },
+        json_payload=_screen_payload(
+            board=board,
+            universe=universe,
+            top_n=top_n,
+            trade_date=trade_date,
+            strategy_version=cfg.strategy_version,
+        ),
     )
-    candidates = data.get("candidates") or []
-    if not isinstance(candidates, list):
-        candidates = []
-    symbols_for_report: list[dict[str, Any]] = []
-    trigger_rows: list[dict[str, Any]] = []
-    for item in candidates:
-        if not isinstance(item, dict):
-            continue
-        row = {
-            "code": str(item.get("code") or ""),
-            "name": str(item.get("name") or item.get("code") or ""),
-            "score": _json_float(item.get("score")) or 0.0,
-            "priority_score": _json_float(item.get("score")) or 0.0,
-            "track": str(item.get("phase") or ""),
-            "tag": "strategy_api",
-            "risk_level": str(item.get("risk_level") or ""),
-            "reasons": item.get("reasons") or [],
-        }
-        symbols_for_report.append(row)
-        trigger_rows.append({"code": row["code"], "name": row["name"], "score": row["score"]})
-    total_scanned = int(data.get("total_scanned") or len(symbols_for_report))
+    return _screen_legacy_result(data)
+
+
+def _backtest_payload(
+    *,
+    start: str,
+    end: str,
+    hold_days: int,
+    top_n: int,
+    board: str,
+    stop_loss_pct: float,
+    take_profit_pct: float | None,
+    strategy_version: str,
+) -> dict[str, Any]:
     return {
-        "ok": True,
+        "start_date": start,
+        "end_date": end,
+        "board": board,
+        "top_n": top_n,
+        "hold_days": [hold_days],
+        "stop_loss": [stop_loss_pct],
+        "take_profit": [take_profit_pct],
+        "strategy_version": strategy_version,
+    }
+
+
+def _backtest_legacy_result(
+    *,
+    start: str,
+    end: str,
+    board: str,
+    hold_days: int,
+    top_n: int,
+    stop_loss_pct: float,
+    take_profit_pct: float | None,
+    task: dict[str, Any],
+) -> dict[str, Any]:
+    result = task.get("result") or {}
+    if not isinstance(result, dict):
+        raise StrategyApiError("Strategy API task result is not an object")
+    best = result.get("best") or {}
+    if not isinstance(best, dict):
+        best = {}
+    return {
         "source": "strategy_api",
-        "strategy_version": data.get("strategy_version"),
-        "trade_date": data.get("trade_date"),
-        "summary": {
-            "total_scanned": total_scanned,
-            "layer1_passed": total_scanned,
-            "layer2_passed": len(symbols_for_report),
-            "layer3_passed": len(symbols_for_report),
-        },
-        "trigger_groups": {"strategy_api": trigger_rows},
-        "top_sectors": [],
-        "symbols_for_report": symbols_for_report,
-        "candidates": candidates,
+        "period": f"{start} ~ {end}",
+        "hold_days": best.get("hold_days", hold_days),
+        "top_n": result.get("top_n", top_n),
+        "board": board,
+        "stop_loss_pct": best.get("stop_loss_pct", stop_loss_pct),
+        "take_profit_pct": best.get("take_profit_pct", take_profit_pct),
+        "trades": best.get("trades", 0),
+        "win_rate_pct": best.get("win_rate_pct"),
+        "avg_ret_pct": best.get("avg_ret_pct"),
+        "median_ret_pct": best.get("median_ret_pct"),
+        "sharpe_ratio": best.get("sharpe_ratio"),
+        "max_drawdown_pct": best.get("max_drawdown_pct"),
+        "portfolio_total_ret_pct": best.get("portfolio_total_ret_pct"),
+        "portfolio_ann_ret_pct": best.get("portfolio_ann_ret_pct"),
+        "rows": result.get("rows") or [],
+        "task_id": task.get("task_id"),
+        "strategy_version": result.get("strategy_version"),
     }
 
 
@@ -284,44 +376,28 @@ def run_backtest_legacy(
     accepted = _request(
         "POST",
         "/v1/backtest",
-        json_payload={
-            "start_date": start,
-            "end_date": end,
-            "board": board,
-            "top_n": top_n,
-            "hold_days": [hold_days],
-            "stop_loss": [stop_loss_pct],
-            "take_profit": [take_profit_pct],
-            "strategy_version": cfg.strategy_version,
-        },
+        json_payload=_backtest_payload(
+            start=start,
+            end=end,
+            hold_days=hold_days,
+            top_n=top_n,
+            board=board,
+            stop_loss_pct=stop_loss_pct,
+            take_profit_pct=take_profit_pct,
+            strategy_version=cfg.strategy_version,
+        ),
     )
     task = wait_for_task(str(accepted.get("task_id") or ""))
-    result = task.get("result") or {}
-    if not isinstance(result, dict):
-        raise StrategyApiError("Strategy API task result is not an object")
-    best = result.get("best") or {}
-    if not isinstance(best, dict):
-        best = {}
-    return {
-        "source": "strategy_api",
-        "period": f"{start} ~ {end}",
-        "hold_days": best.get("hold_days", hold_days),
-        "top_n": result.get("top_n", top_n),
-        "board": board,
-        "stop_loss_pct": best.get("stop_loss_pct", stop_loss_pct),
-        "take_profit_pct": best.get("take_profit_pct", take_profit_pct),
-        "trades": best.get("trades", 0),
-        "win_rate_pct": best.get("win_rate_pct"),
-        "avg_ret_pct": best.get("avg_ret_pct"),
-        "median_ret_pct": best.get("median_ret_pct"),
-        "sharpe_ratio": best.get("sharpe_ratio"),
-        "max_drawdown_pct": best.get("max_drawdown_pct"),
-        "portfolio_total_ret_pct": best.get("portfolio_total_ret_pct"),
-        "portfolio_ann_ret_pct": best.get("portfolio_ann_ret_pct"),
-        "rows": result.get("rows") or [],
-        "task_id": task.get("task_id"),
-        "strategy_version": result.get("strategy_version"),
-    }
+    return _backtest_legacy_result(
+        start=start,
+        end=end,
+        board=board,
+        hold_days=hold_days,
+        top_n=top_n,
+        stop_loss_pct=stop_loss_pct,
+        take_profit_pct=take_profit_pct,
+        task=task,
+    )
 
 
 def score_tail_buy_remote(
@@ -363,7 +439,9 @@ def prepare_tail_buy_remote(
             "style": style,
             "max_llm_symbols": max(int(max_llm_symbols), 0),
             "llm_min_rule_score": max(float(llm_min_rule_score), 0.0),
-            "llm_allowed_rule_decisions": [str(x).strip().upper() for x in llm_allowed_rule_decisions if str(x).strip()],
+            "llm_allowed_rule_decisions": [
+                str(x).strip().upper() for x in llm_allowed_rule_decisions if str(x).strip()
+            ],
         },
     )
 

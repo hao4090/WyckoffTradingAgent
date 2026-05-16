@@ -277,7 +277,16 @@ def _run_step4_pipeline(
 
     user_id = str(step4_target.get("user_id", "") or "").strip()
     portfolio_id = str(step4_target.get("portfolio_id", "") or "").strip()
-    del symbols_info, step3_springboard_codes, step3_report_text, benchmark_context, api_key, model, tg_bot_token, tg_chat_id
+    del (
+        symbols_info,
+        step3_springboard_codes,
+        step3_report_text,
+        benchmark_context,
+        api_key,
+        model,
+        tg_bot_token,
+        tg_chat_id,
+    )
 
     holdings_diag_text = _run_step4_holdings_diagnosis(portfolio_id, logs_path)
     elapsed4 = (datetime.now(TZ) - t0).total_seconds()
