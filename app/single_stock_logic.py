@@ -309,7 +309,9 @@ def _run_analysis(
                 name=name,
                 user_id=st.session_state.get("user", {}).get("id", ""),
             )
-            phase = str(api_diag.get("ma_pattern") or api_diag.get("track") or api_diag.get("accum_stage") or "").strip()
+            phase = str(
+                api_diag.get("ma_pattern") or api_diag.get("track") or api_diag.get("accum_stage") or ""
+            ).strip()
             if phase:
                 stage_info = f"✓ **当前阶段**: {phase}\n"
             risk_notes = [str(x) for x in api_diag.get("health_reasons") or [] if str(x).strip()]

@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import os
-import sys
 from datetime import date
-from types import ModuleType, SimpleNamespace
+from types import SimpleNamespace
 
 import pandas as pd
 
@@ -260,32 +258,22 @@ class TestSymbolPool:
 
         assert callable(_stock_name_map)
 
-    def test_screen_stocks_accepts_mcp_main_chinext_alias(self, monkeypatch):
+    def test_screen_stocks_routes_main_chinext_alias_to_strategy_api(self, monkeypatch):
         from agents import chat_tools
 
-        captured_env = {}
-        fake_pipeline = ModuleType("scripts.wyckoff_funnel")
+        captured = {}
 
-        def fake_run_funnel(*args, **kwargs):
-            captured_env["mode"] = os.environ.get("FUNNEL_POOL_MODE")
-            captured_env["board"] = os.environ.get("FUNNEL_POOL_BOARD")
-            captured_env["executor"] = os.environ.get("FUNNEL_EXECUTOR_MODE")
-            return True, [], {}, {"metrics": {}, "triggers": {}, "name_map": {}}
+        def fake_screen_stocks_legacy(*, board):
+            captured["board"] = board
+            return {"ok": True, "source": "strategy_api", "symbols_for_report": []}
 
-        fake_pipeline.run = fake_run_funnel
-        monkeypatch.setitem(sys.modules, "scripts.wyckoff_funnel", fake_pipeline)
-        monkeypatch.setattr(chat_tools, "_ensure_tushare_token", lambda tool_context: None)
-        monkeypatch.setenv("FUNNEL_POOL_MODE", "manual")
-        monkeypatch.setenv("FUNNEL_POOL_BOARD", "chinext")
-        monkeypatch.setenv("FUNNEL_EXECUTOR_MODE", "process")
+        monkeypatch.setattr("integrations.strategy_api_client.screen_stocks_legacy", fake_screen_stocks_legacy)
 
         result = chat_tools.screen_stocks(board="main_chinext")
 
         assert "error" not in result
-        assert captured_env == {"mode": "board", "board": "all", "executor": "thread"}
-        assert os.environ["FUNNEL_POOL_MODE"] == "manual"
-        assert os.environ["FUNNEL_POOL_BOARD"] == "chinext"
-        assert os.environ["FUNNEL_EXECUTOR_MODE"] == "process"
+        assert result["source"] == "strategy_api"
+        assert captured == {"board": "all"}
 
 
 # ── core/strategy bridge ──

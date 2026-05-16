@@ -710,6 +710,106 @@ def _build_holdings_markdown(
     return "\n".join(lines)
 
 
+def _tail_buy_header_lines(
+    *,
+    now_text: str,
+    target_signal_date: str,
+    market_reminder: str,
+    candidates: list[TailBuyCandidate],
+    llm_total: int,
+    llm_success: int,
+    llm_route_plan: list[str] | None,
+    llm_route_stats: dict[str, int] | None,
+    elapsed_seconds: float,
+    candidate_source: str | None,
+    buy_only: bool,
+) -> list[str]:
+    counts = Counter([str(x.final_decision or DECISION_SKIP).strip().upper() for x in candidates])
+    route_line = " -> ".join(llm_route_plan or []) if llm_route_plan else "未启用"
+    route_hits = ", ".join([f"{k}:{v}" for k, v in sorted((llm_route_stats or {}).items())]) or "无"
+    source_text = str(candidate_source or "").strip() or (
+        f"signal_pending（signal_date={target_signal_date}, status in pending/confirmed）"
+    )
+    layer_line = f"- 分层结果: BUY={counts.get(DECISION_BUY, 0)}"
+    if not buy_only:
+        layer_line += f" / WATCH={counts.get(DECISION_WATCH, 0)} / SKIP={counts.get(DECISION_SKIP, 0)}"
+    return [
+        f"⏰ Tail Buy {now_text}",
+        "",
+        f"- 候选来源: {source_text}",
+        f"- 扫描数量: {len(candidates)}",
+        layer_line,
+        f"- LLM 二判: {llm_success}/{llm_total}",
+        f"- LLM 路由: {route_line}",
+        f"- LLM 命中: {route_hits}",
+        f"- 总耗时: {elapsed_seconds:.1f}s",
+        "",
+        f"⚠️ 风险提醒: {market_reminder}",
+        "",
+    ]
+
+
+def _append_extra_sections(lines: list[str], extra_sections: list[str] | None) -> None:
+    for section in extra_sections or []:
+        text = str(section or "").strip()
+        if text:
+            lines.append(text)
+            lines.append("")
+
+
+def _append_tail_buy_decision_block(
+    lines: list[str],
+    *,
+    title: str,
+    decision: str,
+    candidates: list[TailBuyCandidate],
+    max_error_items_per_block: int,
+) -> None:
+    block = [x for x in candidates if x.final_decision == decision]
+    lines.append(f"## {title}")
+    if not block:
+        lines.append("- 无")
+        lines.append("")
+        return
+    error_items = [x for x in block if str(x.fetch_error or "").strip()]
+    normal_items = [x for x in block if not str(x.fetch_error or "").strip()]
+    max_errors = max(int(max_error_items_per_block), 1)
+    for item in normal_items + error_items[:max_errors]:
+        reasons = "；".join(item.rule_reasons[:2]) if item.rule_reasons else "规则信号一般"
+        model_used = f"@{item.llm_model_used}" if item.llm_model_used else ""
+        llm_tag = f" | LLM:{item.llm_decision}{model_used}" if item.llm_decision else ""
+        llm_reason = f" | {item.llm_reason}" if item.llm_reason else ""
+        add_tag = "[加仓] " if item.signal_type == "holding" else ""
+        lines.append(
+            f"- {add_tag}{item.code} {item.name} | priority={item.priority_score:.1f} | "
+            f"rule={item.rule_decision}({item.rule_score:.1f}){llm_tag} | {reasons}{llm_reason}"
+        )
+    omitted_errors = max(len(error_items) - max_errors, 0)
+    if omitted_errors > 0:
+        lines.append(f"- ... 其余 {omitted_errors} 只报错标的已省略（详见日志 artifacts）")
+    lines.append("")
+
+
+def _append_tail_buy_decision_blocks(
+    lines: list[str],
+    *,
+    candidates: list[TailBuyCandidate],
+    buy_only: bool,
+    max_error_items_per_block: int,
+) -> None:
+    blocks = [("BUY（优先关注）", DECISION_BUY)]
+    if not buy_only:
+        blocks.extend([("WATCH（观察）", DECISION_WATCH), ("SKIP（暂不买入）", DECISION_SKIP)])
+    for title, decision in blocks:
+        _append_tail_buy_decision_block(
+            lines,
+            title=title,
+            decision=decision,
+            candidates=candidates,
+            max_error_items_per_block=max_error_items_per_block,
+        )
+
+
 def build_tail_buy_markdown(
     *,
     now_text: str,
@@ -727,69 +827,31 @@ def build_tail_buy_markdown(
     candidate_source: str | None = None,
     buy_only: bool = False,
 ) -> str:
-    counts = Counter([str(x.final_decision or DECISION_SKIP).strip().upper() for x in candidates])
-    route_line = " -> ".join(llm_route_plan or []) if llm_route_plan else "未启用"
-    route_hits = ", ".join([f"{k}:{v}" for k, v in sorted((llm_route_stats or {}).items())]) or "无"
-    source_text = str(candidate_source or "").strip() or (
-        f"signal_pending（signal_date={target_signal_date}, status in pending/confirmed）"
+    lines = _tail_buy_header_lines(
+        now_text=now_text,
+        target_signal_date=target_signal_date,
+        market_reminder=market_reminder,
+        candidates=candidates,
+        llm_total=llm_total,
+        llm_success=llm_success,
+        llm_route_plan=llm_route_plan,
+        llm_route_stats=llm_route_stats,
+        elapsed_seconds=elapsed_seconds,
+        candidate_source=candidate_source,
+        buy_only=buy_only,
     )
-    lines: list[str] = [
-        f"⏰ Tail Buy {now_text}",
-        "",
-        f"- 候选来源: {source_text}",
-        f"- 扫描数量: {len(candidates)}",
-        f"- 分层结果: BUY={counts.get(DECISION_BUY, 0)}"
-        + ("" if buy_only else f" / WATCH={counts.get(DECISION_WATCH, 0)} / SKIP={counts.get(DECISION_SKIP, 0)}"),
-        f"- LLM 二判: {llm_success}/{llm_total}",
-        f"- LLM 路由: {route_line}",
-        f"- LLM 命中: {route_hits}",
-        f"- 总耗时: {elapsed_seconds:.1f}s",
-        "",
-        f"⚠️ 风险提醒: {market_reminder}",
-        "",
-    ]
-
-    def _append_block(title: str, decision: str) -> None:
-        block = [x for x in candidates if x.final_decision == decision]
-        lines.append(f"## {title}")
-        if not block:
-            lines.append("- 无")
-            lines.append("")
-            return
-        error_items = [x for x in block if str(x.fetch_error or "").strip()]
-        normal_items = [x for x in block if not str(x.fetch_error or "").strip()]
-        for item in normal_items + error_items[: max(int(max_error_items_per_block), 1)]:
-            reasons = "；".join(item.rule_reasons[:2]) if item.rule_reasons else "规则信号一般"
-            llm_tag = ""
-            if item.llm_decision:
-                model_used = f"@{item.llm_model_used}" if item.llm_model_used else ""
-                llm_tag = f" | LLM:{item.llm_decision}{model_used}"
-            llm_reason = f" | {item.llm_reason}" if item.llm_reason else ""
-            add_tag = "[加仓] " if item.signal_type == "holding" else ""
-            lines.append(
-                f"- {add_tag}{item.code} {item.name} | priority={item.priority_score:.1f} | "
-                f"rule={item.rule_decision}({item.rule_score:.1f}){llm_tag} | {reasons}{llm_reason}"
-            )
-        omitted_errors = max(len(error_items) - max(int(max_error_items_per_block), 1), 0)
-        if omitted_errors > 0:
-            lines.append(f"- ... 其余 {omitted_errors} 只报错标的已省略（详见日志 artifacts）")
-        lines.append("")
-
-    cleaned_sections = [text for section in extra_sections or [] if (text := str(section or "").strip())]
     if extra_sections_first:
-        for text in cleaned_sections:
-            lines.append(text)
-            lines.append("")
+        _append_extra_sections(lines, extra_sections)
 
-    _append_block("BUY（优先关注）", DECISION_BUY)
-    if not buy_only:
-        _append_block("WATCH（观察）", DECISION_WATCH)
-        _append_block("SKIP（暂不买入）", DECISION_SKIP)
+    _append_tail_buy_decision_blocks(
+        lines,
+        candidates=candidates,
+        buy_only=buy_only,
+        max_error_items_per_block=max_error_items_per_block,
+    )
 
     if not extra_sections_first:
-        for text in cleaned_sections:
-            lines.append(text)
-            lines.append("")
+        _append_extra_sections(lines, extra_sections)
     lines.append("说明：本任务仅输出尾盘扫描建议，不生成订单，不写入交易表。")
     return "\n".join(lines).strip() + "\n"
 

@@ -209,7 +209,12 @@ def run_funnel_simulation(board: Literal["all", "main_chinext"] = "all") -> dict
         result = screen_stocks_legacy(board=board_name)
     except StrategyApiError as exc:
         return {"error": str(exc), "source": "strategy_api"}
-    return {"success": True, "source": "strategy_api", "candidates": result.get("symbols_for_report", []), "details": result}
+    return {
+        "success": True,
+        "source": "strategy_api",
+        "candidates": result.get("symbols_for_report", []),
+        "details": result,
+    }
 
 
 # ---------------------------------------------------------------------------
