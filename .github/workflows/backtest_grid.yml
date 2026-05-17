@@ -209,6 +209,7 @@ jobs:
           mkdir -p "${OUT_DIR}"
           export OUT_DIR
 
+          set -o pipefail
           HOLD="${HOLD}" STOP="${STOP}" TP="${TP}" python - <<'PY' | tee "${OUT_DIR}/run.log"
           import json
           import os

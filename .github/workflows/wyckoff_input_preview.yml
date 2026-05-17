@@ -51,6 +51,7 @@ jobs:
 
       - name: Run input preview job
         run: |
+          set -o pipefail
           python -u scripts/daily_job.py --logs ${{ github.workspace }}/logs/input_preview.log \
             2>&1 | tee -a ${{ github.workspace }}/logs/input_preview.console.log
 

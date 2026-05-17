@@ -44,6 +44,7 @@ jobs:
 
       - name: Refresh US recommendation performance
         run: |
+          set -o pipefail
           python -u scripts/us_recommendation_performance_job.py \
             --logs "${{ github.workspace }}/logs/us_recommendation_performance.log" \
             2>&1 | tee -a "${{ github.workspace }}/logs/us_recommendation_performance.console.log"
