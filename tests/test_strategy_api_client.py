@@ -91,6 +91,8 @@ def test_screen_stocks_legacy_polls_task(monkeypatch):
                     "trade_date": "2026-05-15",
                     "total_scanned": 2,
                     "benchmark_context": {"regime": "NEUTRAL"},
+                    "summary": {"selected_for_ai": 0},
+                    "selected_for_ai": [],
                     "symbols_for_report": [
                         {
                             "code": "000001",
@@ -127,6 +129,8 @@ def test_screen_stocks_legacy_polls_task(monkeypatch):
     assert result["symbols_for_report"][0]["code"] == "000001"
     assert result["symbols_for_report"][0]["tag"] == "点火破局 | SOS"
     assert result["benchmark_context"]["regime"] == "NEUTRAL"
+    assert result["summary"]["selected_for_ai"] == 0
+    assert result["selected_for_ai"] == []
 
 
 def test_run_backtest_legacy_polls_task(monkeypatch):

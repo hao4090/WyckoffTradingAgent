@@ -114,7 +114,7 @@ def _run_funnel_screen(request_id: str, payload: dict[str, Any]) -> dict[str, An
             "layer2": int(summary.get("layer2_passed", 0) or 0),
             "layer3": int(summary.get("layer3_passed", 0) or 0),
             "l4_unique_hits": len(symbols_for_report),
-            "selected_for_ai": len(symbols_for_report),
+            "selected_for_ai": len(selected_for_ai),
         },
         "trigger_groups": remote.get("trigger_groups", {}),
         "symbols_for_report": symbols_for_report,

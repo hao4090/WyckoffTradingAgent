@@ -403,16 +403,22 @@ def delete_recommendations(codes: list[str]) -> int:
 
 def load_signals(*, status: str | None = None, limit: int = 200) -> list[dict]:
     conn = get_db()
-    if status:
-        cur = conn.execute(
-            "SELECT * FROM signal_pending WHERE status=? ORDER BY signal_date DESC LIMIT ?",
-            (status, limit),
-        )
-    else:
-        cur = conn.execute(
-            "SELECT * FROM signal_pending ORDER BY signal_date DESC LIMIT ?",
-            (limit,),
-        )
+    try:
+        if status:
+            cur = conn.execute(
+                "SELECT * FROM signal_pending WHERE status=? ORDER BY signal_date DESC LIMIT ?",
+                (status, limit),
+            )
+        else:
+            cur = conn.execute(
+                "SELECT * FROM signal_pending ORDER BY signal_date DESC LIMIT ?",
+                (limit,),
+            )
+    except sqlite3.OperationalError as exc:
+        if "no such table: signal_pending" in str(exc).lower():
+            logger.info("local signal_pending table is unavailable; returning empty signal cache")
+            return []
+        raise
     return [dict(r) for r in cur.fetchall()]
 
 
@@ -421,10 +427,16 @@ def load_signals_by_codes(codes: list[str]) -> dict[str, dict]:
         return {}
     conn = get_db()
     ph = ",".join("?" for _ in codes)
-    cur = conn.execute(
-        f"SELECT * FROM signal_pending WHERE code IN ({ph}) ORDER BY signal_date DESC",
-        codes,
-    )
+    try:
+        cur = conn.execute(
+            f"SELECT * FROM signal_pending WHERE code IN ({ph}) ORDER BY signal_date DESC",
+            codes,
+        )
+    except sqlite3.OperationalError as exc:
+        if "no such table: signal_pending" in str(exc).lower():
+            logger.info("local signal_pending table is unavailable; returning empty signal cache")
+            return {}
+        raise
     result: dict[str, dict] = {}
     for r in cur.fetchall():
         row = dict(r)

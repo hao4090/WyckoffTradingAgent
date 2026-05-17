@@ -237,7 +237,14 @@ def _screen_legacy_result(data: dict[str, Any]) -> dict[str, Any]:
     total_scanned = int(data.get("total_scanned") or len(symbols_for_report))
     summary = data.get("summary") if isinstance(data.get("summary"), dict) else {}
     trigger_groups = data.get("trigger_groups") if isinstance(data.get("trigger_groups"), dict) else {}
+    has_selected_for_ai = "selected_for_ai" in data
     selected_for_ai = data.get("selected_for_ai") if isinstance(data.get("selected_for_ai"), list) else []
+    if not has_selected_for_ai and not selected_for_ai:
+        selected_for_ai = [row.get("code") for row in symbols_for_report]
+    if "selected_for_ai" in summary:
+        selected_count = int(summary.get("selected_for_ai") or 0)
+    else:
+        selected_count = len(selected_for_ai)
     return {
         "ok": True,
         "source": "strategy_api",
@@ -249,13 +256,13 @@ def _screen_legacy_result(data: dict[str, Any]) -> dict[str, Any]:
             "layer2_passed": int(summary.get("layer2_passed") or len(symbols_for_report)),
             "layer3_passed": int(summary.get("layer3_passed") or len(symbols_for_report)),
             "l4_unique_hits": int(summary.get("l4_unique_hits") or len(symbols_for_report)),
-            "selected_for_ai": int(summary.get("selected_for_ai") or len(symbols_for_report)),
+            "selected_for_ai": selected_count,
         },
         "trigger_groups": trigger_groups or {"strategy_api": trigger_rows},
         "top_sectors": data.get("top_sectors") if isinstance(data.get("top_sectors"), list) else [],
         "benchmark_context": data.get("benchmark_context") if isinstance(data.get("benchmark_context"), dict) else {},
         "symbols_for_report": symbols_for_report,
-        "selected_for_ai": selected_for_ai or [row.get("code") for row in symbols_for_report],
+        "selected_for_ai": selected_for_ai,
         "trend_selected": data.get("trend_selected") if isinstance(data.get("trend_selected"), list) else [],
         "accum_selected": data.get("accum_selected") if isinstance(data.get("accum_selected"), list) else [],
         "signal_confirmation_count": int(data.get("signal_confirmation_count") or 0),
