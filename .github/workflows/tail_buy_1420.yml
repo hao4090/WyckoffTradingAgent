@@ -45,6 +45,8 @@ jobs:
       WYCKOFF_STRATEGY_API_MODE: "remote"
       WYCKOFF_STRATEGY_API_URL: ${{ secrets.WYCKOFF_STRATEGY_API_URL }}
       WYCKOFF_STRATEGY_API_KEY: ${{ secrets.WYCKOFF_STRATEGY_API_KEY }}
+      WYCKOFF_STRATEGY_API_TIMEOUT: "600"
+      WYCKOFF_STRATEGY_API_POLL_TIMEOUT: "1800"
 
     steps:
       - uses: actions/checkout@v4

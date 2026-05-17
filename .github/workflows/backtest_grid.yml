@@ -63,6 +63,8 @@ env:
   WYCKOFF_STRATEGY_API_MODE: "remote"
   WYCKOFF_STRATEGY_API_URL: ${{ secrets.WYCKOFF_STRATEGY_API_URL }}
   WYCKOFF_STRATEGY_API_KEY: ${{ secrets.WYCKOFF_STRATEGY_API_KEY }}
+  WYCKOFF_STRATEGY_API_TIMEOUT: "3600"
+  WYCKOFF_STRATEGY_API_POLL_TIMEOUT: "3600"
 
 jobs:
   # ────────────────────────────────────────────────

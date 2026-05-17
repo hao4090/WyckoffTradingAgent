@@ -47,7 +47,7 @@ def get_strategy_api_config() -> StrategyApiConfig:
         base_url=str(os.getenv("WYCKOFF_STRATEGY_API_URL", "") or "").strip().rstrip("/"),
         api_key=str(os.getenv("WYCKOFF_STRATEGY_API_KEY", "") or "").strip(),
         mode=_clean_mode(str(os.getenv("WYCKOFF_STRATEGY_API_MODE", "remote") or "remote")),
-        timeout_seconds=_env_float("WYCKOFF_STRATEGY_API_TIMEOUT", 30.0),
+        timeout_seconds=_env_float("WYCKOFF_STRATEGY_API_TIMEOUT", 180.0),
         poll_interval_seconds=_env_float("WYCKOFF_STRATEGY_API_POLL_INTERVAL", 2.0),
         poll_timeout_seconds=_env_float("WYCKOFF_STRATEGY_API_POLL_TIMEOUT", 600.0),
         strategy_version=str(os.getenv("WYCKOFF_STRATEGY_VERSION", "private-v1") or "private-v1").strip(),
