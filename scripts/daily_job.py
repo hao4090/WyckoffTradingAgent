@@ -282,7 +282,6 @@ def _run_step4_pipeline(
     logs_path: str | None,
 ) -> dict:
     from core.strategy import run_step4
-    from scripts.step4_rebalancer import STEP4_REASON_MAP
 
     t0 = datetime.now(TZ)
     tg_bot_token = os.getenv("TG_BOT_TOKEN", "").strip()
