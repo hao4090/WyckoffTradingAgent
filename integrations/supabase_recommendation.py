@@ -308,7 +308,7 @@ def upsert_recommendations(recommend_date: int, symbols_info: list[dict[str, Any
                     break
 
             score_val: float | None = None
-            for score_key in ("funnel_score", "priority_score", "score"):
+            for score_key in ("funnel_score", "score", "priority_score"):
                 raw_score = s.get(score_key)
                 if raw_score is None or raw_score == "":
                     continue

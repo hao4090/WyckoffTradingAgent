@@ -524,9 +524,11 @@ function SortableHeader({
 }
 
 function TrackingRow({ row, market = 'cn' }: { row: Recommendation; market?: MarketTab }) {
+  const { t } = usePreferences()
   const vetoed = row.rag_vetoed
   const rowCls = vetoed ? 'border-t border-border hover:bg-muted/20 opacity-60 line-through' : 'border-t border-border hover:bg-muted/20'
   const codeDisplay = market === 'cn' ? String(row.code).padStart(6, '0') : String(row.code)
+  const scoreKind = trackingScoreKind(row)
   return (
     <tr className={rowCls}>
       <td className="px-3 py-2 font-mono">
@@ -538,13 +540,32 @@ function TrackingRow({ row, market = 'cn' }: { row: Recommendation; market?: Mar
       <td className="px-3 py-2 text-right">{row.initial_price?.toFixed(2) || '-'}</td>
       <td className="px-3 py-2 text-right">{row.current_price?.toFixed(2) || '-'}</td>
       <td className={`px-3 py-2 text-right font-medium ${pctColor(row.change_pct)}`}>{formatPct(row.change_pct)}</td>
-      <td className="px-3 py-2 text-right">{row.funnel_score?.toFixed(1) || '-'}</td>
+      <td className="px-3 py-2 text-right">
+        <div className="flex flex-col items-end gap-0.5">
+          <span>{formatScore(row.funnel_score)}</span>
+          {scoreKind && (
+            <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] leading-none text-muted-foreground">
+              {scoreKind === 'priority' ? t('tracking.scorePriority') : t('tracking.scoreRaw')}
+            </span>
+          )}
+        </div>
+      </td>
       {market === 'us' && <UsPerformanceCells row={row} />}
       <td className="px-3 py-2 text-center">
         {row.is_ai_recommended && <span className="inline-block h-2 w-2 rounded-full bg-indigo-500" />}
       </td>
     </tr>
   )
+}
+
+function trackingScoreKind(row: Recommendation): 'priority' | 'raw' | null {
+  if (!isFiniteNumber(row.funnel_score)) return null
+  const reason = row.recommend_reason ?? ''
+  if (row.funnel_score >= 20) return 'priority'
+  if (row.funnel_score >= 10 && (reason.includes('点火破局') || reason.includes('吸筹通道'))) {
+    return 'priority'
+  }
+  return 'raw'
 }
 
 function UsPerformanceCells({ row }: { row: Recommendation }) {
@@ -715,6 +736,11 @@ function nullableNumberCompare(a: number | null | undefined, b: number | null | 
 function formatPct(value: number | null): string {
   if (!isFiniteNumber(value)) return '-'
   return `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`
+}
+
+function formatScore(value: number | null): string {
+  if (!isFiniteNumber(value)) return '-'
+  return value >= 10 ? value.toFixed(1) : value.toFixed(2)
 }
 
 function pctColor(value: number | null): string {
