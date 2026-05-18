@@ -1166,7 +1166,9 @@ def run(
                 "tag": "、".join(code_to_reasons.get(c, [])),
                 "track": _infer_track(c),
                 "stage": _legacy_stage(c),
-                "score": float((metrics.get("layer3_score_map", {}) or {}).get(c, 0.0)),
+                "score": float(
+                    code_to_total_score.get(c, 0.0) or (metrics.get("layer3_score_map", {}) or {}).get(c, 0.0)
+                ),
                 "priority_score": float(code_to_best_score.get(c, 0.0)),
                 "priority_rank": idx + 1,
                 "selection_source": "l2_bypass" if c in l2_bypass_set else "l4_hit",
@@ -1227,7 +1229,6 @@ def run(
 
     hit_selected_count = sum(1 for c in selected_for_ai if c in formal_hit_set)
     l3_only_count = max(len(selected_for_ai) - hit_selected_count - bypass_selected_count, 0)
-    l3_score_map = metrics.get("layer3_score_map", {}) or {}
     sector_rotation = metrics.get("sector_rotation", {}) or {}
     sector_rotation_map = sector_rotation.get("state_map", {}) or {}
 
@@ -1384,7 +1385,7 @@ def run(
             ).strip(" |"),
             "track": ("Trend" if c in trend_selected else "Accum" if c in accum_selected else ""),
             "stage": _stage_name(c),
-            "score": float(l3_score_map.get(c, 0.0)),
+            "score": float(_display_score(c)),
             "priority_score": float(score_map.get(c, 0.0)),
             "priority_rank": idx + 1,
             "selection_source": _selection_source(c),
