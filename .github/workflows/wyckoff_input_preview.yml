@@ -23,6 +23,7 @@ jobs:
       STEP3_SKIP_LLM: "1"
       DEBUG_MODEL_IO: "1"
       DEBUG_MODEL_IO_FULL: "1"
+      DAILY_JOB_PREVIEW_ONLY: "1"
       # 测试任务不触发实盘再平衡
       DAILY_JOB_SKIP_STEP4: "1"
       TZ: Asia/Shanghai
