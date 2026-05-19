@@ -25,6 +25,9 @@ from core.wyckoff_engine import FunnelConfig, _sorted_if_needed
 from scripts.wyckoff_funnel import run_funnel_job
 from utils.feishu import send_feishu_notification
 
+TODAY_REVIEW_MIN_PCT = 8.0
+PREVIOUS_REVIEW_MAX_PCT = 6.0
+
 
 def _is_main_or_chinext(code: str) -> bool:
     return str(code).startswith(("600", "601", "603", "605", "000", "001", "002", "003", "300", "301"))
@@ -108,26 +111,34 @@ def _build_hit_map(triggers: dict[str, list[tuple[str, float]]]) -> dict[str, li
     return hit_map
 
 
-def _latest_pct_change(df: pd.DataFrame) -> float | None:
+def _latest_two_pct_changes(df: pd.DataFrame) -> tuple[float | None, float | None]:
     s = _sorted_if_needed(df)
     close = pd.to_numeric(s.get("close"), errors="coerce").dropna()
+    latest_pct = None
+    previous_pct = None
     if len(close) >= 2:
         prev_close = float(close.iloc[-2])
         if prev_close > 0:
-            return (float(close.iloc[-1]) / prev_close - 1.0) * 100.0
+            latest_pct = (float(close.iloc[-1]) / prev_close - 1.0) * 100.0
+    if len(close) >= 3:
+        prev_prev_close = float(close.iloc[-3])
+        if prev_prev_close > 0:
+            previous_pct = (float(close.iloc[-2]) / prev_prev_close - 1.0) * 100.0
 
-    pct = pd.to_numeric(s.get("pct_chg"), errors="coerce")
-    if pct.empty or pd.isna(pct.iloc[-1]):
-        return None
-    return float(pct.iloc[-1])
+    pct = pd.to_numeric(s.get("pct_chg", pd.Series(dtype=float)), errors="coerce")
+    if latest_pct is None and len(pct) >= 1 and pd.notna(pct.iloc[-1]):
+        latest_pct = float(pct.iloc[-1])
+    if previous_pct is None and len(pct) >= 2 and pd.notna(pct.iloc[-2]):
+        previous_pct = float(pct.iloc[-2])
+    return latest_pct, previous_pct
 
 
 def _find_big_gainers(
     df_map: dict[str, pd.DataFrame],
     name_map: dict[str, str],
-    threshold: float = 8.0,
+    today_threshold: float = TODAY_REVIEW_MIN_PCT,
+    previous_max: float = PREVIOUS_REVIEW_MAX_PCT,
 ) -> list[str]:
-    """找出当日涨幅 >= threshold% 的主板+创业板非ST股票。"""
     codes: list[str] = []
     for code, df in df_map.items():
         if not _is_main_or_chinext(code):
@@ -136,8 +147,13 @@ def _find_big_gainers(
             continue
         if df is None or df.empty:
             continue
-        pct = _latest_pct_change(df)
-        if pct is not None and pct >= threshold:
+        latest_pct, previous_pct = _latest_two_pct_changes(df)
+        if (
+            latest_pct is not None
+            and previous_pct is not None
+            and latest_pct >= today_threshold
+            and previous_pct <= previous_max
+        ):
             codes.append(code)
     codes.sort()
     return codes
@@ -146,7 +162,7 @@ def _find_big_gainers(
 def _find_big_gainers_from_spot(
     spot_map: dict[str, dict],
     name_map: dict[str, str],
-    threshold: float = 8.0,
+    threshold: float = TODAY_REVIEW_MIN_PCT,
 ) -> tuple[list[str], int]:
     """从全市场实时快照中找出涨幅 >= threshold% 的主板+创业板非ST股票。"""
     codes: list[str] = []
@@ -172,6 +188,24 @@ def _find_big_gainers_from_spot(
     return codes, usable
 
 
+def _fetch_and_filter_review_codes(codes: list[str], name_map: dict[str, str], window) -> list[str]:
+    from tools.data_fetcher import fetch_all_ohlcv
+
+    df_map, stats = fetch_all_ohlcv(
+        symbols=codes,
+        window=window,
+        enforce_target_trade_date=True,
+        direct_source=True,
+    )
+    print(
+        "[review] 三日数据拉取完成: "
+        f"ok={stats.get('fetch_ok', len(df_map))}, "
+        f"fail={stats.get('fetch_fail', 0)}, "
+        f"target_trade_date={window.end_trade_date}"
+    )
+    return _find_big_gainers(df_map, name_map)
+
+
 def _review_spot_min_coverage() -> float:
     try:
         value = float(os.getenv("REVIEW_SPOT_MIN_COVERAGE", "0.8"))
@@ -181,52 +215,38 @@ def _review_spot_min_coverage() -> float:
 
 
 def _load_today_review_codes(all_codes: list[str], name_map_today: dict[str, str], today_window) -> list[str]:
-    review_codes: list[str] = []
+    spot_codes: list[str] = []
     spot_usable = 0
     try:
         from integrations.data_source import _load_spot_snapshot_map
 
         spot_map = _load_spot_snapshot_map(force_refresh=True)
-        review_codes, spot_usable = _find_big_gainers_from_spot(
+        spot_codes, spot_usable = _find_big_gainers_from_spot(
             spot_map=spot_map,
             name_map=name_map_today,
-            threshold=8.0,
         )
         print(
             "[review] 实时快照加载完成: "
             f"symbols={len(spot_map or {})}, usable_pct={spot_usable}, "
-            f"big_gainers={len(review_codes)}"
+            f"today_gainers={len(spot_codes)}"
         )
     except Exception as e:
+        spot_codes = []
         print(f"[review] 实时快照加载失败，准备回退日线拉取: {e}")
 
     spot_min_coverage = _review_spot_min_coverage()
     spot_coverage = spot_usable / max(len(all_codes), 1)
     if spot_usable > 0 and spot_coverage >= spot_min_coverage:
-        return review_codes
-
-    from tools.data_fetcher import fetch_all_ohlcv
+        return _fetch_and_filter_review_codes(spot_codes, name_map_today, today_window)
 
     if spot_usable <= 0:
-        print("[review] 实时快照不可用，回退到两日 OHLCV 拉取")
+        print("[review] 实时快照不可用，回退到三日 OHLCV 拉取")
     else:
         print(
-            "[review] 实时快照覆盖不足，回退到两日 OHLCV 拉取: "
+            "[review] 实时快照覆盖不足，回退到三日 OHLCV 拉取: "
             f"coverage={spot_coverage:.1%}, min={spot_min_coverage:.1%}"
         )
-    today_df_map, today_fetch_stats = fetch_all_ohlcv(
-        symbols=all_codes,
-        window=today_window,
-        enforce_target_trade_date=True,
-        direct_source=True,
-    )
-    print(
-        "[review] 今日数据拉取完成: "
-        f"ok={today_fetch_stats.get('fetch_ok', len(today_df_map))}, "
-        f"fail={today_fetch_stats.get('fetch_fail', 0)}, "
-        f"target_trade_date={today_window.end_trade_date}"
-    )
-    return _find_big_gainers(today_df_map, name_map_today, threshold=8.0)
+    return _fetch_and_filter_review_codes(all_codes, name_map_today, today_window)
 
 
 def _blocked_exit_signal_map(exit_signals: dict[str, dict] | None) -> dict[str, dict]:
@@ -402,7 +422,7 @@ def _build_report_lines(
     lines = [
         f"**今日**: {today}",
         f"**前一日漏斗**: {end_trade_date}",
-        f"**今日涨幅 ≥ 8% 股票数**: {len(rows)}",
+        f"**今日≥+8%且前一日≤+6%股票数**: {len(rows)}",
         f"**结果汇总**: {summary}",
         f"**推荐表交叉检查**: 命中{recommendation_hits}只 | 未推荐{len(rows) - recommendation_hits - recommendation_unknown}只"
         + (f" | 无法确认{recommendation_unknown}只" if recommendation_unknown else ""),
@@ -426,20 +446,18 @@ def main() -> int:
         print("[review] FEISHU_WEBHOOK_URL 未配置")
         return 2
 
-    # 1. 先获取今日涨幅 ≥ 8% 的股票（使用今日数据）
-    print("[review] 获取今日涨幅 ≥ 8% 股票...")
+    print("[review] 获取今日涨幅 ≥ 8% 且前一日涨幅 ≤ 6% 股票...")
     from datetime import timedelta
 
     from integrations.fetch_a_share_csv import _resolve_trading_window, get_stocks_by_board
     from utils.trading_clock import resolve_end_calendar_day
 
     end_calendar_day = resolve_end_calendar_day()
-    today_window = _resolve_trading_window(end_calendar_day=end_calendar_day, trading_days=2)
+    today_window = _resolve_trading_window(end_calendar_day=end_calendar_day, trading_days=3)
     today = today_window.end_trade_date
     previous_window = _resolve_trading_window(end_calendar_day=today - timedelta(days=1), trading_days=1)
     previous_trade_date = previous_window.end_trade_date
 
-    # 获取今日数据找涨停股
     print(f"[review] 今日: {today}, 前一交易日: {previous_trade_date}")
     stock_items = get_stocks_by_board("main_chinext")
     name_map_today = {
@@ -451,10 +469,14 @@ def main() -> int:
     review_codes = _load_today_review_codes(all_codes, name_map_today, today_window)
 
     if not review_codes:
-        print("[review] 今日无涨幅 ≥ 8% 的股票，跳过")
-        send_feishu_notification(webhook, "🔍 涨停复盘", f"交易日 {today}：今日无涨幅 ≥ 8% 的主板/创业板股票")
+        print("[review] 今日无满足涨幅 ≥ 8% 且前一日涨幅 ≤ 6% 的股票，跳过")
+        send_feishu_notification(
+            webhook,
+            "🔍 涨停复盘",
+            f"交易日 {today}：今日无满足涨幅 ≥ 8% 且前一日涨幅 ≤ 6% 的主板/创业板股票",
+        )
         return 0
-    print(f"[review] 今日发现涨幅 ≥ 8% 股票 {len(review_codes)} 只: {', '.join(review_codes)}")
+    print(f"[review] 今日发现满足严格涨停复盘池股票 {len(review_codes)} 只: {', '.join(review_codes)}")
 
     # 2. 回放前一日漏斗（使用前一日数据）
     print(f"[review] 回放前一交易日 ({previous_trade_date}) 漏斗...")
