@@ -740,6 +740,7 @@ class WyckoffTUI(App):
                     "  /login   — 登录\n"
                     "  /logout  — 退出登录\n"
                     "  /token   — Token 用量\n"
+                    "  /changelog— 版本更新日志\n"
                     "  /schedule— 定时任务（list/add/rm/on/off）\n"
                     "  /resume  — 恢复历史对话\n"
                     "  /new     — 新对话 (Ctrl+N)\n"
@@ -800,6 +801,8 @@ class WyckoffTUI(App):
                         "[dim]/model 用法: /model (切换) | /model list | /model add | /model rm <id> | /model default <id>[/dim]"
                     )
                 )
+        elif cmd == "/changelog":
+            self._show_changelog(log)
         elif cmd == "/resume":
             parts = raw.strip().split(maxsplit=1)
             if len(parts) > 1:
@@ -810,6 +813,21 @@ class WyckoffTUI(App):
             self._handle_schedule_cmd(raw, log)
         else:
             self._try_skill(raw, log)
+
+    def _show_changelog(self, log) -> None:
+        from pathlib import Path
+
+        path = Path(__file__).resolve().parent.parent / "CHANGELOG.md"
+        if not path.exists():
+            log.write(Text.from_markup("[dim]CHANGELOG.md 不存在[/dim]"))
+            return
+        text = path.read_text(encoding="utf-8").strip()
+        lines = text.splitlines()
+        # 只显示最近一个版本段落（到下一个 ## 或结尾）
+        start = next((i for i, l in enumerate(lines) if l.startswith("## ")), 0)
+        end = next((i for i in range(start + 1, len(lines)) if lines[i].startswith("## ")), len(lines))
+        section = "\n".join(lines[start:end]).strip()
+        log.write(Text.from_markup(f"\n[bold]{section}[/bold]\n"))
 
     # ----- Skills -----
 
