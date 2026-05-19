@@ -7,7 +7,7 @@ DEFAULT_LLM_PROVIDER(可选，默认 gemini), GEMINI_API_KEY, GEMINI_MODEL,
 OPENAI_API_KEY, OPENAI_MODEL(可选), 以及其它厂商 *_API_KEY/*_MODEL/*_BASE_URL,
 SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY(可选), SUPABASE_USER_ID,
 TG_BOT_TOKEN, TG_CHAT_ID, MY_PORTFOLIO_STATE(可选兜底),
-STEP3_SKIP_LLM(可选), DAILY_JOB_SKIP_STEP4(可选), LOGS_DIR(可选)
+STEP3_SKIP_LLM(可选), DAILY_JOB_SKIP_STEP4(可选), DAILY_JOB_PREVIEW_ONLY(可选), LOGS_DIR(可选)
 """
 
 from __future__ import annotations
@@ -50,6 +50,10 @@ STEP4_REASON_MAP = {
     "telegram_failed": "Telegram 推送失败",
     "ok": "ok",
 }
+
+
+def _env_flag(name: str) -> bool:
+    return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _now() -> str:
@@ -122,8 +126,16 @@ def _latest_trade_date_str() -> str:
     return window.end_trade_date.isoformat()
 
 
-def _persist_benchmark_context(benchmark_context: dict, logs_path: str | None = None) -> None:
+def _persist_benchmark_context(
+    benchmark_context: dict,
+    logs_path: str | None = None,
+    *,
+    dry_run: bool = False,
+) -> None:
     if not benchmark_context:
+        return
+    if dry_run:
+        _log("预演模式: 跳过市场信号写库(benchmark)", logs_path)
         return
     trade_date = _latest_trade_date_str()
     payload = {
@@ -149,6 +161,54 @@ def _persist_benchmark_context(benchmark_context: dict, logs_path: str | None = 
         f"市场信号写库(benchmark): ok={ok}, trade_date={trade_date}, regime={payload.get('benchmark_regime')}",
         logs_path,
     )
+
+
+def _persist_recommendations(
+    symbols_info: list[dict],
+    logs_path: str | None,
+    *,
+    dry_run: bool = False,
+) -> int | None:
+    if dry_run:
+        _log(f"预演模式: 跳过推荐记录入库 count={len(symbols_info)}", logs_path)
+        return None
+    try:
+        recommend_trade_date_int = int(_latest_trade_date_str().replace("-", ""))
+        rec_ok = upsert_recommendations(recommend_trade_date_int, symbols_info)
+        _log(
+            f"推荐记录入库: ok={rec_ok}, count={len(symbols_info)}, date={recommend_trade_date_int}",
+            logs_path,
+        )
+        return recommend_trade_date_int
+    except Exception as e:
+        _log(f"推荐记录入库失败: {e}", logs_path)
+        return None
+
+
+def _mark_step3_recommendations(
+    recommend_trade_date_int: int | None,
+    step3_springboard_codes: list[str],
+    logs_path: str | None,
+    *,
+    dry_run: bool = False,
+) -> None:
+    if dry_run:
+        _log("预演模式: 跳过推荐记录AI标记", logs_path)
+        return
+    if recommend_trade_date_int is None:
+        return
+    try:
+        ai_mark_ok = mark_ai_recommendations(
+            recommend_date=recommend_trade_date_int,
+            ai_codes=step3_springboard_codes,
+        )
+        _log(
+            "推荐记录AI标记: "
+            f"ok={ai_mark_ok}, date={recommend_trade_date_int}, ai_count={len(step3_springboard_codes)}",
+            logs_path,
+        )
+    except Exception as e:
+        _log(f"推荐记录AI标记失败: {e}", logs_path)
 
 
 def _load_step4_target() -> tuple[dict | None, str]:
@@ -179,6 +239,8 @@ def _run_signal_confirmation(
     step2_details: dict,
     benchmark_context: dict | None,
     logs_path: str | None,
+    *,
+    dry_run: bool = False,
 ) -> None:
     """Step2.5: pending 信号确认，confirmed 追加到 symbols_info。"""
     try:
@@ -196,8 +258,10 @@ def _run_signal_confirmation(
                 else "NEUTRAL",
                 name_map=step2_details.get("name_map", {}),
                 sector_map=step2_details.get("sector_map", {}),
+                dry_run=dry_run,
             )
-            _log(f"Step2.5 信号确认: confirmed={len(confirmed_extra)}", logs_path)
+            suffix = "（preview dry-run，不写库）" if dry_run else ""
+            _log(f"Step2.5 信号确认{suffix}: confirmed={len(confirmed_extra)}", logs_path)
             existing_codes = {str(s.get("code", "")).strip() for s in symbols_info}
             for cs in confirmed_extra:
                 if str(cs.get("code", "")).strip() not in existing_codes:
@@ -363,8 +427,14 @@ def main() -> int:
     ).strip() or DEFAULT_GEMINI_MODEL
     base_url_env_key = f"{provider.upper()}_BASE_URL"
     llm_base_url = (os.getenv(base_url_env_key) or OPENAI_COMPATIBLE_BASE_URLS.get(provider, "") or "").strip()
-    step3_skip_llm = os.getenv("STEP3_SKIP_LLM", "").strip().lower() in {"1", "true", "yes", "on"}
-    skip_step4 = os.getenv("DAILY_JOB_SKIP_STEP4", "").strip().lower() in {"1", "true", "yes", "on"}
+    step3_skip_llm = _env_flag("STEP3_SKIP_LLM")
+    skip_step4 = _env_flag("DAILY_JOB_SKIP_STEP4")
+    preview_only = _env_flag("DAILY_JOB_PREVIEW_ONLY")
+    if preview_only:
+        os.environ["STEP3_SKIP_LLM"] = "1"
+        os.environ["DAILY_JOB_SKIP_STEP4"] = "1"
+    step3_skip_llm = step3_skip_llm or preview_only
+    skip_step4 = skip_step4 or preview_only
 
     logs_path = args.logs or os.path.join(
         os.getenv("LOGS_DIR", "logs"),
@@ -417,6 +487,8 @@ def main() -> int:
     recommend_trade_date_int: int | None = None
 
     _log("开始定时任务", logs_path)
+    if preview_only:
+        _log("预演模式: 仅生成 Step3 LLM input，跳过 Step2 通知和所有写库动作", logs_path)
 
     # Step2: Wyckoff Funnel
     t0 = datetime.now(TZ)
@@ -424,7 +496,7 @@ def main() -> int:
     step2_err = None
     step2_details: dict = {}
     try:
-        result = run_step2(webhook, return_details=True)
+        result = run_step2("" if preview_only else webhook, notify=not preview_only, return_details=True)
         step2_ok, symbols_info, benchmark_context, step2_details = result
         step2_err = None if step2_ok else "飞书发送失败"
     except Exception as e:
@@ -446,24 +518,16 @@ def main() -> int:
     if step2_err:
         has_blocking_failure = True
     elif benchmark_context:
-        _persist_benchmark_context(benchmark_context, logs_path)
+        _persist_benchmark_context(benchmark_context, logs_path, dry_run=preview_only)
 
     # Step2.5: 信号确认（pending → confirmed/expired）— 必须在推荐写入前执行，
     # 使 confirmed 信号能沉淀进 recommendation_tracking
     if step2_ok and step2_details:
-        _run_signal_confirmation(symbols_info, step2_details, benchmark_context, logs_path)
+        _run_signal_confirmation(symbols_info, step2_details, benchmark_context, logs_path, dry_run=preview_only)
 
     # 形态复盘写库（按 recommend_date=最近交易日）
     if step2_ok and symbols_info:
-        try:
-            recommend_trade_date_int = int(_latest_trade_date_str().replace("-", ""))
-            rec_ok = upsert_recommendations(recommend_trade_date_int, symbols_info)
-            _log(
-                f"推荐记录入库: ok={rec_ok}, count={len(symbols_info)}, date={recommend_trade_date_int}",
-                logs_path,
-            )
-        except Exception as e:
-            _log(f"推荐记录入库失败: {e}", logs_path)
+        recommend_trade_date_int = _persist_recommendations(symbols_info, logs_path, dry_run=preview_only)
 
     # Step2.7: 起跳板 A/B/C 量化评分
     if symbols_info and step2_details:
@@ -521,19 +585,7 @@ def main() -> int:
             f"Step3 批量研报: 起跳板代码={len(step3_springboard_codes)} ({preview_codes})",
             logs_path,
         )
-        if recommend_trade_date_int is not None:
-            try:
-                ai_mark_ok = mark_ai_recommendations(
-                    recommend_date=recommend_trade_date_int,
-                    ai_codes=step3_springboard_codes,
-                )
-                _log(
-                    "推荐记录AI标记: "
-                    f"ok={ai_mark_ok}, date={recommend_trade_date_int}, ai_count={len(step3_springboard_codes)}",
-                    logs_path,
-                )
-            except Exception as e:
-                _log(f"推荐记录AI标记失败: {e}", logs_path)
+        _mark_step3_recommendations(recommend_trade_date_int, step3_springboard_codes, logs_path, dry_run=preview_only)
     else:
         summary.append({"step": "批量研报", "ok": True, "err": None, "elapsed_s": 0, "output": "skipped (no symbols)"})
         _log("Step3 批量研报: 跳过（无筛选结果）", logs_path)
