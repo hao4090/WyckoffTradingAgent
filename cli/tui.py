@@ -32,6 +32,30 @@ from textual.widgets import Input, OptionList, RichLog, Static
 from textual.widgets.option_list import Option
 
 # ---------------------------------------------------------------------------
+# 禁用 kitty keyboard protocol（与 macOS 中文输入法冲突）
+# ---------------------------------------------------------------------------
+def _patch_driver_no_kitty() -> None:
+    from textual.drivers.linux_driver import LinuxDriver
+
+    _orig_start = LinuxDriver.start_application_mode
+
+    def _patched_start(self, *args, **kwargs):
+        _orig_write = self.write
+        def _filtered_write(data: str) -> None:
+            if "\x1b[>1u" in data:
+                data = data.replace("\x1b[>1u", "")
+            if data:
+                _orig_write(data)
+        self.write = _filtered_write
+        _orig_start(self, *args, **kwargs)
+        self.write = _orig_write
+
+    LinuxDriver.start_application_mode = _patched_start
+
+
+_patch_driver_no_kitty()
+
+# ---------------------------------------------------------------------------
 # Widget
 # ---------------------------------------------------------------------------
 from cli.runtime import AgentCancelled, AgentRuntime
@@ -1660,12 +1684,10 @@ class WyckoffTUI(App):
                     final_rounds = int(event.get("rounds", 0))
 
                     if final_text:
-                        if _streaming_started:
-                            _clear_streamed_block(include_separator=False)
-                        else:
+                        if not _streaming_started:
                             _write(Text.from_markup("  [dim]───[/dim]"))
-                        _write(Markdown(final_text))
-                        _scroll()
+                            _write(Markdown(final_text))
+                            _scroll()
 
                     total_input = final_usage.get("input_tokens", 0)
                     total_output = final_usage.get("output_tokens", 0)
