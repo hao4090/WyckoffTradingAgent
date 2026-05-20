@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       symbol:
-        description: "单只股票代码，如 603390、00700.HK、AAPL"
+        description: "股票代码（逗号分隔可批量，同一市场），如 002980,301511,301018"
         required: true
         type: string
       start_date:
@@ -63,9 +63,10 @@ jobs:
       - name: Append report summary
         if: always()
         run: |
-          if [ -f logs/single_symbol_funnel/report.md ]; then
-            cat logs/single_symbol_funnel/report.md >> "$GITHUB_STEP_SUMMARY"
-          fi
+          find logs/single_symbol_funnel -name "report.md" | sort | while read f; do
+            cat "$f" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+          done
 
       - name: Upload artifacts
         if: always()
