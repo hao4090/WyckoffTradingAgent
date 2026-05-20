@@ -26,6 +26,7 @@ from core.wyckoff_engine import (
     normalize_hist_from_fetch,
 )
 from integrations.data_source import fetch_index_hist, fetch_market_cap_map, fetch_sector_map, fetch_stock_hist
+from integrations.fetch_a_share_csv import get_stocks_by_board
 from integrations.tickflow_client import TickFlowClient
 from scripts.market_funnel_job import funnel_config_for_market
 from tools.candidate_ranker import TRIGGER_LABELS, TRIGGER_SHORT_LABELS
@@ -183,10 +184,56 @@ def _safe_fetch_benchmark(start: date, end: date, hist: pd.DataFrame) -> pd.Data
         return None
 
 
+def load_rps_universe_histories(
+    spec: SymbolSpec, start: date, end: date, rps_window: int = 150
+) -> dict[str, pd.DataFrame]:
+    if spec.market != "cn":
+        return {}
+    items = get_stocks_by_board("main_chinext")
+    symbols = [str(s["code"]).strip() for s in items if s.get("code")]
+    symbols = [s for s in symbols if s and s != spec.symbol]
+    if not symbols:
+        return {}
+    print(f"[diagnosis] RPS 全市场加载: universe={len(symbols)} symbols", flush=True)
+    client = TickFlowClient(api_key=os.getenv("TICKFLOW_API_KEY", ""))
+    count = rps_window + 30
+    end_ms = _date_to_utc_ms(end + timedelta(days=1))
+    out: dict[str, pd.DataFrame] = {}
+    batch_size = 200
+    chunks = [symbols[i : i + batch_size] for i in range(0, len(symbols), batch_size)]
+    for idx, chunk in enumerate(chunks, 1):
+        print(f"[diagnosis] RPS K线批次 {idx}/{len(chunks)}", flush=True)
+        batch = client.get_klines_batch(chunk, period="1d", count=count, end_time_ms=end_ms, adjust="forward")
+        for sym, df in batch.items():
+            norm = normalize_hist_from_fetch(df)
+            if norm is not None and len(norm) >= rps_window:
+                out[sym] = norm
+    print(f"[diagnosis] RPS 历史加载完成: fetched={len(out)}/{len(symbols)}", flush=True)
+    return out
+
+
 def config_for_symbol(spec: SymbolSpec, trading_days: int) -> FunnelConfig:
     if spec.market == "cn":
         return FunnelConfig(trading_days=trading_days)
     return funnel_config_for_market(spec.market, trading_days=trading_days)
+
+
+def _build_rps_context(
+    df_map: dict[str, pd.DataFrame],
+    rps_histories: dict[str, pd.DataFrame] | None,
+    day: date,
+) -> tuple[dict[str, pd.DataFrame], list[str] | None]:
+    if not rps_histories:
+        return df_map, None
+    merged: dict[str, pd.DataFrame] = dict(df_map)
+    day_str = day.isoformat()
+    for sym, full_df in rps_histories.items():
+        if sym in merged:
+            continue
+        sliced = full_df[full_df["date"] <= day_str]
+        if len(sliced) >= 50:
+            merged[sym] = sliced
+    return merged, list(merged.keys())
 
 
 def replay_symbol(
@@ -196,9 +243,10 @@ def replay_symbol(
     cfg: FunnelConfig,
     start: date,
     end: date,
+    rps_histories: dict[str, pd.DataFrame] | None = None,
 ) -> list[DayDiagnostic]:
     days = [x for x in hist["date_obj"].tolist() if start <= x <= end]
-    return [_evaluate_day(spec, hist[hist["date_obj"] <= day].copy(), ctx, cfg, day) for day in days]
+    return [_evaluate_day(spec, hist[hist["date_obj"] <= day].copy(), ctx, cfg, day, rps_histories) for day in days]
 
 
 def _evaluate_day(
@@ -207,6 +255,7 @@ def _evaluate_day(
     ctx: ReplayContext,
     cfg: FunnelConfig,
     day: date,
+    rps_histories: dict[str, pd.DataFrame] | None = None,
 ) -> DayDiagnostic:
     if len(day_df) < max(60, min(cfg.trading_days, 220)):
         return _diagnostic(spec, day_df, day, "MISS", "DATA", "历史数据不足，无法完成漏斗回放", {}, "")
@@ -214,7 +263,8 @@ def _evaluate_day(
     layer1 = layer1_filter([spec.symbol], ctx.name_map, ctx.market_cap_map, df_map, cfg)
     if spec.symbol not in layer1:
         return _diagnostic(spec, day_df, day, "MISS", "L1", _l1_reason(spec, day_df, ctx, cfg), {}, "")
-    layer2, channel_map, _ = layer2_strength_detailed(layer1, df_map, ctx.bench_df, cfg, rps_universe=[spec.symbol])
+    rps_df_map, rps_universe = _build_rps_context(df_map, rps_histories, day)
+    layer2, channel_map, _ = layer2_strength_detailed(layer1, rps_df_map, ctx.bench_df, cfg, rps_universe=rps_universe)
     if spec.symbol not in layer2:
         return _diagnostic(spec, day_df, day, "MISS", "L2", _l2_reason(spec, day_df, cfg), {}, "")
     layer3, _ = layer3_sector_resonance(layer2, ctx.sector_map, cfg, base_symbols=layer1, df_map=df_map)
@@ -403,7 +453,7 @@ def _json_payload(spec: SymbolSpec, rows: list[DayDiagnostic], summary: dict[str
         "symbol": asdict(spec),
         "summary": summary,
         "daily": [asdict(row) for row in rows],
-        "note": "单票复盘只回放该标的自身日线；RPS 截面和板块热度无法完全等价于全市场生产任务。",
+        "note": "RPS 已基于全市场截面排名；板块热度无法完全等价于全市场生产任务。",
     }
 
 
@@ -417,7 +467,7 @@ def build_report(spec: SymbolSpec, rows: list[DayDiagnostic], summary: dict[str,
         f"- 首次/最后选中: {summary['first_selected'] or '-'} / {summary['last_selected'] or '-'}",
         f"- 层级分布: {_fmt_counts(summary['counts'])}",
         "",
-        "> 注：该诊断一次只拉取单只股票历史数据，能精确复盘 L1/L2/L4 的个股条件；RPS 截面与板块热度属于全市场依赖，报告中按单票上下文近似。",
+        "> 注：RPS 已基于全市场截面排名（主板+创业板）；板块热度属于全市场依赖，报告中按单票上下文近似。",
         "",
         "## 每日明细",
         "",
@@ -463,32 +513,67 @@ def notify_feishu(spec: SymbolSpec, summary: dict[str, Any], report_path: str) -
     send_feishu_notification(webhook, f"单票漏斗复盘 {spec.symbol}", content)
 
 
+def _parse_symbols(raw: str) -> list[SymbolSpec]:
+    parts = [s.strip() for s in raw.replace(";", ",").split(",") if s.strip()]
+    if not parts:
+        raise ValueError("symbol 不能为空")
+    specs = [detect_symbol_market(p) for p in parts]
+    markets = {s.market for s in specs}
+    if len(markets) > 1:
+        raise ValueError(f"批量模式要求所有股票属于同一市场，当前包含: {', '.join(sorted(markets))}")
+    return specs
+
+
+def _run_single(
+    spec: SymbolSpec,
+    start: date,
+    end: date,
+    trading_days: int,
+    output_dir: Path,
+    rps_histories: dict[str, pd.DataFrame] | None,
+) -> int:
+    print(f"[diagnosis] symbol={spec.symbol} market={spec.market} range={start}~{end}", flush=True)
+    hist = fetch_symbol_history(spec, start, end, trading_days)
+    if hist.empty:
+        print(f"[diagnosis] {spec.symbol} 没有获取到可用历史数据，跳过", flush=True)
+        return 1
+    ctx = build_context(spec, hist, start, end)
+    cfg = config_for_symbol(spec, trading_days)
+    rows = replay_symbol(spec, hist, ctx, cfg, start, end, rps_histories)
+    summary = summarize_diagnostics(rows)
+    paths = write_outputs(output_dir, spec, rows, summary)
+    notify_feishu(spec, summary, paths["md"])
+    print(f"[diagnosis] done {spec.symbol} selected={summary['selected_days']} report={paths['md']}", flush=True)
+    return 0
+
+
 def run(args: argparse.Namespace) -> int:
     start = parse_ymd(args.start_date)
     end = parse_ymd(args.end_date)
     if end < start:
         raise ValueError("end-date 不能早于 start-date")
-    spec = detect_symbol_market(args.symbol)
-    print(f"[diagnosis] symbol={spec.symbol} market={spec.market} range={start}~{end}", flush=True)
-    hist = fetch_symbol_history(spec, start, end, int(args.trading_days))
-    if hist.empty:
-        raise RuntimeError(f"{spec.symbol} 没有获取到可用历史数据")
-    ctx = build_context(spec, hist, start, end)
-    rows = replay_symbol(spec, hist, ctx, config_for_symbol(spec, int(args.trading_days)), start, end)
-    summary = summarize_diagnostics(rows)
-    paths = write_outputs(Path(args.output_dir), spec, rows, summary)
-    notify_feishu(spec, summary, paths["md"])
-    print(f"[diagnosis] done selected={summary['selected_days']} report={paths['md']}", flush=True)
-    return 0
+    specs = _parse_symbols(args.symbol)
+    cfg = config_for_symbol(specs[0], int(args.trading_days))
+    skip_rps = getattr(args, "skip_rps_universe", False)
+    rps_histories: dict[str, pd.DataFrame] | None = None
+    if not skip_rps:
+        rps_histories = load_rps_universe_histories(specs[0], start, end, cfg.rps_window_slow + 30)
+    failed = 0
+    base_dir = Path(args.output_dir)
+    for spec in specs:
+        out_dir = base_dir / spec.symbol if len(specs) > 1 else base_dir
+        failed += _run_single(spec, start, end, int(args.trading_days), out_dir, rps_histories)
+    return min(failed, 1)
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="单只股票漏斗逐日复盘诊断")
-    parser.add_argument("--symbol", required=True, help="股票代码，仅支持一个，如 603390、00700.HK、AAPL")
+    parser.add_argument("--symbol", required=True, help="股票代码，逗号分隔可批量，同一市场，如 002980,301511,301018")
     parser.add_argument("--start-date", required=True, help="回看起始日期 YYYY-MM-DD")
     parser.add_argument("--end-date", required=True, help="回看结束日期 YYYY-MM-DD")
     parser.add_argument("--trading-days", type=int, default=320, help="起始日前置交易日数量")
     parser.add_argument("--output-dir", default="logs/single_symbol_funnel", help="输出目录")
+    parser.add_argument("--skip-rps-universe", action="store_true", help="跳过全市场 RPS 计算（快速模式，RPS 不准确）")
     return parser
 
 
