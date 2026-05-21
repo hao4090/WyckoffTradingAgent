@@ -92,6 +92,9 @@ class FunnelConfig:
     rps_fast_bypass_min: float = 50.0
     rps_slope_window: int = 10  # 计算 RPS 斜率的窗口（交易日）
     rps_slope_min: float = 0.5  # RPS 斜率最小值（%/day），用于判断 RPS 是否还在上升
+    rps_slope_accel_bypass: float = 1.5  # 斜率 >= 此值时 RPS 绝对值要求放宽（加速旁路）
+    rps_accel_fast_min: float = 50.0  # 加速旁路下 RPS50 最低要求
+    rps_accel_slow_min: float = 55.0  # 加速旁路下 RPS120 最低要求
     require_bench_latest_alignment: bool = False
     momentum_bias_200_max: float = 0.25  # 防止主升通道选出离 200 日线太远的鱼尾老妖股
     # Layer 2 预点火观察池
@@ -142,7 +145,7 @@ class FunnelConfig:
     # 已确认多头且 RPS 极强的稳定趋势股，不受 bias_200 上限约束。
     # 通过最大回撤排除暴涨暴跌的老妖股。
     enable_trend_cont_channel: bool = True
-    trend_cont_rps_slow_min: float = 85.0  # RPS120 >= 此值
+    trend_cont_rps_slow_min: float = 75.0  # RPS120 >= 此值
     trend_cont_max_drawdown_pct: float = 20.0  # 近 N 日最大回撤 < 此值
     trend_cont_drawdown_window: int = 60  # 回撤计算窗口（交易日）
 
@@ -192,7 +195,7 @@ class FunnelConfig:
     compression_lookback: int = 5
     compression_atr_window: int = 20
     compression_atr_quantile: float = 0.20
-    compression_vol_decline_ratio: float = 0.70
+    compression_vol_decline_ratio: float = 0.80
     compression_max_bias_200: float = 40.0
 
     # Funnel score
@@ -552,33 +555,40 @@ def layer2_strength_detailed(
 
         # 计算 RPS 斜率：判断 RPS 是否还在上升
         rps_slope_ok = True
+        rps_slope_val = 0.0
         if cfg.enable_rps_filter and rps_filter_active and len(df_sorted) >= cfg.rps_slope_window:
             close_series = pd.to_numeric(df_sorted["close"], errors="coerce")
             rps_window = max(int(cfg.rps_slope_window), 2)
 
-            # 修正：计算最近 N 日的累计收益率曲线（相对起点），而不是单日收益率
             recent_closes = []
             for i in range(-rps_window, 0):
                 if len(close_series) + i >= 0:
                     recent_closes.append(float(close_series.iloc[i]))
 
-            # 线性回归斜率：判断累计涨幅曲线是否在爬升
             if len(recent_closes) >= 2:
                 base_price = recent_closes[0]
                 if base_price > 0:
                     cum_returns = [(p - base_price) / base_price * 100.0 for p in recent_closes]
                     x = np.arange(len(cum_returns))
                     y = np.array(cum_returns)
-                    slope = np.polyfit(x, y, 1)[0]
-                    rps_slope_ok = slope >= cfg.rps_slope_min
+                    rps_slope_val = float(np.polyfit(x, y, 1)[0])
+                    rps_slope_ok = rps_slope_val >= cfg.rps_slope_min
 
         if cfg.enable_rps_filter and rps_filter_active:
+            _accel_bypass = (
+                rps_slope_val >= cfg.rps_slope_accel_bypass
+                and rps_fast is not None
+                and rps_slow is not None
+                and rps_fast >= cfg.rps_accel_fast_min
+                and rps_slow >= cfg.rps_accel_slow_min
+            )
             momentum_rps_ok = (
                 rps_fast is not None
                 and rps_slow is not None
                 and (
                     (rps_fast >= cfg.rps_fast_min and rps_slow >= cfg.rps_slow_min and rps_slope_ok)
                     or (rps_slow >= cfg.rps_slow_strong_bypass and rps_fast >= cfg.rps_fast_bypass_min)
+                    or _accel_bypass
                 )
             )
             ambush_rps_ok = (
