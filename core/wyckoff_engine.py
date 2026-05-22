@@ -803,7 +803,16 @@ def layer2_strength_detailed(
             if sos_score is not None:
                 sos_ok = True
 
-        if momentum_ok or ambush_ok or accum_ok or dry_vol_ok or rs_div_ok or trend_cont_ok or breakout_accel_ok or sos_ok:
+        if (
+            momentum_ok
+            or ambush_ok
+            or accum_ok
+            or dry_vol_ok
+            or rs_div_ok
+            or trend_cont_ok
+            or breakout_accel_ok
+            or sos_ok
+        ):
             passed.append(sym)
             labels: list[str] = []
             if momentum_ok:
@@ -1387,8 +1396,12 @@ def _detect_compression(df: pd.DataFrame, cfg: FunnelConfig) -> float | None:
     return float(current_atr_avg / hist_atr_median) if hist_atr_median > 0 else None
 
 
-def _detect_trend_pullback(df: pd.DataFrame, cfg: FunnelConfig) -> float | None:
-    """趋势回踩：上升趋势中缩量回调后企稳。返回缩量比或None。"""
+def _detect_trend_pullback(
+    df: pd.DataFrame,
+    cfg: FunnelConfig,
+    market_cap_yi: float = 0.0,
+) -> float | None:
+    """趋势回踩：上升趋势中缩量回调后企稳。返回 score (0~1, 越大越好)。"""
     lookback = cfg.trend_pb_lookback
     ma_w = cfg.trend_pb_ma_window
     if len(df) < ma_w + lookback + 5:
@@ -1403,40 +1416,58 @@ def _detect_trend_pullback(df: pd.DataFrame, cfg: FunnelConfig) -> float | None:
     last_ma = ma.iloc[-1]
     if pd.isna(last_ma):
         return None
-    # MA20 必须上升
     ma_prev = ma.iloc[-(lookback + 1)]
     if pd.isna(ma_prev) or float(last_ma) <= float(ma_prev):
         return None
 
     recent = close.tail(lookback + 1)
     peak = float(recent.max())
-    trough = float(recent.iloc[1:].min())
-    last_close = float(close.iloc[-1])
-    if peak <= 0:
+    peak_idx = int(recent.values.argmax())
+    if peak_idx < 1 or peak <= 0:
         return None
+    # trough 不含最后一天，用于判断企稳
+    trough = float(recent.iloc[peak_idx + 1 : -1].min()) if peak_idx + 1 < len(recent) - 1 else float(recent.iloc[-1])
+    last_close = float(close.iloc[-1])
+    prev_close = float(close.iloc[-2])
 
-    pullback_pct = (peak - trough) / peak * 100.0
+    pullback_pct = (peak - min(trough, last_close)) / peak * 100.0
     if pullback_pct < cfg.trend_pb_min_pullback_pct:
         return None
     if pullback_pct > cfg.trend_pb_max_pullback_pct:
         return None
-    # 当日收盘已企稳（不是还在跌）
-    if last_close < trough:
+    # 企稳确认：当日收盘 > 前一日收盘（止跌反弹）
+    if last_close <= prev_close:
         return None
 
-    # 缩量确认：回落段均量 / 上涨段均量
-    peak_idx = recent.values.argmax()
-    if peak_idx < 1:
-        return None
+    # 缩量确认：回落段（排除峰值日）均量 / 上涨段均量
     vol_tail = volume.tail(lookback + 1)
-    vol_up = float(vol_tail.iloc[:peak_idx].mean()) if peak_idx > 0 else 0
-    vol_down = float(vol_tail.iloc[peak_idx:].mean())
-    if vol_up <= 0:
+    vol_up = float(vol_tail.iloc[: peak_idx + 1].mean())
+    vol_down_slice = vol_tail.iloc[peak_idx + 1 :]
+    if vol_down_slice.empty or vol_up <= 0:
         return None
+    vol_down = float(vol_down_slice.mean())
     vol_ratio = vol_down / vol_up
-    if vol_ratio > cfg.trend_pb_vol_shrink_ratio:
+
+    # 大市值放宽 + 饥饿模式（趋势持续久无触发）
+    threshold = cfg.trend_pb_vol_shrink_ratio
+    if market_cap_yi >= 200.0:
+        threshold = min(threshold + 0.15, 0.85)
+    # 饥饿模式：MA50>MA200 持续天数越长，阈值越宽松
+    ma50 = close.rolling(50).mean()
+    ma200 = close.rolling(200).mean()
+    if len(ma50) >= 200 and pd.notna(ma50.iloc[-1]) and pd.notna(ma200.iloc[-1]):
+        streak = 0
+        for i in range(1, min(len(ma50), 60) + 1):
+            if pd.notna(ma50.iloc[-i]) and pd.notna(ma200.iloc[-i]) and float(ma50.iloc[-i]) > float(ma200.iloc[-i]):
+                streak += 1
+            else:
+                break
+        if streak >= 20:
+            threshold = min(threshold + 0.10, 0.90)
+
+    if vol_ratio > threshold:
         return None
-    return float(vol_ratio)
+    return float(1.0 - vol_ratio)
 
 
 def layer4_triggers(
@@ -1444,6 +1475,7 @@ def layer4_triggers(
     df_map: dict[str, pd.DataFrame],
     cfg: FunnelConfig,
     channel_map: dict[str, str] | None = None,
+    market_cap_map: dict[str, float] | None = None,
 ) -> dict[str, list[tuple[str, float]]]:
     """在最终候选集上运行 Spring / LPS / EVR / Compression / SOS / TrendPullback 检测。"""
     trend_channel_tags = {"主升通道", "趋势延续", "点火破局", "加速突破"}
@@ -1457,6 +1489,7 @@ def layer4_triggers(
     }
     if channel_map is None:
         channel_map = {}
+    cap_map = market_cap_map or {}
 
     for sym in symbols:
         df = df_map.get(sym)
@@ -1482,7 +1515,8 @@ def layer4_triggers(
         if cfg.enable_trend_pullback_trigger:
             ch = channel_map.get(sym, "")
             if any(t in ch for t in trend_channel_tags):
-                score = _detect_trend_pullback(df, cfg)
+                cap_yi = float(cap_map.get(sym, 0.0) or 0.0)
+                score = _detect_trend_pullback(df, cfg, market_cap_yi=cap_yi)
                 if score is not None:
                     results["trend_pullback"].append((sym, score))
     return results
@@ -1785,6 +1819,16 @@ def layer5_exit_signals(
             stop_price, stop_reason = _compute_stop_loss(close, low, high, stage, cfg)
             last_close = float(close.iloc[-1])
             if stop_price is not None and last_close <= stop_price:
+                # 深度破位硬止损：跌幅超过 stop_price 的 5% 直接触发，不等确认
+                deep_breach = stop_price > 0 and (stop_price - last_close) / stop_price >= 0.05
+                if deep_breach:
+                    signals[sym] = {
+                        "signal": "stop_loss",
+                        "price": stop_price,
+                        "current": last_close,
+                        "reason": stop_reason + "(深度破位)",
+                    }
+                    continue
                 confirm_days = max(int(cfg.exit_confirm_days), 1)
                 if len(close) >= confirm_days:
                     recent_closes = close.tail(confirm_days)
@@ -1852,7 +1896,7 @@ def run_funnel(
         base_symbols=l1,
         df_map=prepared_df_map,
     )
-    triggers = layer4_triggers(l3, prepared_df_map, cfg, channel_map=channel_map)
+    triggers = layer4_triggers(l3, prepared_df_map, cfg, channel_map=channel_map, market_cap_map=market_cap_map)
 
     # 阶段识别和退出信号
     markup_symbols = detect_markup_stage(l3, prepared_df_map, cfg)
@@ -1992,7 +2036,11 @@ def allocate_ai_candidates(
 
     trend_pb_codes = [
         str(c).strip()
-        for c, _ in sorted(result.triggers.get("trend_pullback", []), key=lambda x: float(x[1] if x[1] is not None else 1.0))
+        for c, _ in sorted(
+            result.triggers.get("trend_pullback", []),
+            key=lambda x: float(x[1] if x[1] is not None else 0.0),
+            reverse=True,
+        )
         if str(c).strip()
     ]
     for code in _dedup_order(trend_pb_codes):

@@ -89,8 +89,10 @@ def _fetch_batch_tickflow(
     cn_tz = timezone(timedelta(hours=8))
     start_ms = int(datetime.combine(start_d, datetime.min.time(), tzinfo=cn_tz).timestamp() * 1000)
     end_ms = int(
-        (datetime.combine(end_d + timedelta(days=1), datetime.min.time(), tzinfo=cn_tz) - timedelta(milliseconds=1))
-        .timestamp() * 1000
+        (
+            datetime.combine(end_d + timedelta(days=1), datetime.min.time(), tzinfo=cn_tz) - timedelta(milliseconds=1)
+        ).timestamp()
+        * 1000
     )
     day_span = (end_d - start_d).days + 1
     count = min(max(day_span * 2 + 16, 64), 5000)
@@ -133,18 +135,20 @@ def _fetch_batch_tickflow(
         high_s = pd.to_numeric(out.get("high"), errors="coerce")
         low_s = pd.to_numeric(out.get("low"), errors="coerce")
         amp = (high_s - low_s) / prev_ref * 100.0
-        result = pd.DataFrame({
-            "日期": out["date"].values,
-            "开盘": out["open"].values,
-            "最高": out["high"].values,
-            "最低": out["low"].values,
-            "收盘": out["close"].values,
-            "成交量": out["volume"].values,
-            "成交额": out["amount"].values,
-            "涨跌幅": pct.values,
-            "换手率": 0.0,
-            "振幅": amp.values,
-        })
+        result = pd.DataFrame(
+            {
+                "日期": out["date"].values,
+                "开盘": out["open"].values,
+                "最高": out["high"].values,
+                "最低": out["low"].values,
+                "收盘": out["close"].values,
+                "成交量": out["volume"].values,
+                "成交额": out["amount"].values,
+                "涨跌幅": pct.values,
+                "换手率": 0.0,
+                "振幅": amp.values,
+            }
+        )
         df = normalize_hist_from_fetch(result)
         if df is None or df.empty:
             fail += 1

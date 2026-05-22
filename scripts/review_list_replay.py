@@ -609,7 +609,9 @@ def main() -> int:
                 "name": name,
                 "stage": stage,
                 "reason": reason,
-                "recommendation": _format_recommendation_history(code, recommendation_lookup, recommendation_error, exclude_date=today),
+                "recommendation": _format_recommendation_history(
+                    code, recommendation_lookup, recommendation_error, exclude_date=today
+                ),
             }
         )
 
