@@ -69,3 +69,44 @@ def test_evaluate_day_reports_l4_miss(monkeypatch):
     assert row.status == "MISS"
     assert row.failed_layer == "L4"
     assert "未触发正式" in row.reason
+
+
+def test_evaluate_day_slices_benchmark_to_replay_day(monkeypatch):
+    symbol = diag.SymbolSpec("cn", "603390", "A股")
+    cfg = diag.config_for_symbol(symbol, 220)
+    bench_df = pd.DataFrame(
+        {
+            "date": ["2025-11-17", "2025-11-18", "2025-11-19"],
+            "close": [3000.0, 3010.0, 2990.0],
+        }
+    )
+    ctx = diag.ReplayContext({"603390": "603390"}, {}, {}, bench_df)
+    seen: dict[str, pd.DataFrame] = {}
+
+    monkeypatch.setattr(diag, "layer1_filter", lambda symbols, *_args, **_kwargs: symbols)
+
+    def fake_layer2(symbols, _df_map, bench_arg, *_args, **_kwargs):
+        seen["bench"] = bench_arg
+        return symbols, {"603390": "main"}, []
+
+    monkeypatch.setattr(diag, "layer2_strength_detailed", fake_layer2)
+    monkeypatch.setattr(diag, "layer3_sector_resonance", lambda symbols, *_args, **_kwargs: (symbols, []))
+    monkeypatch.setattr(diag, "layer4_triggers", lambda *_args, **_kwargs: {"sos": [("603390", 10.0)]})
+
+    row = diag._evaluate_day(symbol, _daily_frame(), ctx, cfg, date(2025, 11, 18))
+
+    assert row.status == "SELECTED"
+    assert seen["bench"]["date"].tolist() == ["2025-11-17", "2025-11-18"]
+
+
+def test_load_rps_histories_rejects_empty_cn_universe(monkeypatch):
+    symbol = diag.SymbolSpec("cn", "603390", "A股")
+    cfg = diag.config_for_symbol(symbol, 220)
+    monkeypatch.setattr(diag, "load_rps_universe_histories", lambda *_args, **_kwargs: {})
+
+    try:
+        diag._load_rps_histories(symbol, date(2025, 1, 1), date(2025, 2, 1), cfg, False)
+    except RuntimeError as exc:
+        assert "RPS 全市场历史不足" in str(exc)
+    else:
+        raise AssertionError("empty RPS universe should fail before self-ranking")

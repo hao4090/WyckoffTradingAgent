@@ -33,6 +33,8 @@ from tools.candidate_ranker import TRIGGER_LABELS, TRIGGER_SHORT_LABELS
 from tools.market_universe_meta import load_symbol_name_map
 from utils.feishu import send_feishu_notification
 
+MIN_RPS_UNIVERSE_HISTORIES = 500
+
 
 @dataclass(frozen=True)
 class SymbolSpec:
@@ -236,6 +238,12 @@ def _build_rps_context(
     return merged, list(merged.keys())
 
 
+def _benchmark_for_day(bench_df: pd.DataFrame | None, day: date) -> pd.DataFrame | None:
+    if bench_df is None or bench_df.empty:
+        return bench_df
+    return bench_df[bench_df["date"] <= day.isoformat()].copy()
+
+
 def replay_symbol(
     spec: SymbolSpec,
     hist: pd.DataFrame,
@@ -264,7 +272,9 @@ def _evaluate_day(
     if spec.symbol not in layer1:
         return _diagnostic(spec, day_df, day, "MISS", "L1", _l1_reason(spec, day_df, ctx, cfg), {}, "")
     rps_df_map, rps_universe = _build_rps_context(df_map, rps_histories, day)
-    layer2, channel_map, _ = layer2_strength_detailed(layer1, rps_df_map, ctx.bench_df, cfg, rps_universe=rps_universe)
+    layer2, channel_map, _ = layer2_strength_detailed(
+        layer1, rps_df_map, _benchmark_for_day(ctx.bench_df, day), cfg, rps_universe=rps_universe
+    )
     if spec.symbol not in layer2:
         return _diagnostic(spec, day_df, day, "MISS", "L2", _l2_reason(spec, day_df, cfg), {}, "")
     layer3, _ = layer3_sector_resonance(layer2, ctx.sector_map, cfg, base_symbols=layer1, df_map=df_map)
@@ -554,16 +564,27 @@ def run(args: argparse.Namespace) -> int:
         raise ValueError("end-date 不能早于 start-date")
     specs = _parse_symbols(args.symbol)
     cfg = config_for_symbol(specs[0], int(args.trading_days))
-    skip_rps = getattr(args, "skip_rps_universe", False)
-    rps_histories: dict[str, pd.DataFrame] | None = None
-    if not skip_rps:
-        rps_histories = load_rps_universe_histories(specs[0], start, end, cfg.rps_window_slow + 30)
+    rps_histories = _load_rps_histories(specs[0], start, end, cfg, getattr(args, "skip_rps_universe", False))
     failed = 0
     base_dir = Path(args.output_dir)
     for spec in specs:
         out_dir = base_dir / spec.symbol if len(specs) > 1 else base_dir
         failed += _run_single(spec, start, end, int(args.trading_days), out_dir, rps_histories)
     return min(failed, 1)
+
+
+def _load_rps_histories(
+    spec: SymbolSpec, start: date, end: date, cfg: FunnelConfig, skip_rps: bool
+) -> dict[str, pd.DataFrame] | None:
+    if skip_rps or spec.market != "cn" or not cfg.enable_rps_filter:
+        return None
+    histories = load_rps_universe_histories(spec, start, end, cfg.rps_window_slow + 30)
+    if len(histories) < MIN_RPS_UNIVERSE_HISTORIES:
+        raise RuntimeError(
+            f"RPS 全市场历史不足（{len(histories)}/{MIN_RPS_UNIVERSE_HISTORIES}），"
+            "无法生成可信截面排名；如需快速近似请显式使用 --skip-rps-universe"
+        )
+    return histories
 
 
 def build_parser() -> argparse.ArgumentParser:
