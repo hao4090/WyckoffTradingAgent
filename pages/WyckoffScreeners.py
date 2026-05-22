@@ -23,6 +23,7 @@ TRIGGER_LABELS = {
     "lps": "LPS（缩量回踩）",
     "evr": "Effort vs Result（放量不跌）",
     "compression": "Compression（压缩蓄势）",
+    "trend_pullback": "TrendPB（趋势回踩）",
 }
 STATE_KEY = "funnel_background_job"
 
