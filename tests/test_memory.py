@@ -130,35 +130,37 @@ class TestSaveSessionSummary:
     def test_dedup_unknown_duplicate_id_still_saves(self, monkeypatch, tmp_path):
         local_db = _init_tmp_db(monkeypatch, tmp_path)
         try:
-            local_db.save_memory("stock_opinion", "000001 旧观察", codes="000001")
+            local_db.save_memory("preference", "旧偏好", codes="000001")
+            existing = local_db.get_recent_memories(memory_type="preference", limit=10)
+            unknown_id = max(m["id"] for m in existing) + 1
 
             saved = _save_summary_memories(
-                "[股票] 000001 新观察",
+                "[偏好] 新偏好",
                 "000001",
                 "chat_log:s2",
-                _Provider(["DUPLICATE:999"]),
+                _Provider([f"DUPLICATE:{unknown_id}"]),
             )
 
-            memories = local_db.get_recent_memories(memory_type="stock_opinion", limit=10)
+            memories = local_db.get_recent_memories(memory_type="preference", limit=10)
             assert saved == 1
-            assert any(m["content"] == "000001 新观察" for m in memories)
+            assert any(m["content"] == "新偏好" for m in memories)
         finally:
             _close_tmp_db(local_db)
 
     def test_dedup_failure_still_saves(self, monkeypatch, tmp_path):
         local_db = _init_tmp_db(monkeypatch, tmp_path)
         try:
-            local_db.save_memory("stock_opinion", "000001 旧观察", codes="000001")
+            local_db.save_memory("preference", "旧偏好", codes="000001")
 
             saved = _save_summary_memories(
-                "[股票] 000001 新观察",
+                "[偏好] 新偏好",
                 "000001",
                 "chat_log:s2",
                 _FailingProvider(),
             )
 
-            memories = local_db.get_recent_memories(memory_type="stock_opinion", limit=10)
+            memories = local_db.get_recent_memories(memory_type="preference", limit=10)
             assert saved == 1
-            assert any(m["content"] == "000001 新观察" for m in memories)
+            assert any(m["content"] == "新偏好" for m in memories)
         finally:
             _close_tmp_db(local_db)
