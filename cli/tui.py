@@ -41,7 +41,7 @@ _KITTY_DISABLE = "\x1b[<u"
 _CSI_U_IME_RE = re.compile(r"\x1b\[\d+(?::\d+)*;;([\d:]+)u")
 
 
-def _decode_csi_u(m: re.Match) -> str:
+def _decode_csi_u(m: re.Match[str]) -> str:
     text_field = m.group(1)
     try:
         return "".join(chr(int(cp)) for cp in text_field.split(":") if cp)
