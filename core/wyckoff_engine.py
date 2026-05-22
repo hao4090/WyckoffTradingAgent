@@ -2,7 +2,7 @@
 Wyckoff Funnel 5 层漏斗筛选引擎
 
 Layer 1: 剥离垃圾（ST / 北交所 / 科创板 / 市值 / 成交额）
-Layer 2: 六通道甄选（主升/潜伏/吸筹/地量/暗中护盘/点火破局）
+Layer 2: 七通道甄选（主升/潜伏/吸筹/地量/暗中护盘/趋势延续/点火破局）
 Layer 2.5: Markup 加速检测
 Layer 3: 板块共振（行业分布 Top-N + RPS 动量）
 Layer 4: 威科夫狙击（Spring / SOS / LPS / Effort vs Result）
@@ -92,6 +92,9 @@ class FunnelConfig:
     rps_fast_bypass_min: float = 50.0
     rps_slope_window: int = 10  # 计算 RPS 斜率的窗口（交易日）
     rps_slope_min: float = 0.5  # RPS 斜率最小值（%/day），用于判断 RPS 是否还在上升
+    rps_slope_accel_bypass: float = 1.5  # 斜率 >= 此值时 RPS 绝对值要求放宽（加速旁路）
+    rps_accel_fast_min: float = 50.0  # 加速旁路下 RPS50 最低要求
+    rps_accel_slow_min: float = 55.0  # 加速旁路下 RPS120 最低要求
     require_bench_latest_alignment: bool = False
     momentum_bias_200_max: float = 0.25  # 防止主升通道选出离 200 日线太远的鱼尾老妖股
     # Layer 2 预点火观察池
@@ -137,6 +140,14 @@ class FunnelConfig:
     rs_div_stock_window: int = 20  # 个股同期窗口
     rs_div_bench_ref_window: int = 60  # 大盘新低对比的参考窗口（近 60 日）
     rs_div_price_from_low_max: float = 0.50  # 位阶保护：现价 <= 年内低点 +50%
+
+    # Layer 2 趋势延续通道（Trend Continuation Channel）
+    # 已确认多头且 RPS 极强的稳定趋势股，不受 bias_200 上限约束。
+    # 通过最大回撤排除暴涨暴跌的老妖股。
+    enable_trend_cont_channel: bool = True
+    trend_cont_rps_slow_min: float = 75.0  # RPS120 >= 此值
+    trend_cont_max_drawdown_pct: float = 20.0  # 近 N 日最大回撤 < 此值
+    trend_cont_drawdown_window: int = 60  # 回撤计算窗口（交易日）
 
     # Layer 3
     # 行业共振过滤：按"行业样本数分位阈值 + 最小样本数"动态过滤，避免固定 TopN 误杀。
@@ -184,7 +195,7 @@ class FunnelConfig:
     compression_lookback: int = 5
     compression_atr_window: int = 20
     compression_atr_quantile: float = 0.20
-    compression_vol_decline_ratio: float = 0.70
+    compression_vol_decline_ratio: float = 0.80
     compression_max_bias_200: float = 40.0
 
     # Funnel score
@@ -544,33 +555,40 @@ def layer2_strength_detailed(
 
         # 计算 RPS 斜率：判断 RPS 是否还在上升
         rps_slope_ok = True
+        rps_slope_val = 0.0
         if cfg.enable_rps_filter and rps_filter_active and len(df_sorted) >= cfg.rps_slope_window:
             close_series = pd.to_numeric(df_sorted["close"], errors="coerce")
             rps_window = max(int(cfg.rps_slope_window), 2)
 
-            # 修正：计算最近 N 日的累计收益率曲线（相对起点），而不是单日收益率
             recent_closes = []
             for i in range(-rps_window, 0):
                 if len(close_series) + i >= 0:
                     recent_closes.append(float(close_series.iloc[i]))
 
-            # 线性回归斜率：判断累计涨幅曲线是否在爬升
             if len(recent_closes) >= 2:
                 base_price = recent_closes[0]
                 if base_price > 0:
                     cum_returns = [(p - base_price) / base_price * 100.0 for p in recent_closes]
                     x = np.arange(len(cum_returns))
                     y = np.array(cum_returns)
-                    slope = np.polyfit(x, y, 1)[0]
-                    rps_slope_ok = slope >= cfg.rps_slope_min
+                    rps_slope_val = float(np.polyfit(x, y, 1)[0])
+                    rps_slope_ok = rps_slope_val >= cfg.rps_slope_min
 
         if cfg.enable_rps_filter and rps_filter_active:
+            _accel_bypass = (
+                rps_slope_val >= cfg.rps_slope_accel_bypass
+                and rps_fast is not None
+                and rps_slow is not None
+                and rps_fast >= cfg.rps_accel_fast_min
+                and rps_slow >= cfg.rps_accel_slow_min
+            )
             momentum_rps_ok = (
                 rps_fast is not None
                 and rps_slow is not None
                 and (
                     (rps_fast >= cfg.rps_fast_min and rps_slow >= cfg.rps_slow_min and rps_slope_ok)
                     or (rps_slow >= cfg.rps_slow_strong_bypass and rps_fast >= cfg.rps_fast_bypass_min)
+                    or _accel_bypass
                 )
             )
             ambush_rps_ok = (
@@ -723,6 +741,22 @@ def layer2_strength_detailed(
                                     if vol_confirm_ok:
                                         rs_div_ok = True
 
+        # 趋势延续通道（Trend Continuation Channel）
+        # 已确认多头 + RPS120 极强 + 近期回撤可控 → 不受 bias_200 限制
+        trend_cont_ok = False
+        if cfg.enable_trend_cont_channel and bullish_alignment and rps_filter_active:
+            _tc_rps_ok = rps_slow is not None and rps_slow >= cfg.trend_cont_rps_slow_min
+            _tc_dd_ok = False
+            if _tc_rps_ok:
+                dd_window = max(int(cfg.trend_cont_drawdown_window), 10)
+                recent_close = close.tail(dd_window)
+                if len(recent_close) >= 10:
+                    cum_max = recent_close.cummax()
+                    drawdown = (recent_close - cum_max) / cum_max * 100.0
+                    max_dd = float(drawdown.min())
+                    _tc_dd_ok = abs(max_dd) < cfg.trend_cont_max_drawdown_pct
+            trend_cont_ok = _tc_rps_ok and _tc_dd_ok
+
         # 点火破局通道（SOS Bypass）
         # 如果当天爆发了放量大阳线，哪怕它此前 RPS 很低或者量能没萎缩，也直接送入 L4 让扳机去二次确认
         sos_ok = False
@@ -731,7 +765,7 @@ def layer2_strength_detailed(
             if sos_score is not None:
                 sos_ok = True
 
-        if momentum_ok or ambush_ok or accum_ok or dry_vol_ok or rs_div_ok or sos_ok:
+        if momentum_ok or ambush_ok or accum_ok or dry_vol_ok or rs_div_ok or trend_cont_ok or sos_ok:
             passed.append(sym)
             labels: list[str] = []
             if momentum_ok:
@@ -744,6 +778,8 @@ def layer2_strength_detailed(
                 labels.append("地量蓄势")
             if rs_div_ok:
                 labels.append("暗中护盘")
+            if trend_cont_ok:
+                labels.append("趋势延续")
             if sos_ok:
                 labels.append("点火破局")
 
@@ -1746,7 +1782,7 @@ def allocate_ai_candidates(
     max_trend_l3_fill = int(policy["max_trend_l3_fill"])
     max_accum_l3_fill = int(policy["max_accum_l3_fill"])
 
-    trend_channel_tags = {"主升通道", "点火破局"}
+    trend_channel_tags = {"主升通道", "趋势延续", "点火破局"}
     accum_channel_tags = {"潜伏通道", "吸筹通道", "地量蓄势", "暗中护盘"}
 
     def _channel_tags(code: str) -> set[str]:

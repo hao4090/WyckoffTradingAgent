@@ -86,8 +86,8 @@ class TestBuildMemoryContext:
             local_db.save_memory("persona", "用户偏好低换手、重视止损", memory_level="L3")
             local_db.save_memory("preference", "不追涨", codes="000001")
             local_db.save_memory(
-                "stock_opinion",
-                "000001 处于吸筹观察，等待放量确认",
+                "decision",
+                "用户决定等待 000001 放量确认",
                 codes="000001",
                 source_ref="chat_log:s1",
             )
@@ -95,14 +95,14 @@ class TestBuildMemoryContext:
             context = build_memory_context("000001 接下来怎么处理")
 
             assert "# 用户画像" in context
-            assert "# 历史原子记忆" in context
+            assert "# 历史记忆" in context
             assert "源:chat_log:s1" in context
         finally:
             _close_tmp_db(local_db)
 
 
 class TestSaveSessionSummary:
-    def test_stores_atoms_layers_and_source(self, monkeypatch, tmp_path):
+    def test_stores_supported_atoms_and_source(self, monkeypatch, tmp_path):
         local_db = _init_tmp_db(monkeypatch, tmp_path)
         try:
             provider = _Provider(
@@ -122,7 +122,7 @@ class TestSaveSessionSummary:
 
             memories = local_db.get_recent_memories(limit=10)
             types = {m["memory_type"] for m in memories}
-            assert {"stock_opinion", "decision", "preference", "persona", "scenario"} <= types
+            assert types == {"decision", "preference"}
             assert any(m["source_ref"] == "chat_log:s1" for m in memories)
         finally:
             _close_tmp_db(local_db)

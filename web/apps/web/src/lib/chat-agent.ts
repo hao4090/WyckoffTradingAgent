@@ -1,3 +1,4 @@
+import { createAnthropic } from '@ai-sdk/anthropic'
 import { createOpenAI } from '@ai-sdk/openai'
 import { generateText, stepCountIs, streamText, tool } from 'ai'
 import { z } from 'zod'
@@ -55,6 +56,7 @@ export interface LLMConfig {
   api_key: string
   model: string
   base_url: string
+  protocol?: 'openai' | 'anthropic'
 }
 
 export interface ModelOption {
@@ -63,6 +65,7 @@ export interface ModelOption {
   model: string
   api_key: string
   base_url: string
+  protocol?: 'openai' | 'anthropic'
 }
 
 const RETIRED_PROVIDERS = new Set(['zhipu', 'minimax', 'qwen', 'volcengine'])
@@ -90,7 +93,7 @@ function parseCustomProviders(raw: unknown): Record<string, Record<string, strin
 export async function loadLLMConfig(userId: string): Promise<LLMConfig | null> {
   const { data } = await supabase
     .from('user_settings')
-    .select('chat_provider, gemini_api_key, gemini_model, gemini_base_url, openai_api_key, openai_model, openai_base_url, deepseek_api_key, deepseek_model, deepseek_base_url, custom_providers')
+    .select('chat_provider, gemini_api_key, gemini_model, gemini_base_url, openai_api_key, openai_model, openai_base_url, deepseek_api_key, deepseek_model, deepseek_base_url, anthropic_api_key, anthropic_model, anthropic_base_url, custom_providers')
     .eq('user_id', userId)
     .single()
 
@@ -99,6 +102,7 @@ export async function loadLLMConfig(userId: string): Promise<LLMConfig | null> {
   const provider = data.chat_provider || '1route'
   if (RETIRED_PROVIDERS.has(provider)) return null
   let api_key = '', model = '', base_url = ''
+  let protocol: 'openai' | 'anthropic' = 'openai'
 
   if (provider === 'gemini') {
     api_key = data.gemini_api_key || ''
@@ -112,6 +116,11 @@ export async function loadLLMConfig(userId: string): Promise<LLMConfig | null> {
     api_key = data.deepseek_api_key || ''
     model = data.deepseek_model || 'deepseek-chat'
     base_url = data.deepseek_base_url || 'https://api.deepseek.com/v1'
+  } else if (provider === 'anthropic') {
+    api_key = data.anthropic_api_key || ''
+    model = data.anthropic_model || 'claude-sonnet-4-20250514'
+    base_url = data.anthropic_base_url || 'https://api.anthropic.com'
+    protocol = 'anthropic'
   } else {
     const custom = parseCustomProviders(data.custom_providers)
     const info = custom[provider] || {}
@@ -121,13 +130,13 @@ export async function loadLLMConfig(userId: string): Promise<LLMConfig | null> {
   }
 
   if (!api_key) return null
-  return { api_key, model, base_url }
+  return { api_key, model, base_url, protocol }
 }
 
 export async function loadAllModels(userId: string): Promise<ModelOption[]> {
   const { data } = await supabase
     .from('user_settings')
-    .select('gemini_api_key, gemini_model, gemini_base_url, openai_api_key, openai_model, openai_base_url, deepseek_api_key, deepseek_model, deepseek_base_url, custom_providers')
+    .select('gemini_api_key, gemini_model, gemini_base_url, openai_api_key, openai_model, openai_base_url, deepseek_api_key, deepseek_model, deepseek_base_url, anthropic_api_key, anthropic_model, anthropic_base_url, custom_providers')
     .eq('user_id', userId)
     .single()
 
@@ -135,17 +144,18 @@ export async function loadAllModels(userId: string): Promise<ModelOption[]> {
 
   const LABELS: Record<string, string> = {
     '1route': '1Route', gemini: 'Gemini', openai: 'OpenAI',
-    deepseek: 'DeepSeek',
+    deepseek: 'DeepSeek', anthropic: 'Anthropic',
   }
   const BASE_URLS: Record<string, string> = {
     '1route': 'https://www.1route.dev/v1',
     gemini: 'https://generativelanguage.googleapis.com/v1beta/openai',
     openai: 'https://api.openai.com/v1',
     deepseek: 'https://api.deepseek.com/v1',
+    anthropic: 'https://api.anthropic.com',
   }
 
   const models: ModelOption[] = []
-  const known = ['gemini', 'openai', 'deepseek'] as const
+  const known = ['gemini', 'openai', 'deepseek', 'anthropic'] as const
   for (const p of known) {
     const key = data[`${p}_api_key`]
     const m = data[`${p}_model`]
@@ -153,6 +163,7 @@ export async function loadAllModels(userId: string): Promise<ModelOption[]> {
       models.push({
         provider: p, label: LABELS[p] || p, model: m,
         api_key: key, base_url: data[`${p}_base_url`] || BASE_URLS[p] || '',
+        protocol: p === 'anthropic' ? 'anthropic' : 'openai',
       })
     }
   }
@@ -250,6 +261,14 @@ function buildReasoningFetch(cache: string[]): typeof globalThis.fetch {
 }
 
 function createProxiedProvider(config: LLMConfig, reasoningCache: string[]) {
+  if (config.protocol === 'anthropic') {
+    return createAnthropic({
+      apiKey: config.api_key,
+      baseURL: '/api/llm-proxy',
+      headers: { 'X-Target-URL': config.base_url },
+      fetch: buildReasoningFetch(reasoningCache),
+    })
+  }
   return createOpenAI({
     apiKey: config.api_key,
     baseURL: '/api/llm-proxy',

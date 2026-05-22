@@ -6,19 +6,15 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
+import re
 import threading
 import time
 import uuid
 from collections import deque
 from typing import Any
-
-logger = logging.getLogger(__name__)
-
-
-import contextlib
-import re
 
 from rich.highlighter import Highlighter
 from rich.markdown import Markdown
@@ -30,6 +26,94 @@ from textual.containers import Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Input, OptionList, RichLog, Static
 from textual.widgets.option_list import Option
+
+logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# 禁用 kitty keyboard protocol（与 macOS 中文输入法冲突）
+# CSI-u 序列格式: \x1b[ keycode ; modifiers ; text_codepoints u
+# 中文 IME 产生的序列含冒号分隔的 Unicode codepoints，textual 无法解析
+# 策略：输出侧阻止启用 kitty protocol + 输入侧将 CSI-u 解码为纯文本
+# ---------------------------------------------------------------------------
+_KITTY_ENABLE = "\x1b[>1u"
+_KITTY_DISABLE = "\x1b[<u"
+_CSI_U_IME_RE = re.compile(r"\x1b\[\d+(?::\d+)*;;([\d:]+)u")
+
+
+def _decode_csi_u(m: re.Match[str]) -> str:
+    text_field = m.group(1)
+    try:
+        return "".join(chr(int(cp)) for cp in text_field.split(":") if cp)
+    except (ValueError, OverflowError):
+        return m.group(0)
+
+
+def _make_csi_u_input_thread(driver_self) -> None:
+    """替换 run_input_thread：将 CSI-u 序列解码为纯文本后再交给 XTermParser。"""
+    import os
+    import selectors
+    from codecs import getincrementaldecoder
+
+    from textual._loop import loop_last
+    from textual._xterm_parser import XTermParser
+
+    selector = selectors.SelectSelector()
+    selector.register(driver_self.fileno, selectors.EVENT_READ)
+    fileno = driver_self.fileno
+    EVENT_READ = selectors.EVENT_READ
+
+    parser = XTermParser(driver_self._debug)
+    feed = parser.feed
+    tick = parser.tick
+    utf8_decoder = getincrementaldecoder("utf-8")().decode
+
+    def process_selector_events(selector_events, final=False):
+        for last, (_selector_key, mask) in loop_last(selector_events):
+            if mask & EVENT_READ:
+                raw = os.read(fileno, 1024 * 4)
+                unicode_data = utf8_decoder(raw, final=final and last)
+                if not unicode_data:
+                    break
+                if "\x1b[" in unicode_data and "u" in unicode_data:
+                    unicode_data = _CSI_U_IME_RE.sub(_decode_csi_u, unicode_data)
+                if unicode_data:
+                    for event in feed(unicode_data):
+                        driver_self.process_message(event)
+        for event in tick():
+            driver_self.process_message(event)
+
+    try:
+        while not driver_self.exit_event.is_set():
+            process_selector_events(selector.select(0.1))
+        selector.unregister(driver_self.fileno)
+        process_selector_events(selector.select(0.1), final=True)
+    finally:
+        selector.close()
+        try:
+            for _event in feed(""):
+                pass
+        except Exception:
+            pass
+
+
+def _patch_driver_no_kitty() -> None:
+    from textual.drivers.linux_driver import LinuxDriver
+
+    _orig_write = LinuxDriver.write
+
+    def _filtered_write(self, data: str) -> None:
+        if _KITTY_ENABLE in data or _KITTY_DISABLE in data:
+            data = data.replace(_KITTY_ENABLE, "").replace(_KITTY_DISABLE, "")
+            if not data:
+                return
+        _orig_write(self, data)
+
+    LinuxDriver.write = _filtered_write
+    LinuxDriver.run_input_thread = _make_csi_u_input_thread
+
+
+_patch_driver_no_kitty()
 
 # ---------------------------------------------------------------------------
 # Widget
@@ -740,6 +824,7 @@ class WyckoffTUI(App):
                     "  /login   — 登录\n"
                     "  /logout  — 退出登录\n"
                     "  /token   — Token 用量\n"
+                    "  /changelog— 版本更新日志\n"
                     "  /schedule— 定时任务（list/add/rm/on/off）\n"
                     "  /resume  — 恢复历史对话\n"
                     "  /new     — 新对话 (Ctrl+N)\n"
@@ -800,6 +885,8 @@ class WyckoffTUI(App):
                         "[dim]/model 用法: /model (切换) | /model list | /model add | /model rm <id> | /model default <id>[/dim]"
                     )
                 )
+        elif cmd == "/changelog":
+            self._show_changelog(log)
         elif cmd == "/resume":
             parts = raw.strip().split(maxsplit=1)
             if len(parts) > 1:
@@ -810,6 +897,21 @@ class WyckoffTUI(App):
             self._handle_schedule_cmd(raw, log)
         else:
             self._try_skill(raw, log)
+
+    def _show_changelog(self, log) -> None:
+        from pathlib import Path
+
+        path = Path(__file__).resolve().parent.parent / "CHANGELOG.md"
+        if not path.exists():
+            log.write(Text.from_markup("[dim]CHANGELOG.md 不存在[/dim]"))
+            return
+        text = path.read_text(encoding="utf-8").strip()
+        lines = text.splitlines()
+        # 只显示最近一个版本段落（到下一个 ## 或结尾）
+        start = next((i for i, l in enumerate(lines) if l.startswith("## ")), 0)
+        end = next((i for i in range(start + 1, len(lines)) if lines[i].startswith("## ")), len(lines))
+        section = "\n".join(lines[start:end]).strip()
+        log.write(Text.from_markup(f"\n[bold]{section}[/bold]\n"))
 
     # ----- Skills -----
 
@@ -1642,12 +1744,10 @@ class WyckoffTUI(App):
                     final_rounds = int(event.get("rounds", 0))
 
                     if final_text:
-                        if _streaming_started:
-                            _clear_streamed_block(include_separator=False)
-                        else:
+                        if not _streaming_started:
                             _write(Text.from_markup("  [dim]───[/dim]"))
-                        _write(Markdown(final_text))
-                        _scroll()
+                            _write(Markdown(final_text))
+                            _scroll()
 
                     total_input = final_usage.get("input_tokens", 0)
                     total_output = final_usage.get("output_tokens", 0)
