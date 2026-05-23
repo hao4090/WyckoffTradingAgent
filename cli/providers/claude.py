@@ -92,11 +92,15 @@ class ClaudeProvider(LLMProvider):
                     if block.type == "tool_use":
                         current_tool = {"id": block.id, "name": block.name, "args": {}}
                         current_tool_json = ""
+                    elif block.type == "thinking":
+                        pass
                     elif block.type == "text":
                         pass
                 elif event.type == "content_block_delta":
                     delta = event.delta
-                    if delta.type == "text_delta":
+                    if delta.type == "thinking_delta":
+                        yield {"type": "thinking_delta", "text": delta.thinking}
+                    elif delta.type == "text_delta":
                         text_buf += delta.text
                         yield {"type": "text_delta", "text": delta.text}
                     elif delta.type == "input_json_delta":
@@ -143,6 +147,8 @@ class ClaudeProvider(LLMProvider):
 
             elif role == "assistant":
                 content = []
+                # Anthropic thinking blocks must round-trip with their original signature.
+                # The runtime stores only display text, so replaying it would make tool loops 400.
                 if msg.get("content"):
                     content.append({"type": "text", "text": msg["content"]})
                 for tc in msg.get("tool_calls", []):

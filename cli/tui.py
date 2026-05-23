@@ -16,8 +16,6 @@ import uuid
 from collections import deque
 from typing import Any
 
-logger = logging.getLogger(__name__)
-
 from rich.highlighter import Highlighter
 from rich.markdown import Markdown
 from rich.text import Text
@@ -29,29 +27,89 @@ from textual.screen import ModalScreen
 from textual.widgets import Input, OptionList, RichLog, Static
 from textual.widgets.option_list import Option
 
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # 禁用 kitty keyboard protocol（与 macOS 中文输入法冲突）
+# CSI-u 序列格式: \x1b[ keycode ; modifiers ; text_codepoints u
+# 中文 IME 产生的序列含冒号分隔的 Unicode codepoints，textual 无法解析
+# 策略：输出侧阻止启用 kitty protocol + 输入侧将 CSI-u 解码为纯文本
 # ---------------------------------------------------------------------------
+_KITTY_ENABLE = "\x1b[>1u"
+_KITTY_DISABLE = "\x1b[<u"
+_CSI_U_IME_RE = re.compile(r"\x1b\[\d+(?::\d+)*;;([\d:]+)u")
+
+
+def _decode_csi_u(m: re.Match[str]) -> str:
+    text_field = m.group(1)
+    try:
+        return "".join(chr(int(cp)) for cp in text_field.split(":") if cp)
+    except (ValueError, OverflowError):
+        return m.group(0)
+
+
+def _make_csi_u_input_thread(driver_self) -> None:
+    """替换 run_input_thread：将 CSI-u 序列解码为纯文本后再交给 XTermParser。"""
+    import os
+    import selectors
+    from codecs import getincrementaldecoder
+
+    from textual._loop import loop_last
+    from textual._xterm_parser import XTermParser
+
+    selector = selectors.SelectSelector()
+    selector.register(driver_self.fileno, selectors.EVENT_READ)
+    fileno = driver_self.fileno
+    EVENT_READ = selectors.EVENT_READ
+
+    parser = XTermParser(driver_self._debug)
+    feed = parser.feed
+    tick = parser.tick
+    utf8_decoder = getincrementaldecoder("utf-8")().decode
+
+    def process_selector_events(selector_events, final=False):
+        for last, (_selector_key, mask) in loop_last(selector_events):
+            if mask & EVENT_READ:
+                raw = os.read(fileno, 1024 * 4)
+                unicode_data = utf8_decoder(raw, final=final and last)
+                if not unicode_data:
+                    break
+                if "\x1b[" in unicode_data and "u" in unicode_data:
+                    unicode_data = _CSI_U_IME_RE.sub(_decode_csi_u, unicode_data)
+                if unicode_data:
+                    for event in feed(unicode_data):
+                        driver_self.process_message(event)
+        for event in tick():
+            driver_self.process_message(event)
+
+    try:
+        while not driver_self.exit_event.is_set():
+            process_selector_events(selector.select(0.1))
+        selector.unregister(driver_self.fileno)
+        process_selector_events(selector.select(0.1), final=True)
+    finally:
+        selector.close()
+        try:
+            for _event in feed(""):
+                pass
+        except Exception:
+            pass
+
+
 def _patch_driver_no_kitty() -> None:
     from textual.drivers.linux_driver import LinuxDriver
 
-    _orig_start = LinuxDriver.start_application_mode
+    _orig_write = LinuxDriver.write
 
-    def _patched_start(self, *args, **kwargs):
-        _orig_write = self.write
+    def _filtered_write(self, data: str) -> None:
+        if _KITTY_ENABLE in data or _KITTY_DISABLE in data:
+            data = data.replace(_KITTY_ENABLE, "").replace(_KITTY_DISABLE, "")
+            if not data:
+                return
+        _orig_write(self, data)
 
-        def _filtered_write(data: str) -> None:
-            if "\x1b[>1u" in data:
-                data = data.replace("\x1b[>1u", "")
-            if data:
-                _orig_write(data)
-
-        self.write = _filtered_write
-        _orig_start(self, *args, **kwargs)
-        self.write = _orig_write
-
-    LinuxDriver.start_application_mode = _patched_start
+    LinuxDriver.write = _filtered_write
+    LinuxDriver.run_input_thread = _make_csi_u_input_thread
 
 
 _patch_driver_no_kitty()

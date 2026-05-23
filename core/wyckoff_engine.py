@@ -2,7 +2,7 @@
 Wyckoff Funnel 5 层漏斗筛选引擎
 
 Layer 1: 剥离垃圾（ST / 北交所 / 科创板 / 市值 / 成交额）
-Layer 2: 六通道甄选（主升/潜伏/吸筹/地量/暗中护盘/点火破局）
+Layer 2: 七通道甄选（主升/潜伏/吸筹/地量/暗中护盘/趋势延续/点火破局）
 Layer 2.5: Markup 加速检测
 Layer 3: 板块共振（行业分布 Top-N + RPS 动量）
 Layer 4: 威科夫狙击（Spring / SOS / LPS / Effort vs Result）
@@ -92,6 +92,9 @@ class FunnelConfig:
     rps_fast_bypass_min: float = 50.0
     rps_slope_window: int = 10  # 计算 RPS 斜率的窗口（交易日）
     rps_slope_min: float = 0.5  # RPS 斜率最小值（%/day），用于判断 RPS 是否还在上升
+    rps_slope_accel_bypass: float = 1.5  # 斜率 >= 此值时 RPS 绝对值要求放宽（加速旁路）
+    rps_accel_fast_min: float = 50.0  # 加速旁路下 RPS50 最低要求
+    rps_accel_slow_min: float = 55.0  # 加速旁路下 RPS120 最低要求
     require_bench_latest_alignment: bool = False
     momentum_bias_200_max: float = 0.25  # 防止主升通道选出离 200 日线太远的鱼尾老妖股
     # Layer 2 预点火观察池
@@ -138,6 +141,23 @@ class FunnelConfig:
     rs_div_bench_ref_window: int = 60  # 大盘新低对比的参考窗口（近 60 日）
     rs_div_price_from_low_max: float = 0.50  # 位阶保护：现价 <= 年内低点 +50%
 
+    # Layer 2 趋势延续通道（Trend Continuation Channel）
+    # 已确认多头且 RPS 极强的稳定趋势股，不受 bias_200 上限约束。
+    # 通过最大回撤排除暴涨暴跌的老妖股。
+    enable_trend_cont_channel: bool = True
+    trend_cont_rps_slow_min: float = 75.0  # RPS120 >= 此值
+    trend_cont_max_drawdown_pct: float = 20.0  # 近 N 日最大回撤 < 此值
+    trend_cont_drawdown_window: int = 60  # 回撤计算窗口（交易日）
+
+    # Layer 2 加速突破通道（Breakout Acceleration Channel）
+    # 从底部结构刚起步：价格站上 MA50 但 MA50 尚未上穿 MA200，短期动量已爆发。
+    enable_breakout_accel_channel: bool = True
+    breakout_accel_rps_fast_min: float = 70.0  # RPS50 >= 此值
+    breakout_accel_ret_window: int = 20  # 近 N 日涨幅计算窗口
+    breakout_accel_ret_min: float = 15.0  # 近 N 日涨幅 >= 此值(%)
+    breakout_accel_vol_ratio: float = 1.3  # 近 N 日均量 / 前 ref 均量 >= 此值
+    breakout_accel_vol_ref_window: int = 60  # 量能参考窗口
+
     # Layer 3
     # 行业共振过滤：按"行业样本数分位阈值 + 最小样本数"动态过滤，避免固定 TopN 误杀。
     top_n_sectors: int = 5
@@ -151,7 +171,7 @@ class FunnelConfig:
 
     # Layer 4 - Spring
     spring_support_window: int = 60
-    spring_vol_ratio: float = 1.1  # 放宽以激活 Accum 轨（原 1.3 导致 Spring 几乎不触发）
+    spring_vol_ratio: float = 1.3
     spring_tr_max_range_pct: float = 30.0
     spring_tr_max_drift_pct: float = 12.0
     # Spring 动态振幅
@@ -184,8 +204,16 @@ class FunnelConfig:
     compression_lookback: int = 5
     compression_atr_window: int = 20
     compression_atr_quantile: float = 0.20
-    compression_vol_decline_ratio: float = 0.70
+    compression_vol_decline_ratio: float = 0.80
     compression_max_bias_200: float = 40.0
+
+    # Layer 4 - Trend Pullback (趋势回踩)
+    enable_trend_pullback_trigger: bool = True
+    trend_pb_lookback: int = 10  # 回踩窗口
+    trend_pb_min_pullback_pct: float = 5.0  # 最小回撤深度%
+    trend_pb_max_pullback_pct: float = 20.0  # 最大回撤深度%
+    trend_pb_vol_shrink_ratio: float = 0.6  # 回落段缩量确认
+    trend_pb_ma_window: int = 20  # 均线窗口
 
     # Funnel score
     min_funnel_score: float = 0.15
@@ -194,9 +222,9 @@ class FunnelConfig:
     sos_pct_min: float = 6.0  # 提高门槛过滤弱突破（原 4.5 追高触发止损率极高）
     sos_vol_ratio: float = 2.5  # 要求更强量能确认（原 2.0 噪音太多）
     sos_vol_window: int = 20  # 计算点火爆量时的参考窗口
-    sos_breakout_window: int = 20  # 要求突破或接近近 N 日的高点
+    sos_breakout_window: int = 10
     sos_breakout_tolerance: float = 0.01  # 改为 0.01：突破容差 1%（从 2% 改为 1%）
-    sos_max_bias_200: float = 20.0  # 收紧离 200 日线的距离（防止在高空放量诱多）
+    sos_max_bias_200: float = 35.0  # 放宽以覆盖从底部启动的加速股（原20%过紧）
     # SOS 动态极值爆量
     sos_vol_quantile_window: int = 60  # 计算量能分位数的滚动窗口
     sos_vol_quantile: float = 0.95  # 要求当日量能突破历史 N 日的 95% 分位数
@@ -217,6 +245,8 @@ class FunnelConfig:
     exit_stop_loss_pct: float = -7.0  # 网格优化最佳：-7%/+18%（夏普2.493），-6%偏紧，-8%偏松
     exit_trailing_active_pct: float = 15.0  # 利润激活线：从底部上涨超过此比例，激活移动跟踪止损
     exit_trailing_drawdown_pct: float = -10.0  # 利润保护线：高位跟踪回撤止损幅度（%）
+    exit_confirm_days: int = 2  # 洗盘过滤：连续 N 日收盘低于止损线才确认
+    exit_vol_confirm_ratio: float = 0.8  # 确认期量比阈值（低于此值视为缩量洗盘不触发）
     exit_holiday_grace_days: int = 1  # 节后宽限期：跨 ≥3 自然日后跳过 N 个交易日止损
 
     # Distribution 识别：高位缩量警告
@@ -544,33 +574,40 @@ def layer2_strength_detailed(
 
         # 计算 RPS 斜率：判断 RPS 是否还在上升
         rps_slope_ok = True
+        rps_slope_val = 0.0
         if cfg.enable_rps_filter and rps_filter_active and len(df_sorted) >= cfg.rps_slope_window:
             close_series = pd.to_numeric(df_sorted["close"], errors="coerce")
             rps_window = max(int(cfg.rps_slope_window), 2)
 
-            # 修正：计算最近 N 日的累计收益率曲线（相对起点），而不是单日收益率
             recent_closes = []
             for i in range(-rps_window, 0):
                 if len(close_series) + i >= 0:
                     recent_closes.append(float(close_series.iloc[i]))
 
-            # 线性回归斜率：判断累计涨幅曲线是否在爬升
             if len(recent_closes) >= 2:
                 base_price = recent_closes[0]
                 if base_price > 0:
                     cum_returns = [(p - base_price) / base_price * 100.0 for p in recent_closes]
                     x = np.arange(len(cum_returns))
                     y = np.array(cum_returns)
-                    slope = np.polyfit(x, y, 1)[0]
-                    rps_slope_ok = slope >= cfg.rps_slope_min
+                    rps_slope_val = float(np.polyfit(x, y, 1)[0])
+                    rps_slope_ok = rps_slope_val >= cfg.rps_slope_min
 
         if cfg.enable_rps_filter and rps_filter_active:
+            _accel_bypass = (
+                rps_slope_val >= cfg.rps_slope_accel_bypass
+                and rps_fast is not None
+                and rps_slow is not None
+                and rps_fast >= cfg.rps_accel_fast_min
+                and rps_slow >= cfg.rps_accel_slow_min
+            )
             momentum_rps_ok = (
                 rps_fast is not None
                 and rps_slow is not None
                 and (
                     (rps_fast >= cfg.rps_fast_min and rps_slow >= cfg.rps_slow_min and rps_slope_ok)
                     or (rps_slow >= cfg.rps_slow_strong_bypass and rps_fast >= cfg.rps_fast_bypass_min)
+                    or _accel_bypass
                 )
             )
             ambush_rps_ok = (
@@ -723,6 +760,41 @@ def layer2_strength_detailed(
                                     if vol_confirm_ok:
                                         rs_div_ok = True
 
+        # 加速突破通道（Breakout Acceleration Channel）
+        # 价格站上 MA50 但 MA50 尚未上穿 MA200，短期动量爆发 + 放量
+        breakout_accel_ok = False
+        if cfg.enable_breakout_accel_channel and rps_filter_active:
+            _ba_above_ma50 = pd.notna(last_ma_short) and float(last_close) > float(last_ma_short)
+            _ba_not_bullish = not bullish_alignment
+            _ba_rps_ok = rps_fast is not None and rps_fast >= cfg.breakout_accel_rps_fast_min
+            if _ba_above_ma50 and _ba_not_bullish and _ba_rps_ok:
+                _ba_ret = _close_return_pct(close, cfg.breakout_accel_ret_window)
+                if _ba_ret is not None and _ba_ret >= cfg.breakout_accel_ret_min:
+                    vol = pd.to_numeric(df_sorted.get("volume"), errors="coerce")
+                    rw = cfg.breakout_accel_ret_window
+                    refw = cfg.breakout_accel_vol_ref_window
+                    if len(vol) >= refw:
+                        recent_vol = float(vol.tail(rw).mean())
+                        ref_vol = float(vol.tail(refw).iloc[:-rw].mean()) if len(vol) >= refw else 0
+                        if ref_vol > 0 and recent_vol / ref_vol >= cfg.breakout_accel_vol_ratio:
+                            breakout_accel_ok = True
+
+        # 趋势延续通道（Trend Continuation Channel）
+        # 已确认多头 + RPS120 极强 + 近期回撤可控 → 不受 bias_200 限制
+        trend_cont_ok = False
+        if cfg.enable_trend_cont_channel and bullish_alignment and rps_filter_active:
+            _tc_rps_ok = rps_slow is not None and rps_slow >= cfg.trend_cont_rps_slow_min
+            _tc_dd_ok = False
+            if _tc_rps_ok:
+                dd_window = max(int(cfg.trend_cont_drawdown_window), 10)
+                recent_close = close.tail(dd_window)
+                if len(recent_close) >= 10:
+                    cum_max = recent_close.cummax()
+                    drawdown = (recent_close - cum_max) / cum_max * 100.0
+                    max_dd = float(drawdown.min())
+                    _tc_dd_ok = abs(max_dd) < cfg.trend_cont_max_drawdown_pct
+            trend_cont_ok = _tc_rps_ok and _tc_dd_ok
+
         # 点火破局通道（SOS Bypass）
         # 如果当天爆发了放量大阳线，哪怕它此前 RPS 很低或者量能没萎缩，也直接送入 L4 让扳机去二次确认
         sos_ok = False
@@ -731,7 +803,16 @@ def layer2_strength_detailed(
             if sos_score is not None:
                 sos_ok = True
 
-        if momentum_ok or ambush_ok or accum_ok or dry_vol_ok or rs_div_ok or sos_ok:
+        if (
+            momentum_ok
+            or ambush_ok
+            or accum_ok
+            or dry_vol_ok
+            or rs_div_ok
+            or trend_cont_ok
+            or breakout_accel_ok
+            or sos_ok
+        ):
             passed.append(sym)
             labels: list[str] = []
             if momentum_ok:
@@ -744,6 +825,10 @@ def layer2_strength_detailed(
                 labels.append("地量蓄势")
             if rs_div_ok:
                 labels.append("暗中护盘")
+            if trend_cont_ok:
+                labels.append("趋势延续")
+            if breakout_accel_ok:
+                labels.append("加速突破")
             if sos_ok:
                 labels.append("点火破局")
 
@@ -1311,22 +1396,106 @@ def _detect_compression(df: pd.DataFrame, cfg: FunnelConfig) -> float | None:
     return float(current_atr_avg / hist_atr_median) if hist_atr_median > 0 else None
 
 
+def _trend_pullback_peak_idx(close: pd.Series, cfg: FunnelConfig) -> int | None:
+    lookback = cfg.trend_pb_lookback
+    ma = close.rolling(cfg.trend_pb_ma_window).mean()
+    last_ma = ma.iloc[-1]
+    if pd.isna(last_ma):
+        return None
+    ma_prev = ma.iloc[-(lookback + 1)]
+    if pd.isna(ma_prev) or float(last_ma) <= float(ma_prev):
+        return None
+
+    recent = close.tail(lookback + 1)
+    peak = float(recent.max())
+    peak_idx = int(recent.values.argmax())
+    if peak_idx < 1 or peak <= 0:
+        return None
+    trough = float(recent.iloc[peak_idx + 1 : -1].min()) if peak_idx + 1 < len(recent) - 1 else float(recent.iloc[-1])
+    last_close = float(close.iloc[-1])
+    pullback_pct = (peak - min(trough, last_close)) / peak * 100.0
+    if pullback_pct < cfg.trend_pb_min_pullback_pct or pullback_pct > cfg.trend_pb_max_pullback_pct:
+        return None
+    if last_close <= float(close.iloc[-2]):
+        return None
+    return peak_idx
+
+
+def _trend_pullback_vol_threshold(close: pd.Series, cfg: FunnelConfig, market_cap_yi: float) -> float:
+    threshold = cfg.trend_pb_vol_shrink_ratio
+    if market_cap_yi >= 200.0:
+        threshold = min(threshold + 0.15, 0.85)
+    ma50 = close.rolling(50).mean()
+    ma200 = close.rolling(200).mean()
+    if len(ma50) < 200 or pd.isna(ma50.iloc[-1]) or pd.isna(ma200.iloc[-1]):
+        return threshold
+
+    streak = 0
+    for i in range(1, min(len(ma50), 60) + 1):
+        if pd.isna(ma50.iloc[-i]) or pd.isna(ma200.iloc[-i]) or float(ma50.iloc[-i]) <= float(ma200.iloc[-i]):
+            break
+        streak += 1
+    if streak >= 20:
+        threshold = min(threshold + 0.10, 0.90)
+    return threshold
+
+
+def _detect_trend_pullback(
+    df: pd.DataFrame,
+    cfg: FunnelConfig,
+    market_cap_yi: float = 0.0,
+) -> float | None:
+    """趋势回踩：上升趋势中缩量回调后企稳。返回 score (0~1, 越大越好)。"""
+    lookback = cfg.trend_pb_lookback
+    ma_w = cfg.trend_pb_ma_window
+    if len(df) < ma_w + lookback + 5:
+        return None
+    df_s = _sorted_if_needed(df)
+    close = pd.to_numeric(df_s["close"], errors="coerce")
+    volume = pd.to_numeric(df_s["volume"], errors="coerce")
+    if close.isna().all() or volume.isna().all():
+        return None
+
+    peak_idx = _trend_pullback_peak_idx(close, cfg)
+    if peak_idx is None:
+        return None
+
+    # 缩量确认：回落段（排除峰值日）均量 / 上涨段均量
+    vol_tail = volume.tail(lookback + 1)
+    vol_up = float(vol_tail.iloc[: peak_idx + 1].mean())
+    vol_down_slice = vol_tail.iloc[peak_idx + 1 :]
+    if vol_down_slice.empty or vol_up <= 0:
+        return None
+    vol_down = float(vol_down_slice.mean())
+    vol_ratio = vol_down / vol_up
+
+    # 大市值放宽 + 饥饿模式（趋势持续久无触发）
+    threshold = _trend_pullback_vol_threshold(close, cfg, market_cap_yi)
+    if vol_ratio > threshold:
+        return None
+    return float(1.0 - vol_ratio)
+
+
 def layer4_triggers(
     symbols: list[str],
     df_map: dict[str, pd.DataFrame],
     cfg: FunnelConfig,
     channel_map: dict[str, str] | None = None,
+    market_cap_map: dict[str, float] | None = None,
 ) -> dict[str, list[tuple[str, float]]]:
-    """在最终候选集上运行 Spring / LPS / EVR / Compression / SOS 检测。"""
+    """在最终候选集上运行 Spring / LPS / EVR / Compression / SOS / TrendPullback 检测。"""
+    trend_channel_tags = {"主升通道", "趋势延续", "点火破局", "加速突破"}
     results: dict[str, list[tuple[str, float]]] = {
         "sos": [],
         "spring": [],
         "lps": [],
         "evr": [],
         "compression": [],
+        "trend_pullback": [],
     }
     if channel_map is None:
         channel_map = {}
+    cap_map = market_cap_map or {}
 
     for sym in symbols:
         df = df_map.get(sym)
@@ -1349,6 +1518,13 @@ def layer4_triggers(
         score = _detect_sos(df, cfg)
         if score is not None:
             results["sos"].append((sym, score))
+        if cfg.enable_trend_pullback_trigger:
+            ch = channel_map.get(sym, "")
+            if any(t in ch for t in trend_channel_tags):
+                cap_yi = float(cap_map.get(sym, 0.0) or 0.0)
+                score = _detect_trend_pullback(df, cfg, market_cap_yi=cap_yi)
+                if score is not None:
+                    results["trend_pullback"].append((sym, score))
     return results
 
 
@@ -1649,13 +1825,38 @@ def layer5_exit_signals(
             stop_price, stop_reason = _compute_stop_loss(close, low, high, stage, cfg)
             last_close = float(close.iloc[-1])
             if stop_price is not None and last_close <= stop_price:
-                signals[sym] = {
-                    "signal": "stop_loss",
-                    "price": stop_price,
-                    "current": last_close,
-                    "reason": stop_reason,
-                }
-                continue
+                # 深度破位硬止损：跌幅超过 stop_price 的 5% 直接触发，不等确认
+                deep_breach = stop_price > 0 and (stop_price - last_close) / stop_price >= 0.05
+                if deep_breach:
+                    signals[sym] = {
+                        "signal": "stop_loss",
+                        "price": stop_price,
+                        "current": last_close,
+                        "reason": stop_reason + "(深度破位)",
+                    }
+                    continue
+                confirm_days = max(int(cfg.exit_confirm_days), 1)
+                if len(close) >= confirm_days:
+                    recent_closes = close.tail(confirm_days)
+                    all_below = all(float(c) <= stop_price for c in recent_closes)
+                else:
+                    all_below = True
+                vol_confirmed = True
+                if all_below and cfg.exit_vol_confirm_ratio > 0:
+                    volume = pd.to_numeric(df_s.get("volume"), errors="coerce")
+                    if not volume.empty and len(volume) >= 20 + confirm_days:
+                        vol_recent = float(volume.tail(confirm_days).mean())
+                        vol_ref = float(volume.tail(20 + confirm_days).iloc[:-confirm_days].mean())
+                        if vol_ref > 0:
+                            vol_confirmed = (vol_recent / vol_ref) >= cfg.exit_vol_confirm_ratio
+                if all_below and vol_confirmed:
+                    signals[sym] = {
+                        "signal": "stop_loss",
+                        "price": stop_price,
+                        "current": last_close,
+                        "reason": stop_reason,
+                    }
+                    continue
 
         if _detect_distribution_start(df_s, cfg):
             signals[sym] = {
@@ -1701,7 +1902,7 @@ def run_funnel(
         base_symbols=l1,
         df_map=prepared_df_map,
     )
-    triggers = layer4_triggers(l3, prepared_df_map, cfg, channel_map=channel_map)
+    triggers = layer4_triggers(l3, prepared_df_map, cfg, channel_map=channel_map, market_cap_map=market_cap_map)
 
     # 阶段识别和退出信号
     markup_symbols = detect_markup_stage(l3, prepared_df_map, cfg)
@@ -1746,7 +1947,7 @@ def allocate_ai_candidates(
     max_trend_l3_fill = int(policy["max_trend_l3_fill"])
     max_accum_l3_fill = int(policy["max_accum_l3_fill"])
 
-    trend_channel_tags = {"主升通道", "点火破局"}
+    trend_channel_tags = {"主升通道", "趋势延续", "点火破局", "加速突破"}
     accum_channel_tags = {"潜伏通道", "吸筹通道", "地量蓄势", "暗中护盘"}
 
     def _channel_tags(code: str) -> set[str]:
@@ -1774,7 +1975,10 @@ def allocate_ai_candidates(
     sos_hit_set = {str(c).strip() for c, _ in result.triggers.get("sos", [])}
     spring_hit_set = {str(c).strip() for c, _ in result.triggers.get("spring", [])}
     lps_hit_set = {str(c).strip() for c, _ in result.triggers.get("lps", [])}
-    # evr_hit_set = set(str(c).strip() for c, _ in result.triggers.get("evr", []))
+    evr_hit_set = {str(c).strip() for c, _ in result.triggers.get("evr", [])}
+    compression_hit_set = {str(c).strip() for c, _ in result.triggers.get("compression", [])}
+    trend_pb_hit_set = {str(c).strip() for c, _ in result.triggers.get("trend_pullback", [])}
+    other_trigger_set = spring_hit_set | lps_hit_set | evr_hit_set | compression_hit_set | trend_pb_hit_set
     blocked_exit_signals = {"stop_loss", "distribution_warning"}
 
     def _stage_name(code: str) -> str:
@@ -1803,12 +2007,14 @@ def allocate_ai_candidates(
             score += 3.0 if not is_trend_side else 0.0
 
         if code in sos_hit_set:
-            score += 50.0
+            score += 50.0 if code in other_trigger_set else 30.0
         if code in spring_hit_set:
             score += 45.0
         if code in lps_hit_set:
             score += 40.0
-        if is_trend_side and code in sos_hit_set:
+        if code in trend_pb_hit_set:
+            score += 45.0
+        if is_trend_side and (code in sos_hit_set or code in trend_pb_hit_set):
             score += 10.0
         if (not is_trend_side) and (code in spring_hit_set or code in lps_hit_set):
             score += 10.0
@@ -1834,6 +2040,19 @@ def allocate_ai_candidates(
         if str(c).strip()
     ]
     for code in _dedup_order(sos_hit_codes):
+        if code not in [c[0] for c in trend_candidates_with_score]:
+            trend_candidates_with_score.append((code, _calc_priority_score(code, True), False))
+
+    trend_pb_codes = [
+        str(c).strip()
+        for c, _ in sorted(
+            result.triggers.get("trend_pullback", []),
+            key=lambda x: float(x[1] if x[1] is not None else 0.0),
+            reverse=True,
+        )
+        if str(c).strip()
+    ]
+    for code in _dedup_order(trend_pb_codes):
         if code not in [c[0] for c in trend_candidates_with_score]:
             trend_candidates_with_score.append((code, _calc_priority_score(code, True), False))
 
