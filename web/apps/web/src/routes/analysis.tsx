@@ -10,7 +10,7 @@ import { KlineChart } from '@/components/kline-chart'
 import { usePreferences } from '@/lib/preferences'
 import { AIDisclaimer } from '@/components/ai-disclaimer'
 import { detectWyckoffAnnotations } from '@/lib/wyckoff-detect'
-import { TICKFLOW_PURCHASE, fetchKline, getUserDataKeys, checkWhitelist, isCnSymbol, isSupportedKlineCode, type KlineData } from '@/lib/kline'
+import { TICKFLOW_PURCHASE, fetchKline, fetchValueSnapshot, getUserDataKeys, checkWhitelist, isCnSymbol, isSupportedKlineCode, type FundamentalMetric, type KlineData, type ValueSnapshot } from '@/lib/kline'
 import { avg } from '@/lib/math'
 import { marketLabel, resolveStockQuery, searchStocks, type StockSearchResult } from '@/lib/market-search'
 
@@ -19,6 +19,7 @@ interface AnalysisResult {
   symbol: string
   name: string
   klineData: KlineData[]
+  valueSnapshot: ValueSnapshot
 }
 
 export function AnalysisPage() {
@@ -152,7 +153,7 @@ interface AnalysisRunnerState {
   error: string
   step: AnalysisStep | null
   streamingReport: string
-  earlyKline: { data: KlineData[]; symbol: string; name: string } | null
+  earlyKline: { data: KlineData[]; symbol: string; name: string; valueSnapshot: ValueSnapshot } | null
   setError: Dispatch<SetStateAction<string>>
   handleAnalyze: () => void
 }
@@ -165,7 +166,7 @@ function useAnalysisRunner(search: SearchController, setHasModelConfig: Dispatch
   const [error, setError] = useState('')
   const [step, setStep] = useState<AnalysisStep | null>(null)
   const [streamingReport, setStreamingReport] = useState('')
-  const [earlyKline, setEarlyKline] = useState<{ data: KlineData[]; symbol: string; name: string } | null>(null)
+  const [earlyKline, setEarlyKline] = useState<{ data: KlineData[]; symbol: string; name: string; valueSnapshot: ValueSnapshot } | null>(null)
   const abortRef = useRef<AbortController | null>(null)
   const streamBuf = useRef('')
   const rafRef = useRef(0)
@@ -183,17 +184,21 @@ function useAnalysisRunner(search: SearchController, setHasModelConfig: Dispatch
       setHasModelConfig(Boolean(config?.api_key && config?.model))
       if (!config?.api_key || !config.model) throw new Error(t('analysis.missingPrefix', { items: t('analysis.modelRequirement') }))
       setStep('kline')
-      const [stockInfoResult, klineData] = await Promise.all([fetchStockName(resolved.code), fetchKline(resolved.code, dataKeys, user!.id)])
+      const [stockInfoResult, klineData, valueSnapshot] = await Promise.all([
+        fetchStockName(resolved.code),
+        fetchKline(resolved.code, dataKeys, user!.id),
+        fetchValueSnapshot(resolved.code, dataKeys).catch((): ValueSnapshot => ({ symbol: resolved.code, source: 'none', metrics: null, reason: 'not-found' })),
+      ])
       if (klineData.length === 0) throw new Error(t('analysis.noKlineData'))
       const name = resolved.stock?.name || stockInfoResult.data?.name || resolved.code
-      setEarlyKline({ data: klineData, symbol: resolved.code, name })
+      setEarlyKline({ data: klineData, symbol: resolved.code, name, valueSnapshot })
       setStep('llm'); streamBuf.current = ''
       const onDelta = (chunk: string) => { streamBuf.current += chunk; scheduleFlush(streamBuf, rafRef, setStreamingReport) }
-      const report = await callLLM(config, resolved.code, name, buildKlinePayload(klineData), abort.signal, onDelta)
+      const report = await callLLM(config, resolved.code, name, buildKlinePayload(klineData), valueSnapshot, abort.signal, onDelta)
       cancelAnimationFrame(rafRef.current)
       if (abort.signal.aborted) return
       setStreamingReport(report)
-      setResult({ report, symbol: resolved.code, name, klineData })
+      setResult({ report, symbol: resolved.code, name, klineData, valueSnapshot })
     } catch (err) {
       if (abort.signal.aborted) return
       setError(err instanceof Error ? err.message : t('analysis.failed'))
@@ -334,13 +339,19 @@ function AnalysisContent({ runner }: { runner: AnalysisRunnerState }) {
   const symbol = result?.symbol ?? earlyKline?.symbol
   const name = result?.name ?? earlyKline?.name
   const report = result?.report ?? streamingReport
+  const valueSnapshot = result?.valueSnapshot ?? earlyKline?.valueSnapshot
 
   return (
     <div className="min-h-0 flex-1 overflow-auto">
       {step && <AnalysisProgressBar step={step} />}
       {symbol && name && <div className="mb-4 flex items-center gap-2"><span className="rounded-full bg-primary/10 px-3 py-1 text-sm font-medium text-primary">{symbol} {name}</span></div>}
-      {kline && <KlineSection klineData={kline} />}
-      {report && <ReportSection report={report} />}
+      <div className={report ? 'grid gap-6 xl:grid-cols-[minmax(0,1.25fr)_minmax(320px,0.75fr)]' : 'space-y-6'}>
+        <div className="min-w-0 space-y-6">
+          {kline && <KlineSection klineData={kline} />}
+          {valueSnapshot && <ValueSection snapshot={valueSnapshot} />}
+        </div>
+        {report && <ReportSection report={report} />}
+      </div>
     </div>
   )
 }
@@ -349,12 +360,103 @@ function KlineSection({ klineData }: { klineData: KlineData[] }) {
   const { t } = usePreferences()
   const wyckoff = useMemo(() => detectWyckoffAnnotations(klineData), [klineData])
   return (
-    <section className="mb-6">
+    <section>
       <div className="mb-3 flex flex-wrap items-end justify-between gap-2">
         <div><h2 className="text-base font-semibold">{t('analysis.chartTitle')}</h2><p className="mt-1 text-xs text-muted-foreground">{t('analysis.chartSubtitle')}</p></div>
         <span className="rounded-full border border-border px-2.5 py-1 text-xs text-muted-foreground">{klineData.length} {t('common.rows')}</span>
       </div>
       <KlineChart data={klineData} height={350} wyckoffMarkers={wyckoff?.markers} tradingRange={wyckoff?.tradingRange ?? undefined} stage={wyckoff?.stage} showIndicators />
+    </section>
+  )
+}
+
+type ValueView = 'quality' | 'risk'
+type Translate = ReturnType<typeof usePreferences>['t']
+type SignalTone = 'good' | 'bad' | 'neutral'
+
+interface ValueSignal {
+  label: string
+  tone: SignalTone
+}
+
+function ValueSection({ snapshot }: { snapshot: ValueSnapshot }) {
+  const { t } = usePreferences()
+  const [view, setView] = useState<ValueView>('quality')
+  const metrics = snapshot.metrics
+  const signals = useMemo(() => metrics ? buildValueSignals(metrics, t) : null, [metrics, t])
+
+  if (!metrics) {
+    return (
+      <section className="rounded-lg border border-border p-5">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="text-base font-semibold">{t('analysis.valueTitle')}</h2>
+            <p className="mt-1 text-xs text-muted-foreground">{t('analysis.valueSubtitle')}</p>
+          </div>
+          <span className="rounded-full border border-border px-2.5 py-1 text-xs text-muted-foreground">{t('analysis.valueNoSource')}</span>
+        </div>
+        <p className="mt-4 text-sm text-muted-foreground">{valueUnavailableText(snapshot.reason, t)}</p>
+      </section>
+    )
+  }
+
+  const shownSignals = view === 'quality' ? signals?.strengths ?? [] : signals?.risks ?? []
+  const metricItems = [
+    { label: t('analysis.valueRoe'), value: formatPercent(metrics.roe), tone: numberTone(metrics.roe, 10, 0) },
+    { label: t('analysis.valueProfitYoy'), value: formatPercent(metrics.net_income_yoy), tone: numberTone(metrics.net_income_yoy, 0, -10) },
+    { label: t('analysis.valueRevenueYoy'), value: formatPercent(metrics.revenue_yoy), tone: numberTone(metrics.revenue_yoy, 0, -10) },
+    { label: t('analysis.valueGrossMargin'), value: formatPercent(metrics.gross_margin), tone: numberTone(metrics.gross_margin, 30, 15) },
+    { label: t('analysis.valueDebtRatio'), value: formatPercent(metrics.debt_to_asset_ratio), tone: reverseNumberTone(metrics.debt_to_asset_ratio, 55, 70) },
+    { label: t('analysis.valueCashRevenue'), value: formatPercent(metrics.operating_cash_to_revenue), tone: numberTone(metrics.operating_cash_to_revenue, 5, 0) },
+  ]
+
+  return (
+    <section className="rounded-lg border border-border p-5">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 className="text-base font-semibold">{t('analysis.valueTitle')}</h2>
+          <p className="mt-1 text-xs text-muted-foreground">{t('analysis.valueSubtitle')}</p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <span className={`rounded-full px-2.5 py-1 text-xs font-medium ${valueScoreClass(signals?.tone ?? 'neutral')}`}>{signals?.label}</span>
+          <span className="rounded-full border border-border px-2.5 py-1 text-xs text-muted-foreground">{sourceLabel(snapshot)}</span>
+        </div>
+      </div>
+
+      <div className="mt-4 grid gap-x-4 gap-y-3 border-y border-border/70 py-4 sm:grid-cols-2 lg:grid-cols-3">
+        {metricItems.map((item) => (
+          <div key={item.label} className="min-w-0">
+            <div className="truncate text-xs text-muted-foreground">{item.label}</div>
+            <div className={`mt-1 text-lg font-semibold ${metricToneClass(item.tone)}`}>{item.value}</div>
+          </div>
+        ))}
+      </div>
+
+      <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+        <div className="inline-flex rounded-lg border border-border bg-muted/40 p-1" role="tablist" aria-label={t('analysis.valueTitle')}>
+          {(['quality', 'risk'] as const).map((mode) => (
+            <button
+              key={mode}
+              type="button"
+              onClick={() => setView(mode)}
+              className={`rounded-md px-3 py-1.5 text-xs font-medium transition ${view === mode ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
+              role="tab"
+              aria-selected={view === mode}
+            >
+              {mode === 'quality' ? t('analysis.valueQuality') : t('analysis.valueRisk')}
+            </button>
+          ))}
+        </div>
+        {(metrics.period_end || metrics.announce_date) && <span className="text-xs text-muted-foreground">{t('analysis.valuePeriod')}: {metrics.period_end || metrics.announce_date}</span>}
+      </div>
+
+      <div className="mt-3 grid gap-2 sm:grid-cols-2">
+        {shownSignals.length > 0 ? shownSignals.map((signal) => (
+          <div key={signal.label} className={`rounded-md border px-3 py-2 text-sm ${signalClass(signal.tone)}`}>{signal.label}</div>
+        )) : (
+          <div className="rounded-md border border-border px-3 py-2 text-sm text-muted-foreground">{t('analysis.valueNoSignals')}</div>
+        )}
+      </div>
     </section>
   )
 }
@@ -368,6 +470,83 @@ function ReportSection({ report }: { report: string }) {
       <article className="mt-4 prose prose-sm max-w-none text-foreground"><MarkdownContent content={report} /></article>
     </div>
   )
+}
+
+function buildValueSignals(metrics: FundamentalMetric, t: Translate): { label: string; tone: SignalTone; strengths: ValueSignal[]; risks: ValueSignal[] } {
+  let score = 0
+  const strengths: ValueSignal[] = []
+  const risks: ValueSignal[] = []
+  const addStrength = (condition: boolean, label: string, points = 1) => { if (condition) { strengths.push({ label, tone: 'good' }); score += points } }
+  const addRisk = (condition: boolean, label: string, points = 1) => { if (condition) { risks.push({ label, tone: 'bad' }); score -= points } }
+
+  addStrength((metrics.roe ?? -Infinity) >= 10, t('analysis.valueSignalRoeStrong'), 2)
+  addRisk((metrics.roe ?? Infinity) < 0, t('analysis.valueRiskRoeLoss'), 2)
+  addStrength((metrics.net_income_yoy ?? -Infinity) > 0, t('analysis.valueSignalProfitGrowth'))
+  addRisk((metrics.net_income_yoy ?? Infinity) < 0, t('analysis.valueRiskProfitDrop'))
+  addStrength((metrics.revenue_yoy ?? -Infinity) > 0, t('analysis.valueSignalRevenueGrowth'))
+  addRisk((metrics.revenue_yoy ?? Infinity) < 0, t('analysis.valueRiskRevenueDrop'))
+  addStrength((metrics.gross_margin ?? -Infinity) >= 30, t('analysis.valueSignalGrossMargin'))
+  addRisk((metrics.gross_margin ?? Infinity) < 15, t('analysis.valueRiskGrossMarginLow'))
+  addStrength((metrics.debt_to_asset_ratio ?? Infinity) <= 55, t('analysis.valueSignalLowDebt'))
+  addRisk((metrics.debt_to_asset_ratio ?? -Infinity) >= 70, t('analysis.valueRiskHighDebt'), 2)
+  addStrength((metrics.operating_cash_to_revenue ?? -Infinity) >= 5, t('analysis.valueSignalCashHealthy'))
+  addRisk((metrics.operating_cash_to_revenue ?? Infinity) < 0, t('analysis.valueRiskCashWeak'))
+
+  const tone: SignalTone = score >= 3 ? 'good' : score < 0 ? 'bad' : 'neutral'
+  const label = tone === 'good' ? t('analysis.valueScoreStrong') : tone === 'bad' ? t('analysis.valueScoreWeak') : t('analysis.valueScoreNeutral')
+  return { label, tone, strengths, risks }
+}
+
+function sourceLabel(snapshot: ValueSnapshot): string {
+  const source = snapshot.source === 'tickflow' ? 'TickFlow' : snapshot.source === 'tushare' ? 'Tushare' : '--'
+  return source
+}
+
+function valueUnavailableText(reason: ValueSnapshot['reason'], t: Translate): string {
+  if (reason === 'unsupported-market') return t('analysis.valueUnsupported')
+  if (reason === 'missing-source') return t('analysis.valueMissingSource')
+  return t('analysis.valueUnavailable')
+}
+
+function formatPercent(value: number | undefined): string {
+  if (!Number.isFinite(value)) return '--'
+  const numeric = value as number
+  const digits = Math.abs(numeric) >= 100 ? 1 : 2
+  return `${numeric.toFixed(digits)}%`
+}
+
+function numberTone(value: number | undefined, goodAt: number, badBelow: number): SignalTone {
+  if (!Number.isFinite(value)) return 'neutral'
+  const numeric = value as number
+  if (numeric >= goodAt) return 'good'
+  if (numeric < badBelow) return 'bad'
+  return 'neutral'
+}
+
+function reverseNumberTone(value: number | undefined, goodAtOrBelow: number, badAtOrAbove: number): SignalTone {
+  if (!Number.isFinite(value)) return 'neutral'
+  const numeric = value as number
+  if (numeric <= goodAtOrBelow) return 'good'
+  if (numeric >= badAtOrAbove) return 'bad'
+  return 'neutral'
+}
+
+function metricToneClass(tone: SignalTone): string {
+  if (tone === 'good') return 'text-down'
+  if (tone === 'bad') return 'text-up'
+  return 'text-foreground'
+}
+
+function valueScoreClass(tone: SignalTone): string {
+  if (tone === 'good') return 'bg-down/10 text-down'
+  if (tone === 'bad') return 'bg-up/10 text-up'
+  return 'bg-muted text-muted-foreground'
+}
+
+function signalClass(tone: SignalTone): string {
+  if (tone === 'good') return 'border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-200'
+  if (tone === 'bad') return 'border-rose-200 bg-rose-50 text-rose-800 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-200'
+  return 'border-border text-muted-foreground'
 }
 
 function AnalysisProgressBar({ step }: { step: AnalysisStep }) {
@@ -457,10 +636,30 @@ function buildKlinePayload(data: KlineData[]): string {
   ].join('\n')
 }
 
-async function callLLM(config: Parameters<typeof streamLLMResponse>[0], code: string, name: string, klinePayload: string, signal?: AbortSignal, onDelta?: (chunk: string) => void): Promise<string> {
+function buildValuePrompt(snapshot: ValueSnapshot): string {
+  const metrics = snapshot.metrics
+  if (!metrics) return '价值面摘要：暂无可用基本面指标，本次只基于量价结构分析。'
+  const rows = [
+    `价值面摘要（来源：${sourceLabel(snapshot)}${metrics.period_end ? `，报告期：${metrics.period_end}` : ''}）：`,
+    `ROE=${formatPromptPercent(metrics.roe)}，净利润同比=${formatPromptPercent(metrics.net_income_yoy)}，营收同比=${formatPromptPercent(metrics.revenue_yoy)}`,
+    `毛利率=${formatPromptPercent(metrics.gross_margin)}，净利率=${formatPromptPercent(metrics.net_margin)}，资产负债率=${formatPromptPercent(metrics.debt_to_asset_ratio)}`,
+    `经营现金流/营收=${formatPromptPercent(metrics.operating_cash_to_revenue)}，EPS=${formatPromptNumber(metrics.eps_basic)}，每股净资产=${formatPromptNumber(metrics.bps)}`,
+  ]
+  return rows.join('\n')
+}
+
+function formatPromptPercent(value: number | undefined): string {
+  return Number.isFinite(value) ? `${(value as number).toFixed(2)}%` : '暂无'
+}
+
+function formatPromptNumber(value: number | undefined): string {
+  return Number.isFinite(value) ? (value as number).toFixed(2) : '暂无'
+}
+
+async function callLLM(config: Parameters<typeof streamLLMResponse>[0], code: string, name: string, klinePayload: string, valueSnapshot: ValueSnapshot, signal?: AbortSignal, onDelta?: (chunk: string) => void): Promise<string> {
   const result = await streamLLMResponse(config, [
-    { role: 'system', content: '你是威科夫分析大师，精通量价分析和威科夫方法。请对给定股票进行深度分析，包括：\n1. 当前所处威科夫阶段（积累/上涨/派发/下跌），Phase A-E 定位\n2. 量价关系分析（供需力量对比）\n3. 关键支撑与阻力位\n4. 主力意图判断\n5. 操作建议与风险提示（含止损位）\n\n请用简洁、专业的中文回答。使用 markdown 格式，结构清晰。' },
-    { role: 'user', content: `请分析股票 ${code} ${name}。基于威科夫理论给出当前阶段判断和操作建议。\n\n${klinePayload}` },
+    { role: 'system', content: '你是威科夫分析大师，主框架是量价与威科夫阶段判断。若用户提供价值面摘要，只把它作为质量、风险和仓位置信度校准：技术面负责时机，价值面负责是否值得提高/降低结论置信度。不要用基本面替代 K 线事实，也不要因为单个指标给出过度确定结论。\n\n输出结构：\n1. 技术面结论：威科夫阶段、量价供需、支撑阻力、主力意图。\n2. 价值面校准：只引用给定摘要中的关键指标，说明它如何影响风险/置信度。\n3. 综合策略：观察/试错/持有/减仓等动作条件，包含失效位和风险提示。\n\n请用简洁、专业的中文 markdown 回答。' },
+    { role: 'user', content: `请分析股票 ${code} ${name}。\n\n${buildValuePrompt(valueSnapshot)}\n\n${klinePayload}` },
   ], { temperature: 0.7, signal, onDelta })
   if (!result) throw new Error('模型未返回结果，请重试')
   return result
