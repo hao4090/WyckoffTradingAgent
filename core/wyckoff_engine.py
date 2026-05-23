@@ -1969,7 +1969,10 @@ def allocate_ai_candidates(
     sos_hit_set = {str(c).strip() for c, _ in result.triggers.get("sos", [])}
     spring_hit_set = {str(c).strip() for c, _ in result.triggers.get("spring", [])}
     lps_hit_set = {str(c).strip() for c, _ in result.triggers.get("lps", [])}
+    evr_hit_set = {str(c).strip() for c, _ in result.triggers.get("evr", [])}
+    compression_hit_set = {str(c).strip() for c, _ in result.triggers.get("compression", [])}
     trend_pb_hit_set = {str(c).strip() for c, _ in result.triggers.get("trend_pullback", [])}
+    other_trigger_set = spring_hit_set | lps_hit_set | evr_hit_set | compression_hit_set | trend_pb_hit_set
     blocked_exit_signals = {"stop_loss", "distribution_warning"}
 
     def _stage_name(code: str) -> str:
@@ -1998,7 +2001,7 @@ def allocate_ai_candidates(
             score += 3.0 if not is_trend_side else 0.0
 
         if code in sos_hit_set:
-            score += 50.0
+            score += 50.0 if code in other_trigger_set else 30.0
         if code in spring_hit_set:
             score += 45.0
         if code in lps_hit_set:
