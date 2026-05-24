@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type Dispatch, type FormEvent, type MutableRefObject, type ReactNode, type SetStateAction } from 'react'
 import { CheckSquare, Loader2, Swords, XSquare } from 'lucide-react'
 import { useAuthStore } from '@/stores/auth'
 import { usePreferences } from '@/lib/preferences'
@@ -86,13 +86,15 @@ function useBattleRunner() {
   const [overlayLimit, setOverlayLimit] = useState(6)
   const [report, setReport] = useState('')
   const abortRef = useRef<AbortController | null>(null)
+  const streamBuf = useRef(''), rafRef = useRef(0)
   const [benchmark, setBenchmark] = useState<KlineData[]>([])
 
   async function run(input: string) {
     if (!user) return
-    abortRef.current?.abort()
+    abortRef.current?.abort(); cancelAnimationFrame(rafRef.current)
     const abort = new AbortController()
     abortRef.current = abort
+    streamBuf.current = ''
     setLoading(true); setError(''); setStocks([]); setBenchmark([]); setSelectedCodes([]); setReport('')
     try {
       const [config, keys, targets] = await Promise.all([loadLLMConfig(user.id), getUserDataKeys(user.id), resolveTargets(input)])
@@ -106,16 +108,26 @@ function useBattleRunner() {
       setStocks(fetched)
       setBenchmark(bench)
       setSelectedCodes(fetched.slice(0, Math.min(6, fetched.length)).map((item) => item.code))
-      setReport(await callBattleLLM(config, fetched, abort.signal))
+      const onDelta = (chunk: string) => { streamBuf.current += chunk; scheduleBattleReportFlush(streamBuf, rafRef, setReport) }
+      const finalReport = await callBattleLLM(config, fetched, abort.signal, onDelta)
+      cancelAnimationFrame(rafRef.current)
+      if (abort.signal.aborted) return
+      setReport(finalReport)
     } catch (err) {
       if (abort.signal.aborted) return
       setError(normalizeBattleError(err))
     } finally {
+      cancelAnimationFrame(rafRef.current)
       setLoading(false)
     }
   }
 
   return { loading, error, stocks, selectedCodes, mode, overlayLimit, report, benchmark, run, setSelectedCodes, setMode, setOverlayLimit }
+}
+
+function scheduleBattleReportFlush(buf: MutableRefObject<string>, raf: MutableRefObject<number>, set: Dispatch<SetStateAction<string>>) {
+  if (raf.current) return
+  raf.current = requestAnimationFrame(() => { raf.current = 0; set(buf.current) })
 }
 
 function useBattleHistory(
@@ -502,8 +514,8 @@ function periodReturn(data: KlineData[], days: number): number {
   return base > 0 ? (latest / base - 1) * 100 : 0
 }
 
-async function callBattleLLM(config: Parameters<typeof streamLLMResponse>[0], stocks: BattleStock[], signal?: AbortSignal): Promise<string> {
-  const result = await streamLLMResponse(config, buildBattleMessages(stocks), { temperature: 0.45, maxTokens: 3500, signal })
+async function callBattleLLM(config: Parameters<typeof streamLLMResponse>[0], stocks: BattleStock[], signal?: AbortSignal, onDelta?: (chunk: string) => void): Promise<string> {
+  const result = await streamLLMResponse(config, buildBattleMessages(stocks), { temperature: 0.45, maxTokens: 3500, signal, onDelta })
   if (!result) throw new Error('模型未返回结果，请重试')
   return result
 }
