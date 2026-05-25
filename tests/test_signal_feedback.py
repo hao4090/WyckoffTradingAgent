@@ -3,10 +3,24 @@ from __future__ import annotations
 import argparse
 
 import pandas as pd
+import pytest
 
 from core.dynamic_policy import filter_triggers_by_registry, resolve_dynamic_candidate_policy
 from core.signal_feedback import build_signal_observations, build_signal_registry_updates, summarize_signal_health
 from scripts.signal_feedback_job import _outcome_rows
+
+
+class _FailingUpsertQuery:
+    def upsert(self, _rows: list[dict], *, on_conflict: str):
+        return self
+
+    def execute(self):
+        raise RuntimeError("db down")
+
+
+class _FailingUpsertClient:
+    def table(self, _name: str):
+        return _FailingUpsertQuery()
 
 
 def test_build_signal_observations_marks_selection_and_source():
@@ -32,6 +46,20 @@ def test_build_signal_observations_marks_selection_and_source():
     assert first["entry_price"] == 10.5
     assert second["track"] == "Accum"
     assert second["source"] == "l2_bypass"
+
+
+def test_signal_feedback_upsert_errors_propagate(monkeypatch):
+    from integrations import supabase_signal_feedback
+
+    closed = []
+    monkeypatch.setattr(supabase_signal_feedback, "_configured", lambda: True)
+    monkeypatch.setattr(supabase_signal_feedback, "_admin", _FailingUpsertClient)
+    monkeypatch.setattr(supabase_signal_feedback, "_close", closed.append)
+
+    with pytest.raises(RuntimeError, match="db down"):
+        supabase_signal_feedback.upsert_signal_outcomes([{"observation_id": 1, "horizon_days": 1}])
+
+    assert len(closed) == 1
 
 
 def test_summarize_signal_health_classifies_watch_and_all_regime():

@@ -248,12 +248,12 @@ def _persist_signal_observations(
     logs_path: str | None,
     *,
     dry_run: bool = False,
-) -> None:
+) -> bool:
     if not step2_details:
-        return
+        return True
     if dry_run:
         _log("预演模式: 跳过信号观察样本入库", logs_path)
-        return
+        return True
     try:
         from core.signal_feedback import build_signal_observations
         from integrations.supabase_signal_feedback import upsert_signal_observations
@@ -277,8 +277,10 @@ def _persist_signal_observations(
         )
         written = upsert_signal_observations(rows)
         _log(f"信号观察样本入库: rows={len(rows)}, written={written}", logs_path)
+        return True
     except Exception as e:
         _log(f"信号观察样本入库失败: {e}", logs_path)
+        return False
 
 
 def _load_step4_target() -> tuple[dict | None, str]:
@@ -716,9 +718,10 @@ def main() -> int:
         _log("Step3 批量研报: 跳过（无筛选结果）", logs_path)
 
     if step2_ok and step2_details:
-        _persist_signal_observations(
+        if not _persist_signal_observations(
             step2_details, benchmark_context, step3_springboard_codes, logs_path, dry_run=preview_only
-        )
+        ):
+            has_blocking_failure = True
 
     # Step4: 私人账户再平衡（按 SUPABASE_USER_ID 唯一执行）
     if skip_step4:
