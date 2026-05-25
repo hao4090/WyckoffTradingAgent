@@ -60,9 +60,6 @@ _logging.basicConfig(level=_logging.CRITICAL)
 # ---------------------------------------------------------------------------
 
 
-from cli._provider_factory import _create_provider  # noqa: F401
-
-
 def _get_version() -> str:
     try:
         from importlib.metadata import version
@@ -282,28 +279,6 @@ def _model_role_set(args, role: str):
     _set(model_id)
     suffix = "（简单问题自动使用此模型）" if role == "light" else ""
     print(f"✓ {label.capitalize()} 模型已设为 {model_id}{suffix}")
-
-
-def _wrap_routing_provider(state: dict) -> None:
-    """如果配置了 light 模型，用 RoutingProvider 包装当前 provider。"""
-    try:
-        from cli.auth import load_light_model_id, load_model_configs
-
-        light_id = load_light_model_id()
-        if not light_id or not state.get("provider"):
-            return
-        light_cfg = next((c for c in load_model_configs() if c["id"] == light_id), None)
-        if not light_cfg:
-            return
-        light_prov, err = _create_provider(
-            light_cfg["provider_name"], light_cfg["api_key"], light_cfg.get("model", ""), light_cfg.get("base_url", "")
-        )
-        if not err:
-            from cli.model_router import RoutingProvider
-
-            state["provider"] = RoutingProvider(state["provider"], light_prov)
-    except Exception:
-        logger.debug("routing provider setup failed", exc_info=True)
 
 
 def _cmd_model(args):
@@ -1159,94 +1134,11 @@ def _cmd_cleanup(args):
 def _cmd_tui(_args=None):
     _check_update_async()
 
-    from cli.tools import ToolRegistry
-
-    tools = ToolRegistry()
-
-    session_expired = False
-    try:
-        from cli.auth import _load_session, restore_session
-
-        had_session = _load_session() is not None
-        session = restore_session()
-        if session:
-            tools.state.update(
-                {
-                    "user_id": session["user_id"],
-                    "email": session["email"],
-                    "access_token": session.get("access_token", ""),
-                    "refresh_token": session.get("refresh_token", ""),
-                }
-            )
-        elif had_session:
-            session_expired = True
-    except Exception:
-        logger.warning("session restore failed", exc_info=True)
-
-    # 初始化本地 SQLite + 后台同步
-    try:
-        from integrations.local_db import init_db, prune_memories
-
-        init_db()
-        prune_memories()
-        from integrations.sync import sync_all_background
-
-        sync_all_background()
-    except Exception:
-        logger.warning("local db init or sync failed", exc_info=True)
-
+    from cli.reading_room import build_reading_room_runtime
     from core.prompts import CHAT_AGENT_SYSTEM_PROMPT
 
+    tools, state, session_expired = build_reading_room_runtime()
     system_prompt = CHAT_AGENT_SYSTEM_PROMPT
-
-    state = {"provider": None, "provider_name": "", "model": "", "api_key": "", "base_url": ""}
-
-    try:
-        from cli.auth import load_config
-
-        _cfg = load_config()
-        for _k, _env in [("tushare_token", "TUSHARE_TOKEN"), ("tickflow_api_key", "TICKFLOW_API_KEY")]:
-            _v = str(_cfg.get(_k, "") or "").strip()
-            if _v:
-                os.environ.setdefault(_env, _v)
-    except Exception:
-        logger.debug("config env vars load failed", exc_info=True)
-
-    try:
-        from cli.auth import load_default_model_id, load_model_configs
-
-        configs = load_model_configs()
-        default_id = load_default_model_id()
-        if configs and default_id:
-            env_map = {"gemini": "GEMINI_API_KEY", "claude": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY"}
-            for cfg in configs:
-                ek = env_map.get(cfg.get("provider_name", ""))
-                if ek and cfg.get("api_key"):
-                    os.environ.setdefault(ek, cfg["api_key"])
-            default_cfg = next((c for c in configs if c["id"] == default_id), configs[0])
-            if len(configs) == 1:
-                provider, err = _create_provider(
-                    default_cfg["provider_name"],
-                    default_cfg["api_key"],
-                    default_cfg.get("model", ""),
-                    default_cfg.get("base_url", ""),
-                )
-                if not err:
-                    state.update(default_cfg)
-                    state["provider"] = provider
-            else:
-                from cli.auth import load_fallback_model_id
-                from cli.providers.fallback import FallbackProvider
-
-                state.update(default_cfg)
-                state["provider"] = FallbackProvider(configs, default_id, fallback_id=load_fallback_model_id())
-    except Exception:
-        logger.warning("model provider init failed", exc_info=True)
-
-    _wrap_routing_provider(state)
-
-    if state["provider"]:
-        tools.set_provider(state["provider"])
 
     # 后台启动 dashboard 并打开浏览器
     import threading
@@ -1290,6 +1182,46 @@ def _cmd_tui(_args=None):
             os.close(_devnull)
         except Exception:
             logger.debug("devnull redirect failed", exc_info=True)
+
+
+def _cmd_ask(args) -> None:
+    from cli.reading_room import parse_history_json, run_reading_room_stream
+
+    prompt = args.message.strip() or " ".join(args.prompt).strip()
+    if not prompt:
+        print("用法: wyckoff ask <问题> [--jsonl] [--history-json JSON]", file=sys.stderr)
+        sys.exit(2)
+    try:
+        history = parse_history_json(args.history_json)
+    except ValueError as exc:
+        print(f"✗ {exc}", file=sys.stderr)
+        sys.exit(2)
+
+    streamed = False
+    for event in run_reading_room_stream(prompt, history):
+        if args.jsonl:
+            print(json.dumps(event, ensure_ascii=False, default=str), flush=True)
+            continue
+        event_type = event.get("type")
+        if event_type == "text_delta":
+            streamed = True
+            print(event.get("text", ""), end="", flush=True)
+        elif event_type == "done":
+            if not streamed:
+                print(event.get("text", ""))
+            else:
+                print()
+        elif event_type == "error":
+            print(f"✗ {event.get('error', '读盘室执行失败')}", file=sys.stderr)
+            sys.exit(1)
+
+
+def _add_ask_parser(sub) -> None:
+    p_ask = sub.add_parser("ask", help="Headless 读盘室（供原生客户端/脚本调用）")
+    p_ask.add_argument("prompt", nargs="*", help="问题文本")
+    p_ask.add_argument("--message", default="", help="问题文本（避免 shell 转义时使用）")
+    p_ask.add_argument("--history-json", default="", help="历史消息 JSON 数组：[{role, content}]")
+    p_ask.add_argument("--jsonl", action="store_true", help="以 JSON Lines 输出 runtime events")
 
 
 # ---------------------------------------------------------------------------
@@ -1340,29 +1272,33 @@ def _dispatch_command(args) -> None:
         _cmd_sync(args)
     elif args.cmd == "cleanup":
         _cmd_cleanup(args)
+    elif args.cmd == "ask":
+        _cmd_ask(args)
     else:
         _cmd_tui(args)
 
 
-def main():
-    _set_terminal_title("Wyckoff-Analysis")
-
+def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="wyckoff",
         description="威科夫终端读盘室 — Wyckoff 量价分析 Agent",
     )
     parser.add_argument("-v", "--version", action="version", version=f"wyckoff {_get_version()}")
     sub = parser.add_subparsers(dest="cmd")
+    _add_basic_parsers(sub)
+    _add_market_parsers(sub)
+    _add_session_parsers(sub)
+    _add_ask_parser(sub)
+    return parser
 
-    # wyckoff update
+
+def _add_basic_parsers(sub) -> None:
     sub.add_parser("update", help="升级到最新版")
 
-    # wyckoff auth
     p_auth = sub.add_parser("auth", help="登录/登出/状态")
     p_auth.add_argument("auth_cmd", help="email 或 logout/status")
     p_auth.add_argument("password", nargs="?", default="", help="密码（可省略，交互输入）")
 
-    # wyckoff model
     p_model = sub.add_parser("model", help="模型管理")
     p_model.add_argument("model_cmd", nargs="?", default="list", help="list/add/set/rm/default")
     p_model.add_argument("model_id", nargs="?", default="", help="模型 ID")
@@ -1380,7 +1316,8 @@ def main():
     p_config.add_argument("config_cmd", nargs="?", default="", help="tushare/tickflow")
     p_config.add_argument("value", nargs="?", default="", help="值（可省略，交互输入）")
 
-    # wyckoff portfolio
+
+def _add_market_parsers(sub) -> None:
     p_port = sub.add_parser("portfolio", help="持仓管理", aliases=["pf"])
     p_port.add_argument("portfolio_cmd", nargs="?", default="list", help="list/add/rm/cash")
     p_port.add_argument("code", nargs="?", default="", help="股票代码 (add/rm 时)")
@@ -1390,44 +1327,36 @@ def main():
     p_port.add_argument("--buy-dt", dest="buy_dt", default="", help="买入日期 YYYYMMDD")
     p_port.add_argument("--amount", type=float, default=None, help="可用资金金额 (cash 时)")
 
-    # wyckoff signal
     p_signal = sub.add_parser("signal", help="信号确认池")
     p_signal.add_argument("status", nargs="?", default="all", help="all/pending/confirmed/expired")
     p_signal.add_argument("-n", "--limit", type=int, default=30, help="返回条数")
 
-    # wyckoff recommend
     p_rec = sub.add_parser("recommend", help="威科夫形态复盘", aliases=["rec"])
     p_rec.add_argument("-n", "--limit", type=int, default=20, help="返回条数")
 
-    # wyckoff dashboard / dash
     p_dash = sub.add_parser("dashboard", help="启动本地可视化面板", aliases=["dash"])
     p_dash.add_argument("--port", type=int, default=8765, help="HTTP 端口 (默认 8765)")
 
-    # wyckoff screen
     p_screen = sub.add_parser("screen", help="全市场漏斗筛选")
     p_screen.add_argument("--board", default="all", help="板块 (all/main/gem/star)")
 
-    # wyckoff backtest
     p_bt = sub.add_parser("backtest", help="策略历史回测", aliases=["bt"])
     p_bt.add_argument("--hold-days", type=int, default=15, help="持有天数 (默认 15)")
     p_bt.add_argument("--months", type=int, default=18, help="回测月数 (默认 18)")
     p_bt.add_argument("--top-n", type=int, default=5, help="每批取前N只 (默认 5)")
 
-    # wyckoff report
     p_report = sub.add_parser("report", help="AI 深度研报")
     p_report.add_argument("codes", help="股票代码，逗号分隔 (如 000001,600519)")
 
-    # wyckoff mcp
     sub.add_parser("mcp", help="启动 MCP Server")
-
     _add_memory_parser(sub)
 
-    # wyckoff log
+
+def _add_session_parsers(sub) -> None:
     p_log = sub.add_parser("log", help="查看对话日志")
     p_log.add_argument("--session", default="", help="指定会话 ID")
     p_log.add_argument("-n", "--limit", type=int, default=30, help="返回条数")
 
-    # wyckoff session
     p_session = sub.add_parser("session", help="会话列表 / 导出 / 分叉", aliases=["sess"])
     p_session.add_argument("session_cmd", nargs="?", default="list", help="list/export/fork")
     p_session.add_argument("session_id", nargs="?", default="", help="会话 ID；留空时使用最近会话")
@@ -1436,7 +1365,6 @@ def main():
     p_session.add_argument("--format", choices=["md", "json"], default="md", help="export 输出格式")
     p_session.add_argument("--new-id", default="", help="fork 新会话 ID；默认自动生成")
 
-    # wyckoff trace
     p_trace = sub.add_parser("trace", help="查看 JSONL 运行轨迹")
     p_trace.add_argument("-n", "--limit", type=int, default=10, help="返回条数")
     p_trace.add_argument("--show", default="", help="显示指定轨迹文件（文件名或绝对路径）")
@@ -1445,28 +1373,26 @@ def main():
     p_trace.add_argument("--events", default="", help="将指定 scratchpad JSONL 转成标准事件流")
     p_trace.add_argument("--out", default="", help="--events 输出路径；留空则打印到 stdout")
 
-    # wyckoff prompt
     p_prompt = sub.add_parser("prompt", help="查看/渲染 Prompt 模板")
     p_prompt.add_argument("prompt_cmd", nargs="?", default="list", help="list/show/render")
     p_prompt.add_argument("name", nargs="?", default="", help="模板名")
     p_prompt.add_argument("extra", nargs=argparse.REMAINDER, help="render 时传入的补充说明")
 
-    # wyckoff diag
     p_diag = sub.add_parser("diag", help="导出会话诊断包", aliases=["diagnostic"])
     p_diag.add_argument("--session", default="", help="指定会话 ID；默认最近一个会话")
     p_diag.add_argument("--out", default="", help="输出路径；默认 ~/.wyckoff/diagnostics/")
     p_diag.add_argument("--format", choices=["zip", "json"], default="zip", help="输出格式")
 
-    # wyckoff sync
     p_sync = sub.add_parser("sync", help="同步 Supabase → 本地 SQLite")
     p_sync.add_argument("sync_cmd", nargs="?", default="", help="status: 查看同步状态")
 
-    # wyckoff cleanup
     p_cleanup = sub.add_parser("cleanup", help="清理过期本地数据")
     p_cleanup.add_argument("--days", type=int, default=30, help="保留天数 (默认 30)")
 
-    args = parser.parse_args()
-    _dispatch_command(args)
+
+def main():
+    _set_terminal_title("Wyckoff-Analysis")
+    _dispatch_command(_build_parser().parse_args())
 
 
 if __name__ == "__main__":
