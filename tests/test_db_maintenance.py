@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from scripts.db_maintenance import cleanup_recommendation_table, cleanup_recommendation_tracking
+from scripts.db_maintenance import cleanup_recommendation_table, cleanup_recommendation_tracking, cleanup_table
 
 
 @dataclass
@@ -116,3 +116,26 @@ def test_cleanup_recommendation_table_uses_requested_table():
     assert count is None
     assert [row["recommend_date"] for row in client.tables["recommendation_tracking_us"]] == [20260505, 20260504]
     assert client.rows == [{"recommend_date": 20260505, "code": 1}]
+
+
+def test_cleanup_table_deletes_old_activity_events():
+    client = _FakeClient(
+        {
+            "user_activity_events": [
+                {"created_at": "2000-01-01T00:00:00+00:00", "event_id": "old"},
+                {"created_at": "2999-05-01T00:00:00+00:00", "event_id": "new"},
+            ]
+        }
+    )
+
+    status, count = cleanup_table(
+        client,
+        "user_activity_events",
+        "created_at",
+        30,
+        "iso_datetime",
+    )
+
+    assert status == "ok"
+    assert count is None
+    assert client.tables["user_activity_events"] == [{"created_at": "2999-05-01T00:00:00+00:00", "event_id": "new"}]

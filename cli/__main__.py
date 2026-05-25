@@ -31,6 +31,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -1390,9 +1391,31 @@ def _add_session_parsers(sub) -> None:
     p_cleanup.add_argument("--days", type=int, default=30, help="保留天数 (默认 30)")
 
 
+def _first_subcommand(args) -> str:
+    for name in ("auth_cmd", "model_cmd", "portfolio_cmd", "session_cmd", "prompt_cmd", "sync_cmd", "config_cmd"):
+        value = str(getattr(args, name, "") or "").strip()
+        if value:
+            return value
+    return ""
+
+
 def main():
     _set_terminal_title("Wyckoff-Analysis")
-    _dispatch_command(_build_parser().parse_args())
+    args = _build_parser().parse_args()
+    started = time.monotonic()
+    ok = False
+    try:
+        _dispatch_command(args)
+        ok = True
+    finally:
+        from cli.telemetry import track_cli_command
+
+        track_cli_command(
+            str(args.cmd or "tui"),
+            success=ok,
+            duration_ms=int((time.monotonic() - started) * 1000),
+            subcommand=_first_subcommand(args),
+        )
 
 
 if __name__ == "__main__":

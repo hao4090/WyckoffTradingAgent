@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback, memo } from 'react'
+import type { User } from '@supabase/supabase-js'
 import { Send, RotateCcw, ChevronDown, ChevronRight, Wrench, Brain } from 'lucide-react'
 import { useAuthStore } from '@/stores/auth'
 import { loadLLMConfig, loadAllModels, runChatAgentStream, createReasoningCache, type LLMConfig, type ModelOption, type StepInfo } from '@/lib/chat-agent'
@@ -6,6 +7,7 @@ import { MarkdownContent } from '@/components/markdown'
 import { ScreenResultCard } from '@/components/screen-result-card'
 import { AIDisclaimer } from '@/components/ai-disclaimer'
 import { usePreferences, type TranslationKey } from '@/lib/preferences'
+import { trackActivity } from '@/lib/activity'
 
 const TOOL_LABEL_KEYS: Record<string, TranslationKey> = {
   search_stock: 'tool.search_stock',
@@ -133,6 +135,35 @@ function ChatComposer(props: {
   )
 }
 
+function trackChatStart(user: User | null) {
+  trackActivity(user, 'chat_send', { feature: 'chat', route: '/chat' })
+  return Date.now()
+}
+
+function trackChatFinish(user: User | null, startedAt: number, steps: StepInfo[]) {
+  const toolCalls = steps.filter((s) => s.type === 'tool_call')
+  trackActivity(user, 'chat_finish', {
+    feature: 'chat',
+    route: '/chat',
+    durationMs: Date.now() - startedAt,
+    metadata: { tool_count: toolCalls.length },
+  })
+  const toolNames = steps.flatMap((s) => (s.toolName ? [s.toolName] : []))
+  for (const toolName of [...new Set(toolNames)]) {
+    trackActivity(user, 'tool_run', { feature: toolName, route: '/chat' })
+  }
+}
+
+function trackChatError(user: User | null, startedAt: number, error: string) {
+  trackActivity(user, 'chat_error', {
+    feature: 'chat',
+    route: '/chat',
+    success: false,
+    durationMs: Date.now() - startedAt,
+    metadata: { error },
+  })
+}
+
 export function ChatPage() {
   const user = useAuthStore((s) => s.user)
   const { t } = usePreferences()
@@ -207,6 +238,7 @@ export function ChatPage() {
     setLoading(true)
     setLiveSteps([])
     setStreamingText('')
+    const startedAt = trackChatStart(user)
 
     abortRef.current = runChatAgentStream(
       llmConfig,
@@ -239,6 +271,7 @@ export function ChatPage() {
           setLiveSteps([])
           setLoading(false)
           abortRef.current = null
+          trackChatFinish(user, startedAt, steps)
         },
         onError: (err) => {
           cancelAnimationFrame(streamFlushRef.current)
@@ -251,6 +284,7 @@ export function ChatPage() {
           setLiveSteps([])
           setLoading(false)
           abortRef.current = null
+          trackChatError(user, startedAt, err.message || 'unknown')
         },
       },
       reasoningCacheRef.current,

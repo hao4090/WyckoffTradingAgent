@@ -1,9 +1,12 @@
+import { useCallback, useEffect } from 'react'
+import type { User } from '@supabase/supabase-js'
 import { Outlet, Link, useLocation, useNavigate } from 'react-router'
 import { MessageSquare, Briefcase, TrendingUp, Settings, LogOut, BarChart3, Moon, FileDown, BookOpen, Home, Github, Sun, Languages, Swords, Map, History, type LucideIcon } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/auth'
 import { MarketBar } from '@/components/market-bar'
 import { usePreferences, type TranslationKey } from '@/lib/preferences'
+import { trackActivity } from '@/lib/activity'
 
 const navItems = [
   { to: '/chat', icon: MessageSquare, labelKey: 'nav.chat' },
@@ -115,11 +118,8 @@ export function AppLayout() {
   const location = useLocation()
   const user = useAuthStore((s) => s.user)
   const { t } = usePreferences()
-
-  async function handleLogout() {
-    await supabase.auth.signOut()
-    navigate('/login', { replace: true })
-  }
+  usePageActivity(user, location.pathname)
+  const handleLogout = useLogoutHandler(user, location.pathname, navigate)
 
   return (
     <div className="flex h-screen">
@@ -159,6 +159,20 @@ export function AppLayout() {
       </div>
     </div>
   )
+}
+
+function usePageActivity(user: User | null, pathname: string) {
+  useEffect(() => {
+    trackActivity(user, 'page_view', { feature: 'navigation', route: pathname })
+  }, [pathname, user])
+}
+
+function useLogoutHandler(user: User | null, pathname: string, navigate: ReturnType<typeof useNavigate>) {
+  return useCallback(async () => {
+    trackActivity(user, 'logout', { feature: 'auth', route: pathname })
+    await supabase.auth.signOut()
+    navigate('/login', { replace: true })
+  }, [navigate, pathname, user])
 }
 
 function _navActive(pathname: string, hash: string, to: string) {

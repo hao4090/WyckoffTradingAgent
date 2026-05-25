@@ -25,6 +25,9 @@ TABLE_SIGNAL_OUTCOMES = "signal_outcomes"
 TABLE_SIGNAL_HEALTH_DAILY = "signal_health_daily"
 TABLE_SIGNAL_REGISTRY = "signal_registry"
 TABLE_SIGNAL_POLICY_SHADOW_RUNS = "signal_policy_shadow_runs"
+TABLE_USER_ACTIVITY_EVENTS = "user_activity_events"
+TABLE_USER_DAILY_ACTIVITY = "user_daily_activity"
+TABLE_ANALYTICS_EXCLUDED_USERS = "analytics_excluded_users"
 
 # Local SQLite DB path
 from pathlib import Path as _Path

@@ -1,0 +1,59 @@
+name: User Activity Analytics
+
+on:
+  schedule:
+    # Weekly: Beijing Monday 09:20, report the previous 7 natural days.
+    - cron: "20 1 * * 1"
+    # Monthly: Beijing first day 09:30, report previous natural month.
+    - cron: "30 1 1 * *"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Report mode"
+        type: choice
+        required: true
+        default: weekly
+        options:
+          - weekly
+          - monthly
+
+concurrency:
+  group: user-activity-analytics-${{ github.ref }}-${{ github.event.schedule || github.event.inputs.mode || 'manual' }}
+  cancel-in-progress: true
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    env:
+      PYTHONUNBUFFERED: "1"
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
+      TZ: Asia/Shanghai
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+
+      - name: Send analytics report
+        run: |
+          MODE="${{ github.event.inputs.mode || '' }}"
+          if [ -z "$MODE" ]; then
+            if [ "${{ github.event.schedule }}" = "30 1 1 * *" ]; then
+              MODE="monthly"
+            else
+              MODE="weekly"
+            fi
+          fi
+          python -u scripts/analytics_report_job.py --mode "$MODE"

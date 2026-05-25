@@ -213,12 +213,13 @@ wyckoff dashboard
 | 信号反馈闭环、shadow/on 动态策略 | [docs/SIGNAL_FEEDBACK_LOOP.md](docs/SIGNAL_FEEDBACK_LOOP.md) |
 | 系统迭代策略与落地状态 | [docs/ITERATION_STRATEGY.md](docs/ITERATION_STRATEGY.md) |
 | 运营成本、规模化预算 | [docs/COST_MODEL.md](docs/COST_MODEL.md) |
+| 用户活跃统计、DAU/MAU/留存 | [docs/USER_ACTIVITY_ANALYTICS.md](docs/USER_ACTIVITY_ANALYTICS.md) |
 | 漏斗、AI 研报、OMS、回测 | [README_STRATEGY.md](README_STRATEGY.md) |
 | 术语速查 | [GLOSSARY.md](GLOSSARY.md) |
 | MCP Server 配置 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#mcp-server) |
 | 密钥与本地配置安全 | [docs/SECRET_MANAGEMENT.md](docs/SECRET_MANAGEMENT.md) |
 
-> **Wiki 深度阅读**：[交易方法论 Wiki](https://github.com/YoungCan-Wang/WyckoffTradingAgent/wiki/01_Finance_Wyckoff_Method) ｜ [技术架构 Wiki](https://github.com/YoungCan-Wang/WyckoffTradingAgent/wiki/03_Tech_Architecture)
+> **Wiki 深度阅读**：[交易方法论 Wiki](docs/wiki/01_Finance_Wyckoff_Method.md) ｜ [技术架构 Wiki](docs/wiki/03_Tech_Architecture.md)
 
 ---
 

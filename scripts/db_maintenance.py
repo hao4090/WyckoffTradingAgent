@@ -22,12 +22,15 @@ from core.constants import (
     TABLE_SIGNAL_PENDING,
     TABLE_TAIL_BUY_HISTORY,
     TABLE_TRADE_ORDERS,
+    TABLE_USER_ACTIVITY_EVENTS,
+    TABLE_USER_DAILY_ACTIVITY,
 )
 from integrations.supabase_base import create_admin_client
 
 # (table, date_column, ttl_days, cutoff_kind)
 # cutoff_kind:
 # - iso_date:      YYYY-MM-DD（字符串日期列）
+# - iso_datetime:  ISO-8601 UTC timestamp（timestamptz 列）
 # - yyyymmdd_int:  YYYYMMDD（整数日期列）
 CLEANUP_RULES: list[tuple[str, str, int, str]] = [
     (TABLE_TRADE_ORDERS, "trade_date", 15, "iso_date"),
@@ -35,6 +38,8 @@ CLEANUP_RULES: list[tuple[str, str, int, str]] = [
     (TABLE_MARKET_SIGNAL_DAILY, "trade_date", 30, "iso_date"),
     (TABLE_DAILY_NAV, "trade_date", 15, "iso_date"),
     (TABLE_TAIL_BUY_HISTORY, "run_date", 10, "iso_date"),
+    (TABLE_USER_ACTIVITY_EVENTS, "created_at", 180, "iso_datetime"),
+    (TABLE_USER_DAILY_ACTIVITY, "activity_date", 730, "iso_date"),
 ]
 RECOMMENDATION_KEEP_DATES = 30
 RECOMMENDATION_DATE_PAGE_SIZE = 1000
@@ -46,10 +51,12 @@ RECOMMENDATION_TRACKING_TABLES = (
 
 
 def _cutoff_value(ttl_days: int, kind: str) -> str | int:
-    d = (datetime.now(UTC) - timedelta(days=ttl_days)).date()
+    dt = datetime.now(UTC) - timedelta(days=ttl_days)
     if kind == "yyyymmdd_int":
-        return int(d.strftime("%Y%m%d"))
-    return d.isoformat()
+        return int(dt.strftime("%Y%m%d"))
+    if kind == "iso_datetime":
+        return dt.isoformat()
+    return dt.date().isoformat()
 
 
 def cleanup_table(

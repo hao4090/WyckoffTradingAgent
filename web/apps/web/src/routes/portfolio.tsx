@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type Dispatch, type MutableRefObject, type SetStateAction } from 'react'
+import type { User } from '@supabase/supabase-js'
 import { useQuery } from '@tanstack/react-query'
 import { Loader2, LayoutDashboard, Plus, Trash2 } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
@@ -10,6 +11,7 @@ import { streamLLMResponse } from '@/lib/llm-stream'
 import { MarkdownContent } from '@/components/markdown'
 import { UpgradeNotice } from '@/components/upgrade-notice'
 import { AIDisclaimer } from '@/components/ai-disclaimer'
+import { trackActivity } from '@/lib/activity'
 import {
   checkWhitelist,
   fetchKlineViaTickFlow,
@@ -147,6 +149,8 @@ function useFullDiagnosisRunner() {
   async function run(portfolio: Portfolio) {
     if (!user || loading || portfolio.positions.length === 0) return
     const total = portfolio.positions.length
+    const startedAt = Date.now()
+    trackPortfolioDiagnosis(user, 'portfolio_diagnosis_start')
     const abort = startDiagnosisRun(abortRef, streamBuf, rafRef)
     resetDiagnosisState(setError, setResult, setStreamingReport, setLoading, setProgress, total)
     try {
@@ -160,24 +164,44 @@ function useFullDiagnosisRunner() {
       setResult(buildDiagnosisResult(entries, '', portfolio.free_cash))
       setProgress({ step: 'llm', fetched: total, total })
       const prompt = buildFullPortfolioPrompt(entries, portfolio.free_cash)
-      const onDelta = (chunk: string) => {
-        streamBuf.current += chunk
-        scheduleStreamingReportFlush(streamBuf, rafRef, setStreamingReport)
-      }
+      const onDelta = createDiagnosisDeltaHandler(streamBuf, rafRef, setStreamingReport)
       const report = await callFullPortfolioLLM(config, prompt, abort.signal, onDelta)
       cancelAnimationFrame(rafRef.current)
       if (abort.signal.aborted) return
       setStreamingReport(report)
       setResult(buildDiagnosisResult(entries, report, portfolio.free_cash))
+      trackPortfolioDiagnosis(user, 'portfolio_diagnosis_finish', startedAt, { positions: total })
     } catch (err) {
       if (abort.signal.aborted) return
       setError(err instanceof Error ? err.message : t('portfolio.failed'))
+      trackPortfolioDiagnosis(user, 'portfolio_diagnosis_error', startedAt)
     } finally {
       finishDiagnosisRun(rafRef, setLoading, setProgress)
     }
   }
 
   return { loading, error, result, streamingReport, progress, run }
+}
+
+function createDiagnosisDeltaHandler(
+  streamBuf: MutableRefObject<string>,
+  rafRef: MutableRefObject<number>,
+  setStreamingReport: Dispatch<SetStateAction<string>>,
+) {
+  return (chunk: string) => {
+    streamBuf.current += chunk
+    scheduleStreamingReportFlush(streamBuf, rafRef, setStreamingReport)
+  }
+}
+
+function trackPortfolioDiagnosis(user: User, eventName: string, startedAt = 0, metadata?: Record<string, number>) {
+  trackActivity(user, eventName, {
+    feature: 'portfolio',
+    route: '/portfolio',
+    success: eventName !== 'portfolio_diagnosis_error',
+    durationMs: startedAt ? Date.now() - startedAt : undefined,
+    metadata,
+  })
 }
 
 function usePortfolioHistory(userId: string | undefined, result: FullDiagnosisResult | null, source: PortfolioHistoryPayload['source']) {

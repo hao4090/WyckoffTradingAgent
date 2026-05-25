@@ -649,7 +649,8 @@ recommendation_tracking 最近5个推荐交易日（排除 RAG veto）
 | **板块连续性报告** (`sector_continuity.yml`) | 周一-周五盘后 | 计算概念 / 行业热度并持久化 |
 | **涨停复盘** (`review_list_replay.yml`) | 周一-周五 19:25 | 当日涨幅 ≥ 8% 回溯 |
 | **形态复盘重定价** (`recommendation_tracking_reprice.yml`) | 周日-周四 23:00 | 同步收盘价、计算收益 |
-| **数据库维护** (`db_maintenance.yml`) | 每天 23:05 | 清理过期行情、订单、信号、市场信号等滑动窗口数据 |
+| **数据库维护** (`db_maintenance.yml`) | 周一-周五 06:20 | 清理过期行情、订单、信号、市场信号、活跃统计等滑动窗口数据 |
+| **用户活跃统计** (`user_activity_analytics.yml`) | 周一 09:20 / 每月 1 日 09:30 | 周报 DAU/WAU 与月报 MAU/留存 |
 | **回测网格** (`backtest_grid.yml`) | 每月 1 / 15 日 04:00 | 3 阶段：快照→18 并行格→聚合通知 |
 | **Web 后台任务** (`web_quant_jobs.yml`) | 手动触发 | Web 发起的漏斗/研报任务 |
 | **输入预览** (`wyckoff_input_preview.yml`) | 手动触发 | dry-run 模式查看漏斗输入 |
@@ -689,7 +690,7 @@ tickflow                                        （1 分钟盘中数据，尾盘
 
 数据隔离：Web JWT → RLS，CLI access_token → RLS，脚本 service_role_key → 绕过 RLS。
 
-`scripts/db_maintenance.py` 负责清理过期数据：形态复盘按表内最新 30 个入选日期保留，订单/信号/净值等短周期表保留 10-30 日区间，避免数据库行数无限增长。
+`scripts/db_maintenance.py` 负责清理过期数据：形态复盘按表内最新 30 个入选日期保留，订单/信号/净值等短周期表保留 10-30 日区间，活跃事件明细保留 180 天，活跃日聚合保留 730 天，避免数据库行数无限增长。
 
 ## CLI 命令
 

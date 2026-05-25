@@ -1,15 +1,27 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, type MutableRefObject } from 'react'
+import type { User } from '@supabase/supabase-js'
 import { ExternalLink } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/auth'
 import { PROVIDERS, PROVIDER_LABELS, PROVIDER_BASE_URLS } from '@wyckoff/shared'
 import type { Provider } from '@wyckoff/shared'
 import { usePreferences } from '@/lib/preferences'
+import { trackActivity } from '@/lib/activity'
 
 interface ProviderConfig {
   api_key: string
   model: string
   base_url: string
+}
+
+type SettingsSaveResultParams = {
+  user: User | null | undefined
+  error: { message: string } | null
+  t: ReturnType<typeof usePreferences>['t']
+  setSaving: (value: boolean) => void
+  setToastKind: (value: 'success' | 'error') => void
+  setToast: (value: string) => void
+  toastTimerRef: MutableRefObject<ReturnType<typeof setTimeout> | undefined>
 }
 
 export function SettingsPage() {
@@ -140,11 +152,7 @@ export function SettingsPage() {
     }
 
     const { error } = await supabase.from('user_settings').upsert(settings)
-    setSaving(false)
-    setToastKind(error ? 'error' : 'success')
-    setToast(error ? t('settings.saveFailed', { message: error.message }) : t('settings.saved'))
-    clearTimeout(toastTimerRef.current)
-    toastTimerRef.current = setTimeout(() => setToast(''), 3000)
+    finishSettingsSave({ user, error, t, setSaving, setToastKind, setToast, toastTimerRef })
   }
 
   return (
@@ -287,6 +295,16 @@ export function SettingsPage() {
       </div>
     </div>
   )
+}
+
+function finishSettingsSave(params: SettingsSaveResultParams) {
+  const { user, error, t, setSaving, setToastKind, setToast, toastTimerRef } = params
+  setSaving(false)
+  trackActivity(user, 'settings_save', { feature: 'settings', route: '/settings', success: !error })
+  setToastKind(error ? 'error' : 'success')
+  setToast(error ? t('settings.saveFailed', { message: error.message }) : t('settings.saved'))
+  clearTimeout(toastTimerRef.current)
+  toastTimerRef.current = setTimeout(() => setToast(''), 3000)
 }
 
 function Input({ label, value, onChange, type = 'text', placeholder = '' }: {
