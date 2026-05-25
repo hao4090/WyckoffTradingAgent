@@ -745,6 +745,23 @@ def _fill_wyckoff_score(df: pd.DataFrame) -> None:
     )
 
 
+def _persist_rag_veto_flags(window, vetoed_codes: list[str]) -> None:
+    if STEP3_SKIP_LLM:
+        return
+    raw_date = getattr(window, "end_trade_date", "")
+    digits = "".join(ch for ch in str(raw_date) if ch.isdigit())
+    if len(digits) < 8:
+        print(f"[step3][rag] veto 标记跳过：无法解析推荐日 {raw_date}")
+        return
+    try:
+        from integrations.supabase_recommendation import mark_rag_vetoed_recommendations
+
+        ok = mark_rag_vetoed_recommendations(int(digits[:8]), vetoed_codes)
+        print(f"[step3][rag] veto 标记入库: ok={ok}, date={digits[:8]}, count={len(vetoed_codes)}")
+    except Exception as e:
+        print(f"[step3][rag] veto 标记入库失败: {e}")
+
+
 def run(
     symbols_info: list[dict] | list[str],
     webhook_url: str,
@@ -1063,7 +1080,7 @@ def run(
                 f"- 拉取异常: {error_n}",
                 f"- veto 剔除: {len(vetoed_codes)}",
             ]
-
+            _persist_rag_veto_flags(window, vetoed_codes)
             if vetoed_codes:
                 before_n = len(selected_df)
                 selected_df = selected_df[~selected_df["code"].astype(str).isin(set(vetoed_codes))].reset_index(

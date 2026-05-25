@@ -7,7 +7,7 @@ def _sample_tail_buy_report() -> str:
     lines = [
         "⏰ Tail Buy 2026-04-27 16:05:42",
         "",
-        "- 候选来源: signal_pending + recommendation_tracking (signal_date/recommend_date=2026-04-24; rec_only=0)",
+        "- 候选来源: recommendation_tracking_5d=80 (dates=20260418-20260424, rag_vetoed=2)",
         "- 扫描数量: 80",
         "- 分层结果: BUY=6 / WATCH=13 / SKIP=61",
         "- LLM 二判: 14/19",

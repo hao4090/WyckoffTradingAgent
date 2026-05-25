@@ -653,7 +653,7 @@ def build_tail_buy_markdown(
     route_line = " -> ".join(llm_route_plan) if llm_route_plan else "未启用"
     route_hits = ", ".join([f"{k}:{v}" for k, v in sorted(llm_route_stats.items())]) if llm_route_stats else "无"
     source_text = str(candidate_source or "").strip() or (
-        f"signal_pending（signal_date={target_signal_date}, status in pending/confirmed）"
+        f"recommendation_tracking 最近5个推荐交易日（截至 {target_signal_date}，排除 RAG veto）"
     )
     lines: list[str] = [
         f"⏰ Tail Buy {now_text}",

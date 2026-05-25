@@ -1,6 +1,6 @@
 """
 Tail Buy 任务（周一到周五 14:00）：
-- 输入：signal_pending（前一交易日 + pending/confirmed）
+- 输入：recommendation_tracking（最近 5 个推荐交易日，排除 RAG veto）
 - 判定：规则全量 + LLM TopN 二判
 - 输出：飞书 + Telegram 推送（不写交易表）
 """
@@ -23,7 +23,7 @@ from zoneinfo import ZoneInfo
 if __name__ == "__main__" or not __package__:
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core.constants import TABLE_PORTFOLIOS, TABLE_SIGNAL_PENDING
+from core.constants import TABLE_PORTFOLIOS, TABLE_RECOMMENDATION_TRACKING
 from core.tail_buy_strategy import (
     DECISION_BUY,
     DECISION_SKIP,
@@ -35,7 +35,6 @@ from core.tail_buy_strategy import (
     evaluate_rule_decision,
     merge_rule_and_llm,
     parse_llm_decision,
-    pick_tail_candidates,
     score_tail_features,
     select_llm_overlay_candidates,
 )
@@ -650,67 +649,119 @@ def _resolve_trade_dates(logs_path: str | None = None) -> tuple[str, str]:
         return prev_trade, today_trade
 
 
-def _load_signal_pending_candidates(
-    target_signal_date: str,
+def _recommend_date_int(raw: Any) -> int:
+    text = str(raw or "").strip()
+    if not text:
+        return 0
+    if len(text) >= 10 and "-" in text[:10]:
+        text = text[:10].replace("-", "")
+    digits = "".join(ch for ch in text if ch.isdigit())
+    if len(digits) >= 8:
+        digits = digits[:8]
+    try:
+        return int(digits)
+    except Exception:
+        return 0
+
+
+def _recommend_date_text(raw: Any) -> str:
+    value = _recommend_date_int(raw)
+    if value <= 0:
+        return ""
+    text = str(value)
+    return f"{text[:4]}-{text[4:6]}-{text[6:8]}"
+
+
+def _truthy_flag(raw: Any) -> bool:
+    if isinstance(raw, bool):
+        return raw
+    if raw is None:
+        return False
+    if isinstance(raw, int | float):
+        return raw != 0
+    return str(raw).strip().lower() in {"1", "true", "t", "yes", "y", "on"}
+
+
+def _recent_recommend_dates(rows: list[dict], max_dates: int) -> list[int]:
+    dates = []
+    for row in sorted(rows or [], key=lambda x: _recommend_date_int(x.get("recommend_date")), reverse=True):
+        d = _recommend_date_int(row.get("recommend_date"))
+        if d > 0 and d not in dates:
+            dates.append(d)
+        if len(dates) >= max(max_dates, 1):
+            break
+    return dates
+
+
+def _recommendation_candidates_from_rows(
+    rows: list[dict], *, max_dates: int
+) -> tuple[list[TailBuyCandidate], list[int], int]:
+    dates = _recent_recommend_dates(rows, max_dates)
+    allowed_dates = set(dates)
+    by_code: dict[str, tuple[tuple[int, int, float], TailBuyCandidate]] = {}
+    vetoed = 0
+
+    for row in rows or []:
+        rec_date = _recommend_date_int(row.get("recommend_date"))
+        if rec_date not in allowed_dates:
+            continue
+        if _truthy_flag(row.get("rag_vetoed")):
+            vetoed += 1
+            continue
+        code = _normalize_code6(row.get("code"))
+        if not code:
+            continue
+        is_ai = _truthy_flag(row.get("is_ai_recommended"))
+        score = _safe_float(row.get("funnel_score"), 0.0)
+        signal_type = str(row.get("recommend_reason") or row.get("camp") or "recommendation").strip()
+        candidate = TailBuyCandidate(
+            code=code,
+            name=str(row.get("name", "") or code).strip() or code,
+            signal_date=_recommend_date_text(rec_date),
+            status="confirmed" if is_ai else "pending",
+            signal_type=signal_type,
+            signal_score=score,
+        )
+        rank = (rec_date, 1 if is_ai else 0, score)
+        if code not in by_code or rank > by_code[code][0]:
+            by_code[code] = (rank, candidate)
+
+    candidates = [item for _, item in by_code.values()]
+    candidates.sort(key=lambda x: (x.status != "confirmed", -x.signal_score, x.code))
+    return candidates, dates, vetoed
+
+
+def _load_recommendation_candidates(
+    target_recommend_date: str,
     logs_path: str | None = None,
-    lookback_days: int = 15,
-) -> list[TailBuyCandidate]:
+    max_dates: int = 5,
+) -> tuple[list[TailBuyCandidate], list[int], int]:
     if not is_admin_configured():
-        raise RuntimeError("Supabase 凭据未配置，无法读取 signal_pending")
+        raise RuntimeError("Supabase 凭据未配置，无法读取 recommendation_tracking")
 
-    cutoff_date = (
-        datetime.strptime(target_signal_date, "%Y-%m-%d") - timedelta(days=int(lookback_days * 1.5))
-    ).strftime("%Y-%m-%d")
-
+    target_int = _recommend_date_int(target_recommend_date)
     client = create_admin_client()
     try:
         rows: list[dict] = (
-            client.table(TABLE_SIGNAL_PENDING)
-            .select("code,name,signal_type,signal_score,status,signal_date")
-            .in_("status", ["pending", "confirmed"])
-            .gte("signal_date", cutoff_date)
-            .order("signal_date", desc=True)
+            client.table(TABLE_RECOMMENDATION_TRACKING)
+            .select("*")
+            .lte("recommend_date", target_int)
+            .order("recommend_date", desc=True)
             .limit(8000)
             .execute()
             .data
             or []
         )
     except Exception as e:
-        raise RuntimeError(f"读取 signal_pending 失败: {e}") from e
+        raise RuntimeError(f"读取 recommendation_tracking 失败: {e}") from e
 
-    picked = pick_tail_candidates(rows, cutoff_date=cutoff_date)
+    picked, dates, vetoed = _recommendation_candidates_from_rows(rows, max_dates=max_dates)
     _log(
-        f"signal_pending 候选加载: raw={len(rows)}, picked={len(picked)}, "
-        f"cutoff={cutoff_date}, target={target_signal_date}",
+        f"recommendation_tracking 候选加载: raw={len(rows)}, dates={dates}, picked={len(picked)}, "
+        f"rag_vetoed={vetoed}, target={target_recommend_date}",
         logs_path,
     )
-    return picked
-
-
-def _load_holding_candidates(
-    portfolio_id: str,
-    target_signal_date: str,
-    logs_path: str | None = None,
-) -> list[TailBuyCandidate]:
-    state = load_portfolio_state(portfolio_id)
-    positions = state.get("positions", []) if isinstance(state, dict) else []
-    candidates: list[TailBuyCandidate] = []
-    for pos in positions:
-        code = _normalize_code6(pos.get("code"))
-        if not code:
-            continue
-        candidates.append(
-            TailBuyCandidate(
-                code=code,
-                name=str(pos.get("name", "") or code).strip() or code,
-                signal_date=target_signal_date,
-                status="confirmed",
-                signal_type="holding",
-                signal_score=0.0,
-            )
-        )
-    _log(f"持仓候选加载: portfolio={portfolio_id}, count={len(candidates)}", logs_path)
-    return candidates
+    return picked, dates, vetoed
 
 
 def _load_tail_candidates(
@@ -718,22 +769,17 @@ def _load_tail_candidates(
     portfolio_id: str,
     logs_path: str | None = None,
 ) -> tuple[list[TailBuyCandidate], str]:
-    """加载尾盘候选池：signal_pending 近15日 + 当前持仓，去重合并。"""
-    pending = _load_signal_pending_candidates(target_signal_date, logs_path)
-    holdings = _load_holding_candidates(portfolio_id, target_signal_date, logs_path)
-
-    pending_codes = {c.code for c in pending}
-    supplement = [c for c in holdings if c.code not in pending_codes]
-
-    merged = pending + supplement
-    merged.sort(key=lambda x: (x.status != "confirmed", -x.signal_score, x.code))
-
+    """加载尾盘买入候选池：推荐表最近 5 个推荐交易日，排除 RAG veto。"""
+    candidates, dates, vetoed = _load_recommendation_candidates(target_signal_date, logs_path, max_dates=5)
+    date_text = ",".join(str(x) for x in dates) if dates else "-"
     source_desc = (
-        f"signal_pending_15d={len(pending)} + holding={len(supplement)} "
-        f"(target={target_signal_date}, portfolio={portfolio_id})"
+        f"recommendation_tracking_5d={len(candidates)} "
+        f"(dates={date_text}, rag_vetoed={vetoed}, portfolio={portfolio_id})"
     )
-    _log(f"候选池加载完成: signal_pending={len(pending)}, 持仓补充={len(supplement)}, 合计={len(merged)}", logs_path)
-    return merged, source_desc
+    _log(
+        f"候选池加载完成: recommendation_tracking={len(candidates)}, dates={date_text}, rag_vetoed={vetoed}", logs_path
+    )
+    return candidates, source_desc
 
 
 def _scan_one_symbol(

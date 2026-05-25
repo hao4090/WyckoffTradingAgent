@@ -262,6 +262,29 @@ def test_select_llm_overlay_candidates_prefilters_skip_and_low_score():
     assert [x.code for x in selected] == ["301090", "002217"]
 
 
+def test_recommendation_candidates_from_rows_uses_recent_dates_and_excludes_rag_vetoed():
+    from scripts import tail_buy_intraday_job as job
+
+    rows = [
+        {"code": 1, "name": "平安银行", "recommend_date": 20260520, "recommend_reason": "sos", "funnel_score": 8.0},
+        {"code": 2, "name": "万科A", "recommend_date": 20260519, "rag_vetoed": True, "funnel_score": 9.0},
+        {"code": 3, "name": "中信证券", "recommend_date": 20260518, "is_ai_recommended": True, "funnel_score": 7.0},
+        {"code": 4, "name": "国农科技", "recommend_date": 20260517, "funnel_score": 6.0},
+        {"code": 5, "name": "世纪星源", "recommend_date": 20260516, "funnel_score": 5.0},
+        {"code": 6, "name": "深振业A", "recommend_date": 20260515, "funnel_score": 10.0},
+        {"code": 1, "name": "平安银行", "recommend_date": 20260518, "funnel_score": 4.0},
+    ]
+
+    candidates, dates, vetoed = job._recommendation_candidates_from_rows(rows, max_dates=5)
+
+    assert dates == [20260520, 20260519, 20260518, 20260517, 20260516]
+    assert vetoed == 1
+    assert {x.code for x in candidates} == {"000001", "000003", "000004", "000005"}
+    assert "000006" not in {x.code for x in candidates}
+    assert next(x for x in candidates if x.code == "000003").status == "confirmed"
+    assert next(x for x in candidates if x.code == "000001").signal_score == 8.0
+
+
 def test_build_tail_buy_markdown_can_append_extra_sections():
     c = TailBuyCandidate(
         code="301090",
@@ -312,9 +335,9 @@ def test_build_tail_buy_markdown_supports_custom_candidate_source():
         llm_total=1,
         llm_success=1,
         elapsed_seconds=10.0,
-        candidate_source="signal_pending + recommendation_tracking (2026-04-22)",
+        candidate_source="recommendation_tracking_5d=42 (dates=20260422-20260428, rag_vetoed=3)",
     )
-    assert "signal_pending + recommendation_tracking (2026-04-22)" in md
+    assert "recommendation_tracking_5d=42 (dates=20260422-20260428, rag_vetoed=3)" in md
 
 
 def test_build_tail_buy_markdown_can_prepend_extra_sections():

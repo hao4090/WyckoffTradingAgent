@@ -332,6 +332,7 @@ def _build_recommendation_payload(
                 "recommend_count": new_cnt,
                 "funnel_score": _extract_recommendation_score(item),
                 "is_ai_recommended": False,
+                "rag_vetoed": False,
                 "updated_at": datetime.now(UTC).isoformat(),
             }
         )
@@ -370,7 +371,7 @@ def upsert_recommendations(recommend_date: int, symbols_info: list[dict[str, Any
                 client.table(TABLE_RECOMMENDATION_TRACKING).upsert(payload, on_conflict="code,recommend_date").execute()
             except Exception as e:
                 msg = str(e).lower()
-                optional_cols = ("is_ai_recommended", "funnel_score", "recommend_count")
+                optional_cols = ("is_ai_recommended", "funnel_score", "recommend_count", "rag_vetoed")
                 if any(col in msg for col in optional_cols):
                     fallback_payload: list[dict[str, Any]] = []
                     for row in payload:
@@ -428,6 +429,33 @@ def mark_ai_recommendations(recommend_date: int, ai_codes: list[str]) -> bool:
             )
             return False
         print(f"[supabase_recommendation] mark_ai_recommendations failed: {e}")
+        return False
+
+
+def mark_rag_vetoed_recommendations(recommend_date: int, vetoed_codes: list[str]) -> bool:
+    """Persist Step3 RAG veto flags for one recommendation date."""
+    if not is_supabase_configured():
+        return False
+    try:
+        client = _get_supabase_admin_client()
+        now_iso = datetime.now(UTC).isoformat()
+        client.table(TABLE_RECOMMENDATION_TRACKING).update({"rag_vetoed": False, "updated_at": now_iso}).eq(
+            "recommend_date", recommend_date
+        ).execute()
+
+        code_ints = sorted(
+            {code for raw in vetoed_codes or [] if (code := _extract_recommendation_code(raw)) is not None}
+        )
+        if code_ints:
+            client.table(TABLE_RECOMMENDATION_TRACKING).update({"rag_vetoed": True, "updated_at": now_iso}).eq(
+                "recommend_date", recommend_date
+            ).in_("code", code_ints).execute()
+        return True
+    except Exception as e:
+        if "rag_vetoed" in str(e):
+            print("[supabase_recommendation] mark_rag_vetoed_recommendations skipped: missing column rag_vetoed")
+            return False
+        print(f"[supabase_recommendation] mark_rag_vetoed_recommendations failed: {e}")
         return False
 
 

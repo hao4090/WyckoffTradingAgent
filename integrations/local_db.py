@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 _lock = threading.Lock()
 _conn: sqlite3.Connection | None = None
 
-_SCHEMA_VERSION = 10
+_SCHEMA_VERSION = 11
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -217,6 +217,7 @@ def get_db() -> sqlite3.Connection:
 def init_db() -> None:
     conn = get_db()
     conn.executescript(_DDL)
+    _ensure_recommendation_tracking_columns(conn)
     _ensure_agent_memory_columns(conn)
     _ensure_tail_buy_history_columns(conn)
     cur = conn.execute("SELECT MAX(version) FROM schema_version")
@@ -240,12 +241,24 @@ def init_db() -> None:
         _ensure_agent_memory_columns(conn)
     if current < 9:
         _ensure_tail_buy_history_columns(conn)
+    if current < 11:
+        _ensure_recommendation_tracking_columns(conn)
     if current < _SCHEMA_VERSION:
         conn.execute(
             "INSERT OR REPLACE INTO schema_version(version) VALUES(?)",
             (_SCHEMA_VERSION,),
         )
         conn.commit()
+
+
+def _ensure_recommendation_tracking_columns(conn: sqlite3.Connection) -> None:
+    existing = {row["name"] for row in conn.execute("PRAGMA table_info(recommendation_tracking)").fetchall()}
+    columns = {
+        "rag_vetoed": "INTEGER DEFAULT 0",
+    }
+    for name, ddl in columns.items():
+        if name not in existing:
+            conn.execute(f"ALTER TABLE recommendation_tracking ADD COLUMN {name} {ddl}")
 
 
 def _ensure_agent_memory_columns(conn: sqlite3.Connection) -> None:
@@ -375,8 +388,8 @@ def save_recommendations(rows: list[dict]) -> int:
         conn.executemany(
             """INSERT OR REPLACE INTO recommendation_tracking
                (code, name, recommend_date, recommend_reason, initial_price,
-                current_price, is_ai_recommended, camp, synced_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))""",
+                current_price, is_ai_recommended, rag_vetoed, camp, synced_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))""",
             [
                 (
                     str(r.get("code", "")).strip(),
@@ -386,6 +399,7 @@ def save_recommendations(rows: list[dict]) -> int:
                     float(r.get("initial_price", 0) or 0),
                     float(r.get("current_price", 0) or 0),
                     1 if r.get("is_ai_recommended") else 0,
+                    1 if r.get("rag_vetoed") else 0,
                     str(r.get("camp", "")).strip(),
                 )
                 for r in rows

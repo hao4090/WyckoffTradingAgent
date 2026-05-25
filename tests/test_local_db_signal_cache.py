@@ -27,3 +27,26 @@ def test_load_signals_by_codes_returns_empty_when_cache_table_missing(tmp_path, 
         assert local_db.load_signals_by_codes(["603082"]) == {}
     finally:
         _reset_local_db(local_db)
+
+
+def test_save_recommendations_preserves_rag_vetoed(tmp_path, monkeypatch):
+    from integrations import local_db
+
+    _reset_local_db(local_db)
+    monkeypatch.setattr("core.constants.LOCAL_DB_PATH", tmp_path / "recommendations.db")
+    try:
+        local_db.init_db()
+        local_db.save_recommendations(
+            [
+                {
+                    "code": "000001",
+                    "name": "平安银行",
+                    "recommend_date": 20260518,
+                    "rag_vetoed": True,
+                }
+            ]
+        )
+        rows = local_db.load_recommendations(limit=1)
+        assert rows[0]["rag_vetoed"] == 1
+    finally:
+        _reset_local_db(local_db)

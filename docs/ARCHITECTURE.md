@@ -607,12 +607,12 @@ flowchart LR
 
 `core/tail_buy_strategy.py` + `scripts/tail_buy_intraday_job.py`
 
-盘中 14:00 执行，从前日 L4 信号中筛选尾盘买入标的。
+盘中 14:00 执行，从 `recommendation_tracking` 最近 5 个推荐交易日中筛选尾盘买入标的，并排除 `rag_vetoed=true` 的记录。Step3 的 RAG 防雷会把当日被否决的股票回写到 `recommendation_tracking.rag_vetoed`，尾盘任务只消费未被否决的推荐池。
 
 ### 两阶段评估
 
 ```
-signal_pending (pending/confirmed)
+recommendation_tracking 最近5个推荐交易日（排除 RAG veto）
   │
   ├─→ 获取 1 分钟盘中数据（TickFlow）
   │
