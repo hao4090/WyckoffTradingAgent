@@ -491,6 +491,24 @@ def main() -> int:
     parser.add_argument("--logs", default=None, help="日志文件路径，默认 logs/daily_job_YYYYMMDD_HHMMSS.log")
     args = parser.parse_args()
 
+    logs_path = args.logs or os.path.join(
+        os.getenv("LOGS_DIR", "logs"),
+        f"daily_job_{datetime.now(TZ).strftime('%Y%m%d_%H%M%S')}.log",
+    )
+
+    from integrations.strategy_config_client import apply_strategy_bundle_to_env
+
+    config_result = apply_strategy_bundle_to_env()
+    if config_result.source != "disabled":
+        _log(
+            "策略配置加载: "
+            f"source={config_result.source}, version={config_result.version or '-'}, "
+            f"applied={config_result.applied_count}, skipped={config_result.skipped_count}, "
+            f"cache={config_result.cache_path or '-'}"
+            + (f", err={config_result.error}" if config_result.error else ""),
+            logs_path,
+        )
+
     webhook = os.getenv("FEISHU_WEBHOOK_URL", "").strip()
     wecom_webhook = os.getenv("WECOM_WEBHOOK_URL", "").strip()
     dingtalk_webhook = os.getenv("DINGTALK_WEBHOOK_URL", "").strip()
@@ -510,11 +528,6 @@ def main() -> int:
         os.environ["DAILY_JOB_SKIP_STEP4"] = "1"
     step3_skip_llm = step3_skip_llm or preview_only
     skip_step4 = skip_step4 or preview_only
-
-    logs_path = args.logs or os.path.join(
-        os.getenv("LOGS_DIR", "logs"),
-        f"daily_job_{datetime.now(TZ).strftime('%Y%m%d_%H%M%S')}.log",
-    )
 
     missing = _missing_llm_config(provider, api_key, step3_skip_llm, skip_step4)
     if missing:

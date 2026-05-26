@@ -12,6 +12,14 @@ from pathlib import Path
 
 import pandas as pd
 
+if __name__ == "__main__" or not __package__:
+    import sys
+
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from integrations.strategy_config_client import apply_strategy_bundle_to_env
+
+apply_strategy_bundle_to_env()
+
 from core.wyckoff_engine import normalize_hist_from_fetch
 from integrations.tickflow_client import TickFlowClient
 

@@ -25,6 +25,10 @@ if __name__ == "__main__" or not __package__:
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from functools import partial
 
+from integrations.strategy_config_client import apply_strategy_bundle_to_env
+
+apply_strategy_bundle_to_env()
+
 from core.batch_report import generate_stock_payload
 from core.holding_diagnostic import diagnose_one_stock, format_diagnostic_for_llm
 from core.prompts import PRIVATE_PM_DECISION_JSON_PROMPT

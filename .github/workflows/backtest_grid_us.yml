@@ -22,6 +22,10 @@ permissions:
 env:
   BT_TOP_N: ${{ inputs.top_n || '2' }}
   BT_TRADING_DAYS: ${{ inputs.trading_days || '320' }}
+  WYCKOFF_STRATEGY_API_URL: ${{ secrets.WYCKOFF_STRATEGY_API_URL }}
+  WYCKOFF_STRATEGY_API_KEY: ${{ secrets.WYCKOFF_STRATEGY_API_KEY }}
+  WYCKOFF_STRATEGY_CONFIG_TIMEOUT: "45"
+  WYCKOFF_STRATEGY_CONFIG_OVERRIDE: "1"
 
 jobs:
   fetch:

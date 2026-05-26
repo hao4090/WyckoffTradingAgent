@@ -24,16 +24,18 @@ if __name__ == "__main__" or not __package__:
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.constants import TABLE_PORTFOLIOS, TABLE_SIGNAL_PENDING
+from core.tail_buy_strategy import (
+    build_llm_prompt,
+    compute_tail_features,
+    evaluate_rule_decision,
+    merge_rule_and_llm,
+    parse_llm_decision,
+    score_tail_features,
+    select_llm_overlay_candidates,
+)
 from integrations._llm_types import DEFAULT_GEMINI_MODEL, OPENAI_COMPATIBLE_BASE_URLS
 from integrations.fetch_a_share_csv import _resolve_trading_window
 from integrations.llm_client import call_llm
-from integrations.strategy_api_client import (
-    StrategyApiError,
-    analyze_tail_buy_holdings_remote,
-    finalize_tail_buy_remote,
-    prepare_tail_buy_remote,
-    score_tail_buy_remote,
-)
 from integrations.supabase_base import create_admin_client, is_admin_configured
 from integrations.supabase_market_signal import (
     load_latest_market_signal_daily,
@@ -320,21 +322,39 @@ def _df_records(df: Any) -> list[dict[str, Any]]:
     return records
 
 
-def _score_tail_candidates_via_api(
+def _score_tail_candidates_locally(
     candidates: list[TailBuyCandidate],
     intraday_by_code: dict[str, list[dict[str, Any]]],
     *,
     style: str,
 ) -> list[TailBuyCandidate]:
-    payload = score_tail_buy_remote(
-        candidates=[_candidate_to_payload(item) for item in candidates],
-        intraday_by_code=intraday_by_code,
-        style=style,
-    )
-    return [_candidate_from_payload(row) for row in payload.get("candidates") or []]
+    import pandas as pd
+
+    scored: list[TailBuyCandidate] = []
+    for item in candidates:
+        if str(item.fetch_error or "").strip():
+            item.rule_reasons = [str(item.fetch_error)]
+            scored.append(item)
+            continue
+        rows = intraday_by_code.get(_normalize_code6(item.code)) or intraday_by_code.get(item.code) or []
+        df_1m = pd.DataFrame(rows)
+        if df_1m.empty:
+            item.fetch_error = "分时数据缺失"
+            item.rule_reasons = [item.fetch_error]
+            scored.append(item)
+            continue
+        try:
+            scored.append(evaluate_rule_decision(item, df_1m, style=style))
+        except Exception as exc:
+            item.fetch_error = f"规则评分失败: {exc}"
+            item.rule_reasons = [item.fetch_error]
+            scored.append(item)
+
+    scored.sort(key=lambda x: (-_safe_float(x.rule_score), _normalize_code6(x.code)))
+    return scored
 
 
-def _prepare_tail_buy_via_api(
+def _prepare_tail_buy_locally(
     candidates: list[TailBuyCandidate],
     *,
     depth_by_code: dict[str, dict[str, Any]],
@@ -343,29 +363,53 @@ def _prepare_tail_buy_via_api(
     llm_min_rule_score: float,
     llm_allowed_rule_decisions: tuple[str, ...],
 ) -> tuple[list[TailBuyCandidate], list[dict[str, Any]]]:
-    payload = prepare_tail_buy_remote(
-        candidates=[_candidate_to_payload(item) for item in candidates],
-        depth_by_code=depth_by_code,
-        style=style,
+    for item in candidates:
+        depth = depth_by_code.get(_normalize_code6(item.code)) or depth_by_code.get(item.code) or {}
+        weibi = _safe_float(depth.get("weibi"), 0.0) if isinstance(depth, dict) else 0.0
+        if depth and weibi < -40.0 and item.rule_decision != DECISION_SKIP:
+            item.rule_decision = DECISION_SKIP
+            item.final_decision = DECISION_SKIP
+            item.rule_reasons = [*(item.rule_reasons or []), f"五档委比={weibi:.1f}%，卖压过重"]
+
+    allowed = tuple(
+        str(x or "").strip().upper() for x in llm_allowed_rule_decisions if str(x or "").strip()
+    ) or (DECISION_BUY, DECISION_WATCH)
+    selected = select_llm_overlay_candidates(
+        candidates,
         max_llm_symbols=max_llm_symbols,
-        llm_min_rule_score=llm_min_rule_score,
-        llm_allowed_rule_decisions=llm_allowed_rule_decisions,
+        min_rule_score=llm_min_rule_score,
+        allowed_rule_decisions=allowed,
     )
-    prepared = [_candidate_from_payload(row) for row in payload.get("candidates") or []]
-    review_items = [x for x in payload.get("llm_review_items") or [] if isinstance(x, dict)]
-    return prepared, review_items
+    review_items: list[dict[str, Any]] = []
+    for item in selected:
+        depth = depth_by_code.get(_normalize_code6(item.code)) or depth_by_code.get(item.code) or None
+        system_prompt, user_prompt = build_llm_prompt(item, style=style, depth_info=depth)
+        review_items.append(
+            {
+                "code": _normalize_code6(item.code),
+                "system_prompt": system_prompt,
+                "user_prompt": user_prompt,
+            }
+        )
+    return candidates, review_items
 
 
-def _finalize_tail_buy_via_api(
+def _finalize_tail_buy_locally(
     candidates: list[TailBuyCandidate],
     llm_outputs: dict[str, dict[str, Any]],
 ) -> tuple[list[TailBuyCandidate], int]:
-    payload = finalize_tail_buy_remote(
-        candidates=[_candidate_to_payload(item) for item in candidates],
-        llm_outputs=llm_outputs,
-    )
-    merged = [_candidate_from_payload(row) for row in payload.get("candidates") or []]
-    return merged, int(payload.get("llm_success") or 0)
+    parsed_by_code: dict[str, dict[str, Any]] = {}
+    for code, output in (llm_outputs or {}).items():
+        if not isinstance(output, dict):
+            continue
+        parsed = parse_llm_decision(str(output.get("raw_text") or ""))
+        if not parsed:
+            continue
+        parsed["model_used"] = str(output.get("model_used") or "")
+        parsed_by_code[_normalize_code6(code)] = parsed
+
+    merged = merge_rule_and_llm(candidates, parsed_by_code)
+    return merged, len(parsed_by_code)
 
 
 def _resolve_quote_price(quote: dict[str, Any] | None) -> float:
@@ -745,7 +789,7 @@ def _analyze_holdings_actions(
     out.sort(key=lambda x: (rank.get(x.action, 9), -x.rule_score, x.code))
     _log(
         f"持仓动作分析完成: total={len(out)}, add={add_count}, trim={trim_count}, "
-        f"hold={len(out) - add_count - trim_count}, tickflow_limit_hit={tickflow_limit_hit}",
+        f"hold={len(out) - add_count - trim_count}, tickflow_limit_hit={tickflow_limit_hit}, source=local",
         logs_path,
     )
     meta = (
@@ -1155,10 +1199,7 @@ def _run_rule_scan(
                 scanned.append(fallback)
 
     if scanned:
-        try:
-            scanned = _score_tail_candidates_via_api(scanned, intraday_by_code, style=style)
-        except StrategyApiError as exc:
-            raise RuntimeError(f"Strategy API 尾盘规则评分失败: {exc}") from exc
+        scanned = _score_tail_candidates_locally(scanned, intraday_by_code, style=style)
 
     scanned.sort(key=lambda x: (-x.rule_score, x.code))
     ok_cnt = sum(1 for x in scanned if not x.fetch_error)
@@ -1243,10 +1284,7 @@ def _run_rule_scan_batch(
             scanned.append(item)
 
     if scanned:
-        try:
-            scanned = _score_tail_candidates_via_api(scanned, intraday_by_code, style=style)
-        except StrategyApiError as exc:
-            raise RuntimeError(f"Strategy API 尾盘规则评分失败: {exc}") from exc
+        scanned = _score_tail_candidates_locally(scanned, intraday_by_code, style=style)
 
     scanned.sort(key=lambda x: (-x.rule_score, x.code))
     ok_cnt = sum(1 for x in scanned if not x.fetch_error)
@@ -1557,12 +1595,24 @@ def _parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
+    from integrations.strategy_config_client import apply_strategy_bundle_to_env
+
+    config_result = apply_strategy_bundle_to_env()
     args = _parse_args()
     started_at = _now()
     logs_path = args.logs or os.path.join(
         os.getenv("LOGS_DIR", "logs"),
         f"tail_buy_1400_{started_at.strftime('%Y%m%d_%H%M%S')}.log",
     )
+    if config_result.source != "disabled":
+        _log(
+            "策略配置加载: "
+            f"source={config_result.source}, version={config_result.version or '-'}, "
+            f"applied={config_result.applied_count}, skipped={config_result.skipped_count}, "
+            f"cache={config_result.cache_path or '-'}"
+            + (f", err={config_result.error}" if config_result.error else ""),
+            logs_path,
+        )
     deadline_min = max(int(args.deadline_minute or 25), 5)
     deadline_at = started_at + timedelta(minutes=deadline_min)
 
@@ -1747,21 +1797,17 @@ def main() -> int:
                 logs_path=logs_path,
             )
 
-        try:
-            scored, llm_review_items = _prepare_tail_buy_via_api(
-                scored,
-                depth_by_code=depth_map,
-                style=style,
-                max_llm_symbols=max_llm_symbols,
-                llm_min_rule_score=llm_min_rule_score,
-                llm_allowed_rule_decisions=llm_allowed_rule_decisions,
-            )
-        except StrategyApiError as exc:
-            _log(f"Strategy API LLM候选准备失败: {exc}", logs_path)
-            return 1
+        scored, llm_review_items = _prepare_tail_buy_locally(
+            scored,
+            depth_by_code=depth_map,
+            style=style,
+            max_llm_symbols=max_llm_symbols,
+            llm_min_rule_score=llm_min_rule_score,
+            llm_allowed_rule_decisions=llm_allowed_rule_decisions,
+        )
 
         _log(
-            "LLM候选过滤(API): "
+            "LLM候选过滤(local): "
             f"eligible={sum(1 for x in scored if not x.fetch_error)}, selected={len(llm_review_items)}, "
             f"allowed={','.join(llm_allowed_rule_decisions) or 'NONE'}, min_rule_score={llm_min_rule_score:.1f}",
             logs_path,
@@ -1773,11 +1819,7 @@ def main() -> int:
             deadline_at=deadline_at,
             logs_path=logs_path,
         )
-        try:
-            merged, llm_success = _finalize_tail_buy_via_api(scored, llm_outputs)
-        except StrategyApiError as exc:
-            _log(f"Strategy API LLM结果合并失败: {exc}", logs_path)
-            return 1
+        merged, llm_success = _finalize_tail_buy_locally(scored, llm_outputs)
     else:
         _log("候选池为空：本轮仅输出持仓动作建议。", logs_path)
     elapsed = (_now() - started_at).total_seconds()

@@ -23,6 +23,10 @@ from datetime import date, timedelta
 from typing import Any
 from urllib.parse import urlparse
 
+from integrations.strategy_config_client import apply_strategy_bundle_to_env
+
+apply_strategy_bundle_to_env()
+
 
 class ToolContext:
     """最小化工具上下文，兼容 Web、CLI、MCP 的共享工具函数。"""

@@ -24,6 +24,10 @@ import pandas as pd
 # Ensure project root is on sys.path for direct script invocation
 if __name__ == "__main__" or not __package__:
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from integrations.strategy_config_client import apply_strategy_bundle_to_env
+
+apply_strategy_bundle_to_env()
+
 from core.dynamic_policy import (
     build_signal_weight_map,
     dynamic_policy_mode,

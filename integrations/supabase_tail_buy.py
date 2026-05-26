@@ -198,6 +198,10 @@ def save_tail_buy_to_supabase(rows: list[dict], user_id: str = "") -> int:
 
 def refresh_tail_buy_prices_with_tickflow_realtime(limit: int = 1000, user_id: str = "") -> dict[str, Any]:
     """刷新尾盘记录 current_price/change_pct，initial_price 保持写入时价格。"""
+    from integrations.strategy_config_client import apply_strategy_bundle_to_env
+
+    apply_strategy_bundle_to_env()
+
     if not _configured():
         raise ValueError("SUPABASE_URL/SUPABASE_SERVICE_ROLE_KEY 未配置")
     api_key = os.getenv("TICKFLOW_API_KEY", "").strip()

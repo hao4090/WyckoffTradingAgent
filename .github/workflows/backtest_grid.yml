@@ -60,6 +60,10 @@ env:
   BT_SAMPLE_SIZE: ${{ inputs.sample_size || '0' }}
   BT_TRADING_DAYS: ${{ inputs.trading_days || '320' }}
   BT_TRAILING_STOP: ${{ inputs.trailing_stop || '0' }}
+  WYCKOFF_STRATEGY_API_URL: ${{ secrets.WYCKOFF_STRATEGY_API_URL }}
+  WYCKOFF_STRATEGY_API_KEY: ${{ secrets.WYCKOFF_STRATEGY_API_KEY }}
+  WYCKOFF_STRATEGY_CONFIG_TIMEOUT: "45"
+  WYCKOFF_STRATEGY_CONFIG_OVERRIDE: "1"
 
 jobs:
   # ────────────────────────────────────────────────

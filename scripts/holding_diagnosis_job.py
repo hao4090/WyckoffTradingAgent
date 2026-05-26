@@ -234,7 +234,32 @@ def _run_llm_and_report(
     return _build_report(llm_results, holdings, free_cash, total_equity, rule_section, elapsed)
 
 
+def _int_env(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)))
+    except ValueError:
+        return default
+
+
+def _float_env(name: str, default: float) -> float:
+    try:
+        return float(os.getenv(name, str(default)))
+    except ValueError:
+        return default
+
+
 def main() -> int:
+    from integrations.strategy_config_client import apply_strategy_bundle_to_env
+
+    config_result = apply_strategy_bundle_to_env()
+    if config_result.source != "disabled":
+        print(
+            "[holding-diag] strategy config: "
+            f"source={config_result.source}, version={config_result.version or '-'}, "
+            f"applied={config_result.applied_count}, skipped={config_result.skipped_count}"
+            + (f", err={config_result.error}" if config_result.error else "")
+        )
+
     t0 = time.time()
     tickflow_api_key = os.getenv("TICKFLOW_API_KEY", "").strip()
     tg_bot_token = os.getenv("TG_BOT_TOKEN", "").strip()
@@ -256,9 +281,9 @@ def main() -> int:
         tickflow_client=tf_client,
         portfolio_id=portfolio_id,
         signal_map={},
-        style="conservative",
-        intraday_batch_size=200,
-        hard_stop_pct=6.0,
+        style=os.getenv("TAIL_BUY_STYLE", "conservative").strip().lower() or "conservative",
+        intraday_batch_size=max(min(_int_env("TAIL_BUY_INTRADAY_BATCH_SIZE", 200), 200), 1),
+        hard_stop_pct=max(_float_env("TAIL_BUY_HOLDING_HARD_STOP_PCT", 6.0), 0.0),
         deadline_at=deadline_at,
         logs_path=None,
     )

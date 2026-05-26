@@ -12,6 +12,14 @@ from pathlib import Path
 
 import pandas as pd
 
+if __name__ == "__main__" or not __package__:
+    import sys
+
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from integrations.strategy_config_client import apply_strategy_bundle_to_env
+
+apply_strategy_bundle_to_env()
+
 from core.wyckoff_engine import normalize_hist_from_fetch
 from integrations.data_source import fetch_index_hist, fetch_market_cap_map, fetch_sector_map, fetch_stock_hist
 from integrations.fetch_a_share_csv import _normalize_symbols, get_stocks_by_board

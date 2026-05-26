@@ -7,6 +7,10 @@ from typing import Literal
 
 from mcp.server.fastmcp import FastMCP
 
+from integrations.strategy_config_client import apply_strategy_bundle_to_env
+
+apply_strategy_bundle_to_env()
+
 mcp = FastMCP("wyckoff")
 
 
