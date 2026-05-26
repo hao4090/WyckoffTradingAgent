@@ -27,7 +27,7 @@ const SYSTEM_PROMPT = `# 角色设定
 5. **尾盘记录** — query_tail_buy：查询尾盘买入记录
 6. **调仓方案** — plan_portfolio_update：生成调仓方案（不直接执行）
 11. **确认执行** — execute_portfolio_update：用户确认后执行调仓方案
-7. **个股诊断** — analyze_stock：对单只股票做威科夫深度诊断（K线+量价+阶段，A股6位/美股AAPL.US/港股00700.HK）
+7. **个股诊断** — analyze_stock：对单只股票做威科夫深度诊断（K线+量价+阶段+价值面校准，A股6位/美股AAPL.US/港股00700.HK；价值面当前优先支持A股）
 8. **漏斗选股** — screen_stocks：查看最新一期漏斗选股结果
 9. **AI 研报** — generate_ai_report：为指定股票生成威科夫深度研报
 10. **策略建议** — generate_strategy_decision：基于持仓+大盘给出操作建议
@@ -50,7 +50,8 @@ const SYSTEM_PROMPT = `# 角色设定
 1. 数据先行：所有分析基于工具返回的真实数据，绝不凭空编造数字。
 2. 语言跟随：用户使用什么语言提问，就用什么语言回复。用 Markdown 格式让信息清晰。
 3. 风险声明：涉及具体操作建议时，附带风险提示。
-4. 调仓两步走：涉及调仓时，先调用 plan_portfolio_update 展示方案，等用户明确说"确认"/"执行"/"好的"后才调用 execute_portfolio_update 执行。绝不跳过确认步骤。`
+4. 技术面为主：价值面只用于质量、风险、置信度和仓位校准，不能替代 K 线事实，也不能因为单个财务指标给出过度确定结论。
+5. 调仓两步走：涉及调仓时，先调用 plan_portfolio_update 展示方案，等用户明确说"确认"/"执行"/"好的"后才调用 execute_portfolio_update 执行。绝不跳过确认步骤。`
 
 export interface LLMConfig {
   api_key: string
@@ -71,6 +72,163 @@ export interface ModelOption {
 const RETIRED_PROVIDERS = new Set(['zhipu', 'minimax', 'qwen', 'volcengine'])
 const CHAT_STREAM_TIMEOUT_MS = 120_000
 const ALLOWED_URL_RE = /^https?:\/\//i
+const DEFAULT_CONTEXT_WINDOW = 64_000
+const COMPACT_RATIO = 0.25
+const TAIL_KEEP = 4
+const DEFAULT_RECENT_KEEP_TOKENS = 20_000
+const MIN_RECENT_KEEP_TOKENS = 4_000
+
+type ChatHistoryMessage = { role: 'user' | 'assistant'; content: string }
+
+export interface PreparedChatHistory {
+  messages: ChatHistoryMessage[]
+  compacted: boolean
+  beforeTokens: number
+  afterTokens: number
+  beforeMessages: number
+  afterMessages: number
+}
+
+const MODEL_CONTEXT_WINDOWS: [string, number][] = [
+  ['deepseek', 64_000],
+  ['gpt-4o', 128_000],
+  ['gpt-4', 128_000],
+  ['gpt-3.5', 16_000],
+  ['gemini-3', 128_000],
+  ['gemini-2', 1_000_000],
+  ['gemini', 128_000],
+  ['claude-opus', 200_000],
+  ['claude-sonnet', 200_000],
+  ['claude', 200_000],
+  ['minimax', 128_000],
+  ['kimi', 128_000],
+  ['qwen', 128_000],
+  ['longcat', 64_000],
+  ['mistral', 128_000],
+  ['step', 64_000],
+]
+
+export function getChatContextWindow(modelName: string): number {
+  const lower = modelName.toLowerCase()
+  return MODEL_CONTEXT_WINDOWS.find(([prefix]) => lower.includes(prefix))?.[1] ?? DEFAULT_CONTEXT_WINDOW
+}
+
+export function getChatCompactThreshold(modelName: string): number {
+  return Math.floor(getChatContextWindow(modelName) * COMPACT_RATIO)
+}
+
+export function getChatRecentKeepTokens(modelName: string): number {
+  const threshold = getChatCompactThreshold(modelName)
+  if (threshold <= MIN_RECENT_KEEP_TOKENS * 2) return Math.max(1_000, Math.floor(threshold / 2))
+  return Math.min(DEFAULT_RECENT_KEEP_TOKENS, Math.max(MIN_RECENT_KEEP_TOKENS, Math.floor(threshold / 2)))
+}
+
+function estimateChatMessageTokens(message: ChatHistoryMessage): number {
+  const content = message.content || ''
+  const bytes = new TextEncoder().encode(content).length
+  return Math.max(Math.floor(content.length / 2), Math.floor(bytes / 3), 1)
+}
+
+function estimateChatTokens(messages: ChatHistoryMessage[]): number {
+  return messages.reduce((total, message) => total + estimateChatMessageTokens(message), 0)
+}
+
+function findChatTailStartByTokenBudget(messages: ChatHistoryMessage[], keepRecentTokens: number): number {
+  if (messages.length === 0) return 0
+  const minTailStart = Math.max(0, messages.length - TAIL_KEEP)
+  let accumulated = 0
+  let tailStart = minTailStart
+
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const message = messages[i]
+    if (!message) continue
+    accumulated += estimateChatMessageTokens(message)
+    if (accumulated >= keepRecentTokens) {
+      tailStart = i
+      break
+    }
+  }
+
+  return Math.min(tailStart, minTailStart)
+}
+
+function buildLocalChatSummary(messages: ChatHistoryMessage[], maxChars = 1200): string {
+  const codes: string[] = []
+  const userGoals: string[] = []
+  const assistantNotes: string[] = []
+
+  for (const message of messages) {
+    for (const code of message.content.match(/\b\d{6}\b/g) || []) {
+      if (!codes.includes(code)) codes.push(code)
+    }
+    if (message.role === 'user') userGoals.push(message.content.slice(0, 180))
+    if (message.role === 'assistant') assistantNotes.push(message.content.slice(0, 220))
+  }
+
+  const lines = ['前序读盘室对话已压缩为摘要。']
+  if (codes.length) lines.push(`涉及标的：${codes.slice(0, 12).join(', ')}`)
+  if (userGoals.length) {
+    lines.push('用户关注：')
+    for (const item of userGoals.slice(-6)) lines.push(`- ${item}`)
+  }
+  if (assistantNotes.length) {
+    lines.push('已给出的主要结论：')
+    for (const item of assistantNotes.slice(-6)) lines.push(`- ${item}`)
+  }
+
+  const summary = lines.join('\n')
+  return summary.length <= maxChars ? summary : `${summary.slice(0, maxChars - 1).trimEnd()}…`
+}
+
+export function prepareChatMessagesForModel(messages: ChatHistoryMessage[], modelName: string): PreparedChatHistory {
+  const normalized = messages
+    .filter((message) => message.content.trim())
+    .map((message) => ({ role: message.role, content: message.content }))
+  const beforeTokens = estimateChatTokens(normalized)
+  const beforeMessages = normalized.length
+
+  if (normalized.length <= TAIL_KEEP + 2 || beforeTokens <= getChatCompactThreshold(modelName)) {
+    return {
+      messages: normalized,
+      compacted: false,
+      beforeTokens,
+      afterTokens: beforeTokens,
+      beforeMessages,
+      afterMessages: beforeMessages,
+    }
+  }
+
+  const tailStart = findChatTailStartByTokenBudget(normalized, getChatRecentKeepTokens(modelName))
+  if (tailStart <= 2) {
+    return {
+      messages: normalized,
+      compacted: false,
+      beforeTokens,
+      afterTokens: beforeTokens,
+      beforeMessages,
+      afterMessages: beforeMessages,
+    }
+  }
+
+  const summary = buildLocalChatSummary(normalized.slice(0, tailStart))
+  const compactedMessages: ChatHistoryMessage[] = [
+    {
+      role: 'user',
+      content: `[读盘室对话摘要]\n${summary}\n\n[系统说明] 以上是前序读盘室对话摘要。后续回答可以结合摘要和保留的最近对话，但当前持仓、价格、行情和策略结果仍必须以工具实时返回为准。`,
+    },
+    { role: 'assistant', content: '好的，我已接续前序读盘室上下文。' },
+    ...normalized.slice(tailStart),
+  ]
+
+  return {
+    messages: compactedMessages,
+    compacted: true,
+    beforeTokens,
+    afterTokens: estimateChatTokens(compactedMessages),
+    beforeMessages,
+    afterMessages: compactedMessages.length,
+  }
+}
 
 function parseCustomProviders(raw: unknown): Record<string, Record<string, string>> {
   try {
@@ -367,7 +525,7 @@ function buildTools(userId: string, config: LLMConfig, reasoningCache: string[])
     }),
 
     analyze_stock: tool({
-      description: '对单只股票做威科夫深度诊断：K线走势、量价关系、均线形态、阶段判断。需要股票代码。',
+      description: '对单只股票做威科夫深度诊断：K线走势、量价关系、均线形态、阶段判断，并在A股可用时加入价值面校准（盈利质量、成长、杠杆、现金流）。需要股票代码。',
       inputSchema: z.object({
         code: z.string().describe('股票代码：A股6位数字；美股/港股使用 TickFlow 标准代码，如 AAPL.US / 00700.HK'),
         name: z.string().nullable().describe('股票名称'),
@@ -430,10 +588,11 @@ export function runChatAgentStream(
 
   void (async () => {
     try {
+      const preparedHistory = prepareChatMessagesForModel(messages, config.model)
       const result = streamText({
         model: provider.chat(config.model),
         system: SYSTEM_PROMPT,
-        messages,
+        messages: preparedHistory.messages,
         tools,
         stopWhen: stepCountIs(10),
         abortSignal: abort.signal,

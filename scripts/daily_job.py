@@ -1,7 +1,7 @@
 """
 定时任务主入口：Wyckoff Funnel（Step2） → 批量研报（Step3） → 私人再平衡（Step4）
 
-配置来源：仅读取环境变量（GitHub Secrets），与 Streamlit 用户配置（Supabase）完全独立。
+配置来源：仅读取环境变量（GitHub Secrets），与用户侧配置（Supabase）完全独立。
 环境变量：FEISHU_WEBHOOK_URL, WECOM_WEBHOOK_URL(可选), DINGTALK_WEBHOOK_URL(可选),
 DEFAULT_LLM_PROVIDER(可选，默认 gemini), GEMINI_API_KEY, GEMINI_MODEL,
 OPENAI_API_KEY, OPENAI_MODEL(可选), 以及其它厂商 *_API_KEY/*_MODEL/*_BASE_URL,
@@ -211,6 +211,46 @@ def _mark_step3_recommendations(
         _log(f"推荐记录AI标记失败: {e}", logs_path)
 
 
+def _persist_signal_observations(
+    step2_details: dict,
+    benchmark_context: dict,
+    ai_codes: list[str],
+    logs_path: str | None,
+    *,
+    dry_run: bool = False,
+) -> None:
+    if not step2_details:
+        return
+    if dry_run:
+        _log("预演模式: 跳过信号观察样本入库", logs_path)
+        return
+    try:
+        from core.signal_feedback import build_signal_observations
+        from integrations.supabase_signal_feedback import upsert_signal_observations
+
+        metrics = step2_details.get("metrics", {}) or {}
+        bypass_codes = {str(c).strip() for c in step2_details.get("l2_bypass_selected", []) if str(c).strip()}
+        source_map = {code: "l2_bypass" for code in bypass_codes}
+        rows = build_signal_observations(
+            _latest_trade_date_str(),
+            step2_details.get("review_triggers") or step2_details.get("triggers") or {},
+            regime=str((benchmark_context or {}).get("regime") or "NEUTRAL"),
+            selected_for_ai=step2_details.get("selected_for_ai", []) or [],
+            ai_recommended=ai_codes,
+            name_map=step2_details.get("name_map", {}) or {},
+            sector_map=step2_details.get("sector_map", {}) or {},
+            score_map=step2_details.get("priority_score_map", {}) or {},
+            stage_map=metrics.get("accum_stage_map", {}) or {},
+            channel_map=metrics.get("layer2_channel_map", {}) or {},
+            latest_close_map=metrics.get("latest_close_map", {}) or {},
+            source_map=source_map,
+        )
+        written = upsert_signal_observations(rows)
+        _log(f"信号观察样本入库: rows={len(rows)}, written={written}", logs_path)
+    except Exception as e:
+        _log(f"信号观察样本入库失败: {e}", logs_path)
+
+
 def _load_step4_target() -> tuple[dict | None, str]:
     target_user_id = os.getenv("SUPABASE_USER_ID", "").strip()
     if not target_user_id:
@@ -410,6 +450,41 @@ def _run_step4_pipeline(
     }
 
 
+def _run_step2_with_etf_metrics(run_step2, webhook: str, preview_only: bool):
+    result = run_step2("" if preview_only else webhook, notify=not preview_only, return_details=True)
+    step2_ok, symbols_info, benchmark_context, step2_details = result
+    if benchmark_context and step2_details:
+        metrics = step2_details.get("metrics", {}) or {}
+        benchmark_context["etf_enhancement"] = metrics.get("etf_enhancement", {}) or {}
+        benchmark_context["etf_candidates"] = metrics.get("etf_candidates", []) or []
+    return step2_ok, symbols_info, benchmark_context, step2_details
+
+
+def _efficiency_fallback_model() -> str:
+    api_key = os.getenv("EFFICIENCY_API_KEY", "").strip()
+    model = os.getenv("EFFICIENCY_MODEL", "").strip()
+    base_url = os.getenv("EFFICIENCY_BASE_URL", "").strip()
+    return model if api_key and model and base_url else ""
+
+
+def _missing_llm_config(provider: str, api_key: str, step3_skip_llm: bool, skip_step4: bool) -> list[str]:
+    missing = []
+    step3_can_use_efficiency = provider == "gemini" and bool(_efficiency_fallback_model())
+    if not step3_skip_llm and not api_key and not step3_can_use_efficiency:
+        missing.append(f"{provider.upper()}_API_KEY 或 GEMINI_API_KEY")
+    if not skip_step4 and not api_key:
+        missing.append(f"{provider.upper()}_API_KEY 或 GEMINI_API_KEY")
+    return list(dict.fromkeys(missing))
+
+
+def _log_llm_config(provider: str, llm_base_url: str, base_url_env_key: str, logs_path: str | None) -> None:
+    if provider in OPENAI_COMPATIBLE_BASE_URLS:
+        _log(f"LLM base_url: {llm_base_url or '(empty)'} (env={base_url_env_key})", logs_path)
+    efficiency_model = _efficiency_fallback_model()
+    if provider == "gemini" and efficiency_model:
+        _log(f"Step3 Efficiency 兜底已配置: model={efficiency_model}", logs_path)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="每日定时任务：Wyckoff Funnel → 批量研报")
     parser.add_argument("--dry-run", action="store_true", help="仅校验配置，不执行任务")
@@ -441,12 +516,7 @@ def main() -> int:
         f"daily_job_{datetime.now(TZ).strftime('%Y%m%d_%H%M%S')}.log",
     )
 
-    # Secret 完整性预检
-    missing = []
-    # 仅当需要调用模型时强制要求对应厂商 API Key
-    require_api_key = (not step3_skip_llm) or (not skip_step4)
-    if require_api_key and not api_key:
-        missing.append(f"{provider.upper()}_API_KEY 或 GEMINI_API_KEY")
+    missing = _missing_llm_config(provider, api_key, step3_skip_llm, skip_step4)
     if missing:
         _log(f"配置缺失: {', '.join(missing)}", logs_path)
         return 1
@@ -467,8 +537,7 @@ def main() -> int:
         _notify_skip(skip_msg, webhook, wecom_webhook, dingtalk_webhook)
         return 0
 
-    if provider in OPENAI_COMPATIBLE_BASE_URLS:
-        _log(f"LLM base_url: {llm_base_url or '(empty)'} (env={base_url_env_key})", logs_path)
+    _log_llm_config(provider, llm_base_url, base_url_env_key, logs_path)
 
     # 数据源口径在 integrations/data_source.py 中固定为：
     # tickflow 优先（前复权 qfq），失败按 tushare→akshare→baostock→efinance 回退。
@@ -496,8 +565,9 @@ def main() -> int:
     step2_err = None
     step2_details: dict = {}
     try:
-        result = run_step2("" if preview_only else webhook, notify=not preview_only, return_details=True)
-        step2_ok, symbols_info, benchmark_context, step2_details = result
+        step2_ok, symbols_info, benchmark_context, step2_details = _run_step2_with_etf_metrics(
+            run_step2, webhook, preview_only
+        )
         step2_err = None if step2_ok else "飞书发送失败"
     except Exception as e:
         step2_err = str(e)
@@ -589,6 +659,11 @@ def main() -> int:
     else:
         summary.append({"step": "批量研报", "ok": True, "err": None, "elapsed_s": 0, "output": "skipped (no symbols)"})
         _log("Step3 批量研报: 跳过（无筛选结果）", logs_path)
+
+    if step2_ok and step2_details:
+        _persist_signal_observations(
+            step2_details, benchmark_context, step3_springboard_codes, logs_path, dry_run=preview_only
+        )
 
     # Step4: 私人账户再平衡（按 SUPABASE_USER_ID 唯一执行）
     if skip_step4:

@@ -54,6 +54,7 @@ DECISION_SKIP = "SKIP"
 HOLDING_ACTION_ADD = "ADD"
 HOLDING_ACTION_HOLD = "HOLD"
 HOLDING_ACTION_TRIM = "TRIM"
+TAIL_BUY_TRIM_WEAK_LOSS_PCT = -abs(float(os.getenv("TAIL_BUY_TRIM_WEAK_LOSS_PCT", "2.0")))
 
 
 @dataclass
@@ -595,57 +596,156 @@ def _analyze_holdings_actions(
             for sym in chunk:
                 intraday_error_by_symbol[sym] = reason
 
-    request_rows: list[dict[str, Any]] = []
+    out: list[HoldingAdvice] = []
+    add_count = 0
+    trim_count = 0
     for p in positions:
         code = p["code"]
+        name = p["name"]
         sym = normalize_cn_symbol(code)
-        signal_item = signal_map.get(code)
-        request_rows.append(
-            {
-                "code": code,
-                "name": p["name"],
-                "shares": int(_safe_float(p.get("shares"), 0)),
-                "cost": _safe_float(p.get("cost"), 0.0),
-                "stop_loss": p.get("stop_loss"),
-                "current_price": _resolve_quote_price(quotes.get(sym) or {}),
-                "intraday": _df_records(intraday_map.get(sym)),
-                "fetch_error": str(intraday_error_by_symbol.get(sym, "") or "").strip(),
-                "signal": _candidate_to_payload(signal_item) if signal_item else None,
+        cost = _safe_float(p.get("cost"), 0.0)
+        shares = int(_safe_float(p.get("shares"), 0))
+        quote = quotes.get(sym) or {}
+        price = _resolve_quote_price(quote)
+        pnl_pct = ((price / cost - 1.0) * 100.0) if price > 0 and cost > 0 else 0.0
+        effective_stop = _resolve_effective_stop(cost, p.get("stop_loss"), hard_stop_pct)
+
+        advice = HoldingAdvice(
+            code=code,
+            name=name,
+            shares=shares,
+            cost=cost,
+            current_price=price,
+            pnl_pct=pnl_pct,
+        )
+
+        df_1m = intraday_map.get(sym)
+        fetch_error = str(intraday_error_by_symbol.get(sym, "") or "").strip()
+        if df_1m is None or getattr(df_1m, "empty", True):
+            advice.fetch_error = fetch_error or "持仓分时缺失"
+            advice.rule_decision = DECISION_WATCH
+            advice.rule_score = 0.0
+            advice.action = HOLDING_ACTION_HOLD
+            advice.reasons = _dedupe_texts(
+                [
+                    "分时数据缺失，先维持观察",
+                    advice.fetch_error,
+                ],
+                limit=2,
+            )
+            if price > 0 and effective_stop > 0 and price <= effective_stop:
+                advice.action = HOLDING_ACTION_TRIM
+                advice.reasons = _dedupe_texts(
+                    [
+                        f"现价{price:.2f}跌破风控位{effective_stop:.2f}",
+                        advice.fetch_error,
+                    ],
+                    limit=2,
+                )
+        else:
+            signal_item = signal_map.get(code)
+            signal_score = _safe_float(signal_item.signal_score, 0.0) if signal_item else 0.0
+            signal_type = str(signal_item.signal_type if signal_item else "")
+            status = str(signal_item.status if signal_item else "pending")
+            features = compute_tail_features(df_1m)
+            score, decision, reasons = score_tail_features(
+                features,
+                signal_score=signal_score,
+                signal_type=signal_type,
+                status=status,
+                style=style,
+            )
+            if advice.current_price <= 0:
+                advice.current_price = _safe_float(features.get("last_close"), 0.0)
+                advice.pnl_pct = (
+                    (advice.current_price / cost - 1.0) * 100.0 if advice.current_price > 0 and cost > 0 else 0.0
+                )
+            advice.rule_score = score
+            advice.rule_decision = decision
+            advice.features = features
+
+            dist_vwap_pct = _safe_float(features.get("dist_vwap_pct"), 0.0)
+            close_pos = _safe_float(features.get("close_pos"), 0.0)
+            last30_ret_pct = _safe_float(features.get("last30_ret_pct"), 0.0)
+            drop_from_high_pct = _safe_float(features.get("drop_from_high_pct"), 0.0)
+            has_actionable_signal = signal_item is not None and signal_type.strip().lower() not in {
+                "",
+                "holding",
+                "unknown",
             }
-        )
+            weak_tail = (
+                dist_vwap_pct <= -0.6 or close_pos < 0.42 or last30_ret_pct <= -0.8 or drop_from_high_pct <= -2.2
+            )
+            severe_tail = (dist_vwap_pct <= -1.0 and close_pos < 0.35) or drop_from_high_pct <= -2.8
 
-    try:
-        payload = analyze_tail_buy_holdings_remote(
-            holdings=request_rows,
-            style=style,
-            hard_stop_pct=hard_stop_pct,
-        )
-    except StrategyApiError as exc:
-        raise RuntimeError(f"Strategy API 持仓动作分析失败: {exc}") from exc
+            base_reasons = _dedupe_texts(reasons, limit=2)
+            if advice.current_price > 0 and effective_stop > 0 and advice.current_price <= effective_stop:
+                advice.action = HOLDING_ACTION_TRIM
+                advice.reasons = _dedupe_texts(
+                    [
+                        f"现价{advice.current_price:.2f}跌破风控位{effective_stop:.2f}",
+                        *base_reasons,
+                    ],
+                    limit=3,
+                )
+            elif (
+                decision == DECISION_BUY
+                and has_actionable_signal
+                and dist_vwap_pct >= 0.15
+                and close_pos >= 0.68
+                and last30_ret_pct >= 0.2
+            ):
+                advice.action = HOLDING_ACTION_ADD
+                advice.reasons = _dedupe_texts(
+                    [
+                        "尾盘结构延续走强，可考虑小幅加仓",
+                        *base_reasons,
+                    ],
+                    limit=3,
+                )
+            elif (
+                decision == DECISION_SKIP
+                and weak_tail
+                and (advice.pnl_pct <= TAIL_BUY_TRIM_WEAK_LOSS_PCT or severe_tail)
+            ):
+                advice.action = HOLDING_ACTION_TRIM
+                advice.reasons = _dedupe_texts(
+                    [
+                        "尾盘结构转弱，优先减仓控制回撤",
+                        *base_reasons,
+                    ],
+                    limit=3,
+                )
+            else:
+                advice.action = HOLDING_ACTION_HOLD
+                hold_reason = "结构中性，先持有观察"
+                if decision == DECISION_BUY and not has_actionable_signal:
+                    hold_reason = "无有效L4信号，不做尾盘加仓"
+                elif decision == DECISION_BUY:
+                    hold_reason = "尾盘强度未达加仓触发线，先持有观察"
+                advice.reasons = _dedupe_texts(
+                    [
+                        hold_reason,
+                        *base_reasons,
+                    ],
+                    limit=3,
+                )
 
-    out = [
-        HoldingAdvice(
-            code=str(row.get("code") or ""),
-            name=str(row.get("name") or row.get("code") or ""),
-            shares=int(_safe_float(row.get("shares"), 0.0)),
-            cost=_safe_float(row.get("cost"), 0.0),
-            current_price=_safe_float(row.get("current_price"), 0.0),
-            pnl_pct=_safe_float(row.get("pnl_pct"), 0.0),
-            rule_score=_safe_float(row.get("rule_score"), 0.0),
-            rule_decision=str(row.get("rule_decision") or DECISION_SKIP),
-            action=str(row.get("action") or HOLDING_ACTION_HOLD),
-            reasons=[str(x) for x in row.get("reasons") or []],
-            fetch_error=str(row.get("fetch_error") or ""),
-            features=dict(row.get("features") or {}),
-        )
-        for row in payload.get("holdings") or []
-        if isinstance(row, dict)
-    ]
-    add_count = sum(1 for item in out if item.action == HOLDING_ACTION_ADD)
-    trim_count = sum(1 for item in out if item.action == HOLDING_ACTION_TRIM)
+        if advice.action == HOLDING_ACTION_ADD:
+            add_count += 1
+        elif advice.action == HOLDING_ACTION_TRIM:
+            trim_count += 1
+        out.append(advice)
+
+    rank = {
+        HOLDING_ACTION_ADD: 0,
+        HOLDING_ACTION_TRIM: 1,
+        HOLDING_ACTION_HOLD: 2,
+    }
+    out.sort(key=lambda x: (rank.get(x.action, 9), -x.rule_score, x.code))
     _log(
         f"持仓动作分析完成: total={len(out)}, add={add_count}, trim={trim_count}, "
-        f"hold={len(out) - add_count - trim_count}, tickflow_limit_hit={tickflow_limit_hit}, source=strategy_api",
+        f"hold={len(out) - add_count - trim_count}, tickflow_limit_hit={tickflow_limit_hit}",
         logs_path,
     )
     meta = (
@@ -1407,6 +1507,42 @@ def _send_notifications(
     return feishu_ok, tg_ok
 
 
+def _tail_buy_persist_row(c: TailBuyCandidate, started_at: datetime) -> dict[str, Any]:
+    initial_price = _safe_float(c.features.get("last_close"), 0.0)
+    return {
+        "code": c.code,
+        "name": c.name,
+        "run_date": started_at.strftime("%Y-%m-%d"),
+        "signal_date": c.signal_date,
+        "signal_type": c.signal_type,
+        "status": c.status,
+        "final_decision": c.final_decision,
+        "rule_decision": c.rule_decision,
+        "rule_score": c.rule_score,
+        "priority_score": c.priority_score,
+        "rule_reasons": json.dumps(c.rule_reasons, ensure_ascii=False),
+        "llm_decision": c.llm_decision or "",
+        "llm_reason": c.llm_reason,
+        "llm_confidence": c.llm_confidence,
+        "llm_model_used": c.llm_model_used,
+        "initial_price": initial_price,
+        "current_price": initial_price,
+        "change_pct": 0.0,
+        "price_updated_at": started_at.isoformat(),
+        "last_close": c.features.get("last_close", 0.0),
+        "vwap": c.features.get("vwap", 0.0),
+        "dist_vwap_pct": c.features.get("dist_vwap_pct", 0.0),
+        "close_pos": c.features.get("close_pos", 0.0),
+        "day_ret_pct": c.features.get("day_ret_pct", 0.0),
+        "last30_ret_pct": c.features.get("last30_ret_pct", 0.0),
+        "last15_ret_pct": c.features.get("last15_ret_pct", 0.0),
+        "tail30_volume_share": c.features.get("tail30_volume_share", 0.0),
+        "drop_from_high_pct": c.features.get("drop_from_high_pct", 0.0),
+        "fetch_error": c.fetch_error,
+        "features_json": json.dumps(c.features, ensure_ascii=False, default=str),
+    }
+
+
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Tail Buy Intraday Job")
     parser.add_argument("--max-llm-symbols", type=int, default=int(os.getenv("TAIL_BUY_LLM_TOP_N", "20")))
@@ -1657,24 +1793,7 @@ def main() -> int:
         from integrations.local_db import init_db, save_tail_buy_results
 
         init_db()
-        persistable = [
-            {
-                "code": c.code,
-                "name": c.name,
-                "run_date": started_at.strftime("%Y-%m-%d"),
-                "signal_date": c.signal_date,
-                "signal_type": c.signal_type,
-                "status": c.status,
-                "final_decision": c.final_decision,
-                "rule_score": c.rule_score,
-                "priority_score": c.priority_score,
-                "rule_reasons": json.dumps(c.rule_reasons, ensure_ascii=False),
-                "llm_decision": c.llm_decision or "",
-                "llm_reason": c.llm_reason,
-            }
-            for c in merged
-            if c.final_decision != "SKIP"
-        ]
+        persistable = [_tail_buy_persist_row(c, started_at) for c in merged if c.final_decision != "SKIP"]
         saved = save_tail_buy_results(persistable)
         _log(f"已写入 {saved} 条尾盘结果到本地 SQLite", logs_path)
         # 持久化 BUY 到 Supabase
