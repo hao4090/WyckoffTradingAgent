@@ -223,3 +223,45 @@ def test_refresh_tail_buy_prices_updates_current_price(monkeypatch):
     assert rows[0]["change_pct"] == 12.0
     assert rows[0]["price_updated_at"]
     assert rows[1].get("current_price") is None
+
+
+def test_refresh_tail_buy_prices_skips_rows_without_user_id(monkeypatch):
+    from integrations import supabase_tail_buy
+
+    rows = [
+        {
+            "code": "600001",
+            "run_date": "2026-05-10",
+            "initial_price": 10.0,
+            "last_close": 10.0,
+        },
+        {
+            "user_id": "user-a",
+            "code": "600001",
+            "run_date": "2026-05-10",
+            "initial_price": 20.0,
+            "last_close": 20.0,
+        },
+    ]
+    client = _FakeClient(rows)
+
+    monkeypatch.setenv("TICKFLOW_API_KEY", "tick-key")
+    monkeypatch.setattr(supabase_tail_buy, "_configured", lambda: True)
+    monkeypatch.setattr(supabase_tail_buy, "_admin", lambda: client)
+    monkeypatch.setattr(
+        supabase_tail_buy,
+        "_fetch_tail_quotes",
+        lambda *_args: {"600001.SH": {"last_price": 22.0}},
+    )
+
+    summary = supabase_tail_buy.refresh_tail_buy_prices_with_tickflow_realtime()
+
+    assert summary["rows_total"] == 2
+    assert summary["rows_updated"] == 1
+    assert rows[0].get("current_price") is None
+    assert rows[1]["current_price"] == 22.0
+    assert client.updates[0]["filters"] == [
+        ("code", "600001"),
+        ("run_date", "2026-05-10"),
+        ("user_id", "user-a"),
+    ]

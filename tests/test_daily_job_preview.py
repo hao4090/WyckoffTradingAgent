@@ -89,6 +89,27 @@ def test_signal_confirmation_dry_run_does_not_write(monkeypatch):
     assert writes == []
 
 
+def test_persist_signal_observations_reports_write_failure(monkeypatch):
+    import integrations.supabase_signal_feedback as signal_feedback
+    import scripts.daily_job as daily_job
+
+    monkeypatch.setattr(daily_job, "_latest_trade_date_str", lambda: "2026-05-25")
+    monkeypatch.setattr(
+        signal_feedback,
+        "upsert_signal_observations",
+        lambda _rows: (_ for _ in ()).throw(RuntimeError("upsert failed")),
+    )
+
+    ok = daily_job._persist_signal_observations(
+        {"triggers": {"sos": [("000001", 1.0)]}},
+        {"regime": "NEUTRAL"},
+        [],
+        None,
+    )
+
+    assert ok is False
+
+
 def test_step3_input_preview_sends_summary_and_writes_artifact(monkeypatch, tmp_path):
     import scripts.step3_batch_report as step3
 

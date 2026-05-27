@@ -21,7 +21,13 @@ def _recent_cutoff(days: int) -> str:
     return (date.today() - timedelta(days=max(int(days), 1))).isoformat()
 
 
-def _execute_upsert(table: str, rows: list[dict[str, Any]], conflict: str) -> int:
+def _execute_upsert(
+    table: str,
+    rows: list[dict[str, Any]],
+    conflict: str,
+    *,
+    raise_on_error: bool = True,
+) -> int:
     if not _configured() or not rows:
         return 0
     client = None
@@ -31,6 +37,8 @@ def _execute_upsert(table: str, rows: list[dict[str, Any]], conflict: str) -> in
         return len(rows)
     except Exception as exc:
         print(f"[signal_feedback] upsert {table} failed: {exc}")
+        if raise_on_error:
+            raise
         return 0
     finally:
         if client is not None:
@@ -54,7 +62,7 @@ def upsert_signal_registry(rows: list[dict[str, Any]]) -> int:
 
 
 def upsert_policy_shadow_run(row: dict[str, Any]) -> int:
-    return _execute_upsert(TABLE_SIGNAL_POLICY_SHADOW_RUNS, [row], "market,trade_date")
+    return _execute_upsert(TABLE_SIGNAL_POLICY_SHADOW_RUNS, [row], "market,trade_date", raise_on_error=False)
 
 
 def load_recent_signal_observations(days: int = 90, limit: int = 5000, market: str = "cn") -> list[dict[str, Any]]:

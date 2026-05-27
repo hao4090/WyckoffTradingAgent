@@ -134,6 +134,9 @@ jobs:
         env:
           FEISHU_WEBHOOK_URL: "https://example.com"
           GEMINI_API_KEY: "fake-key-for-dry-run"
+          EFFICIENCY_API_KEY: "fake-key-for-dry-run"
+          EFFICIENCY_MODEL: "fake-model-for-dry-run"
+          EFFICIENCY_BASE_URL: "https://example.com/v1"
 
   coverage-report:
     runs-on: ubuntu-latest
@@ -170,7 +173,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
         with:
-          version: 9
+          version: 10.33.2
       - uses: actions/setup-node@v4
         with:
           node-version: 20

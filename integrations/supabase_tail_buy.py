@@ -149,7 +149,10 @@ def _fetch_tail_price_records(client, limit: int, user_id: str) -> list[dict[str
     return resp.data or []
 
 
-def _execute_tail_price_update(client, row: dict[str, Any], update: dict[str, Any]) -> None:
+def _execute_tail_price_update(client, row: dict[str, Any], update: dict[str, Any]) -> bool:
+    user_id = str(row.get("user_id") or "").strip()
+    if not user_id:
+        return False
     query = (
         client.table(TABLE_TAIL_BUY_HISTORY)
         .update(update)
@@ -159,10 +162,9 @@ def _execute_tail_price_update(client, row: dict[str, Any], update: dict[str, An
             row.get("run_date"),
         )
     )
-    user_id = str(row.get("user_id") or "").strip()
-    if user_id:
-        query = query.eq("user_id", user_id)
+    query = query.eq("user_id", user_id)
     query.execute()
+    return True
 
 
 def save_tail_buy_to_supabase(rows: list[dict], user_id: str = "") -> int:
@@ -225,8 +227,8 @@ def refresh_tail_buy_prices_with_tickflow_realtime(limit: int = 1000, user_id: s
             if current_price <= 0:
                 no_price += 1
                 continue
-            _execute_tail_price_update(client, row, _build_tail_price_update(row, current_price, now_iso))
-            updated += 1
+            if _execute_tail_price_update(client, row, _build_tail_price_update(row, current_price, now_iso)):
+                updated += 1
     except Exception as exc:
         if _looks_like_schema_miss(exc):
             return {
