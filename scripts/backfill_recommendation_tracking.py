@@ -97,7 +97,22 @@ def _fetch_close_map(codes: list[str], recommend_date: int) -> dict[str, float]:
         end_time_ms=end_ms,
         adjust="forward",
     )
-    return {code: _close_price(hist_map.get(normalize_cn_symbol(code)), recommend_date) for code in codes}
+    close_map = {code: _close_price(hist_map.get(normalize_cn_symbol(code)), recommend_date) for code in codes}
+    for code, price in list(close_map.items()):
+        if price <= 0:
+            close_map[code] = _fetch_single_close(client, code, recommend_date)
+    return close_map
+
+
+def _fetch_single_close(client: TickFlowClient, code: str, recommend_date: int) -> float:
+    symbol = normalize_cn_symbol(code)
+    for adjust in ("forward", "none"):
+        hist = client.get_klines(symbol, period="1d", count=120, adjust=adjust)
+        price = _close_price(hist, recommend_date)
+        if price > 0:
+            print(f"[backfill] single TickFlow fallback ok: {code} adjust={adjust} close={price}")
+            return price
+    return 0.0
 
 
 def _symbols_info(preset: dict, close_map: dict[str, float]) -> list[dict]:
