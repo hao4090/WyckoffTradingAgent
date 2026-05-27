@@ -3,7 +3,8 @@
 
 配置来源：仅读取环境变量（GitHub Secrets），与用户侧配置（Supabase）完全独立。
 环境变量：FEISHU_WEBHOOK_URL, WECOM_WEBHOOK_URL(可选), DINGTALK_WEBHOOK_URL(可选),
-DEFAULT_LLM_PROVIDER(可选，默认 gemini), GEMINI_API_KEY, GEMINI_MODEL,
+STEP3_LLM_PROVIDER(可选，默认 gemini), STEP4_LLM_PROVIDER(可选，默认 efficiency),
+GEMINI_API_KEY, GEMINI_MODEL,
 OPENAI_API_KEY, OPENAI_MODEL(可选), 以及其它厂商 *_API_KEY/*_MODEL/*_BASE_URL,
 SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY(可选), SUPABASE_USER_ID,
 TG_BOT_TOKEN, TG_CHAT_ID, MY_PORTFOLIO_STATE(可选兜底),
@@ -22,8 +23,9 @@ from zoneinfo import ZoneInfo
 # Ensure project root is on sys.path for direct script invocation
 if __name__ == "__main__" or not __package__:
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from integrations._llm_types import DEFAULT_GEMINI_MODEL, OPENAI_COMPATIBLE_BASE_URLS
+from integrations._llm_types import OPENAI_COMPATIBLE_BASE_URLS
 from integrations.fetch_a_share_csv import _resolve_trading_window
+from integrations.llm_client import get_provider_credentials, provider_fallbacks, resolve_provider_name
 from integrations.supabase_market_signal import upsert_market_signal_daily
 from integrations.supabase_recommendation import (
     mark_ai_recommendations,
@@ -41,7 +43,7 @@ STEP3_REASON_MAP = {
     "ok_preview": "预演模式：未调用模型，仅展示输入",
 }
 STEP4_REASON_MAP = {
-    "missing_api_key": "GEMINI_API_KEY 缺失",
+    "missing_api_key": "Step4 LLM API Key 缺失",
     "skipped_invalid_portfolio": "用户持仓缺失或格式错误，已跳过",
     "skipped_telegram_unconfigured": "Telegram 未配置，已跳过",
     "skipped_idempotency": "今日已运行，已跳过",
@@ -383,6 +385,8 @@ def _run_step4_pipeline(
     benchmark_context: dict | None,
     api_key: str,
     model: str,
+    provider: str,
+    llm_base_url: str,
     logs_path: str | None,
 ) -> dict:
     from core.strategy import run_step4
@@ -424,6 +428,8 @@ def _run_step4_pipeline(
             benchmark_context=benchmark_context,
             api_key=api_key,
             model=model,
+            provider=provider,
+            llm_base_url=llm_base_url,
             candidate_meta=step4_candidate_meta,
             portfolio_id=portfolio_id,
             tg_bot_token=tg_bot_token,
@@ -467,13 +473,24 @@ def _efficiency_fallback_model() -> str:
     return model if api_key and model and base_url else ""
 
 
-def _missing_llm_config(provider: str, api_key: str, step3_skip_llm: bool, skip_step4: bool) -> list[str]:
+def _provider_ready(provider: str) -> bool:
+    api_key, model, base_url = get_provider_credentials(provider)
+    if provider in OPENAI_COMPATIBLE_BASE_URLS and not base_url:
+        return False
+    return bool(api_key and model)
+
+
+def _step3_fallback_default(provider: str) -> str:
+    return "efficiency" if provider == "gemini" else "gemini"
+
+
+def _missing_llm_config(provider: str, step3_skip_llm: bool, skip_step4: bool, step4_provider: str) -> list[str]:
     missing = []
-    step3_can_use_efficiency = provider == "gemini" and bool(_efficiency_fallback_model())
-    if not step3_skip_llm and not api_key and not step3_can_use_efficiency:
-        missing.append(f"{provider.upper()}_API_KEY 或 GEMINI_API_KEY")
-    if not skip_step4 and not api_key:
-        missing.append(f"{provider.upper()}_API_KEY 或 GEMINI_API_KEY")
+    step3_fallbacks = provider_fallbacks("STEP3_LLM_FALLBACK_PROVIDERS", _step3_fallback_default(provider))
+    if not step3_skip_llm and not _provider_ready(provider) and not any(_provider_ready(p) for p in step3_fallbacks):
+        missing.append(f"STEP3_LLM_PROVIDER={provider} 缺少可用 API Key / Model / Base URL")
+    if not skip_step4 and not _provider_ready(step4_provider):
+        missing.append(f"STEP4_LLM_PROVIDER={step4_provider} 缺少可用 API Key / Model / Base URL")
     return list(dict.fromkeys(missing))
 
 
@@ -494,14 +511,11 @@ def main() -> int:
     webhook = os.getenv("FEISHU_WEBHOOK_URL", "").strip()
     wecom_webhook = os.getenv("WECOM_WEBHOOK_URL", "").strip()
     dingtalk_webhook = os.getenv("DINGTALK_WEBHOOK_URL", "").strip()
-    provider = os.getenv("DEFAULT_LLM_PROVIDER", "gemini").strip().lower() or "gemini"
-    api_key = (os.getenv(f"{provider.upper()}_API_KEY") or os.getenv("GEMINI_API_KEY") or "").strip()
-    model_env_key = f"{provider.upper()}_MODEL"
-    model = (
-        os.getenv(model_env_key) or os.getenv("GEMINI_MODEL", DEFAULT_GEMINI_MODEL)
-    ).strip() or DEFAULT_GEMINI_MODEL
+    provider = resolve_provider_name("STEP3_LLM_PROVIDER", "gemini")
+    api_key, model, llm_base_url = get_provider_credentials(provider)
     base_url_env_key = f"{provider.upper()}_BASE_URL"
-    llm_base_url = (os.getenv(base_url_env_key) or OPENAI_COMPATIBLE_BASE_URLS.get(provider, "") or "").strip()
+    step4_provider = resolve_provider_name("STEP4_LLM_PROVIDER", "efficiency")
+    step4_api_key, step4_model, step4_base_url = get_provider_credentials(step4_provider)
     step3_skip_llm = _env_flag("STEP3_SKIP_LLM")
     skip_step4 = _env_flag("DAILY_JOB_SKIP_STEP4")
     preview_only = _env_flag("DAILY_JOB_PREVIEW_ONLY")
@@ -516,7 +530,7 @@ def main() -> int:
         f"daily_job_{datetime.now(TZ).strftime('%Y%m%d_%H%M%S')}.log",
     )
 
-    missing = _missing_llm_config(provider, api_key, step3_skip_llm, skip_step4)
+    missing = _missing_llm_config(provider, step3_skip_llm, skip_step4, step4_provider)
     if missing:
         _log(f"配置缺失: {', '.join(missing)}", logs_path)
         return 1
@@ -538,6 +552,7 @@ def main() -> int:
         return 0
 
     _log_llm_config(provider, llm_base_url, base_url_env_key, logs_path)
+    _log(f"Step4 LLM: provider={step4_provider}, model={step4_model or '(missing)'}", logs_path)
 
     # 数据源口径在 integrations/data_source.py 中固定为：
     # tickflow 优先（前复权 qfq），失败按 tushare→akshare→baostock→efinance 回退。
@@ -699,8 +714,10 @@ def main() -> int:
                 step3_springboard_codes=step3_springboard_codes,
                 step3_report_text=step3_report_text,
                 benchmark_context=benchmark_context,
-                api_key=api_key,
-                model=model,
+                api_key=step4_api_key,
+                model=step4_model,
+                provider=step4_provider,
+                llm_base_url=step4_base_url,
                 logs_path=logs_path,
             )
         )

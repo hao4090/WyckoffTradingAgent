@@ -164,7 +164,6 @@ def _send_input_preview(
     blocks: list[str] = [
         "# 🧪 Step3 模型输入预演（未调用大模型）",
         "",
-        f"- 目标模型: `{model}`",
         f"- 输入股票数: `{total_selected}`",
         "- 模式: `STEP3_SKIP_LLM=1`",
         "",
@@ -192,7 +191,7 @@ def _send_input_preview(
     artifact_path = _write_input_preview_artifact(report)
     file_enabled = _preview_file_enabled()
     file_sent = send_feishu_file(artifact_path) if file_enabled else False
-    notification = _build_input_preview_notice(model, total_selected, previews, artifact_path) if file_sent else report
+    notification = _build_input_preview_notice(total_selected, previews, artifact_path) if file_sent else report
     sent = send_feishu_notification(webhook_url, title, notification) if webhook_url else file_sent or not file_enabled
     if wecom_webhook:
         send_wecom_notification(wecom_webhook, title, notification)
@@ -229,7 +228,6 @@ def _github_run_url() -> str:
 
 
 def _build_input_preview_notice(
-    model: str,
     total_selected: int,
     previews: list[dict],
     artifact_path: str,
@@ -242,7 +240,6 @@ def _build_input_preview_notice(
     lines = [
         "完整 LLM input 已作为飞书文件发送，卡片不再展开长文本。",
         "",
-        f"- 目标模型: `{model}`",
         f"- 输入股票数: `{total_selected}`",
         f"- 分轨: `{', '.join(track_parts) if track_parts else '-'}`",
         f"- 文件名: `{os.path.basename(artifact_path)}`",
@@ -348,11 +345,14 @@ def _build_step3_llm_routes(provider: str, model: str, api_key: str, llm_base_ur
             api_key=api_key,
             base_url=llm_base_url,
         )
-    if provider == "gemini":
-        eff_key, eff_model, eff_base_url = get_provider_credentials("efficiency")
+    fallback_default = "efficiency" if provider == "gemini" else "gemini"
+    fallback_providers = os.getenv("STEP3_LLM_FALLBACK_PROVIDERS", fallback_default).split(",")
+    for fallback_provider in fallback_providers:
+        fallback_provider = fallback_provider.strip().lower()
+        eff_key, eff_model, eff_base_url = get_provider_credentials(fallback_provider)
         _append_llm_route(
             routes,
-            provider="efficiency",
+            provider=fallback_provider,
             model=eff_model,
             api_key=eff_key,
             base_url=eff_base_url,
@@ -1108,8 +1108,7 @@ def run(
         if rag_veto_lines:
             report = rag_veto_preview + report + "\n\n## 🛑 RAG 防雷剔除清单\n" + "\n".join(rag_veto_lines)
         if notify:
-            model_banner = f"🤖 模型: {_route_label(provider, model)}"
-            content = f"{model_banner}\n\n{report}"
+            content = report
             title = f"📄 批量研报 {date.today().strftime('%Y-%m-%d')}"
             if not _notify_all(title, content):
                 return (False, "feishu_failed", report)
@@ -1266,7 +1265,6 @@ def run(
             preview_blocks: list[str] = [
                 "# 🧪 Step3 模型输入预演（未调用大模型）",
                 "",
-                f"- 目标模型: `{_route_label(provider, model)}`",
                 f"- 输入股票数: `{sum(int(x.get('selected_count', 0) or 0) for x in track_requests)}`",
                 "- 模式: `STEP3_SKIP_LLM=1`",
                 "",
@@ -1312,13 +1310,6 @@ def run(
 
     report = "\n\n---\n\n".join(section for _, section in track_reports).strip()
 
-    unique_used_models = list(dict.fromkeys(used_models.values()))
-    if len(unique_used_models) == 1:
-        model_banner = f"🤖 模型: {unique_used_models[0]}（分轨调用）"
-    else:
-        model_banner = "🤖 模型: " + " | ".join(
-            f"{TRACK_LABELS.get(track, track)}={used_models.get(track, model)}" for track in active_tracks
-        )
     code_name = {str(row.get("code")): str(row.get("name", row.get("code"))) for _, row in selected_df.iterrows()}
     selected_set = set(selected_codes)
     # 优先从 Markdown 操作区提取；若未来回退为结构化 JSON，也保持兼容。
@@ -1336,7 +1327,7 @@ def run(
     ops_lines = [f"- {c} {code_name.get(c, c)}" for c in ops_codes]
     ops_preview = "## 🏹 处于起跳板速览（前置）\n" + ("\n".join(ops_lines) if ops_lines else "- 无") + "\n\n---\n"
 
-    content = f"{model_banner}\n\n{rag_veto_preview}{ops_preview}{SPRINGBOARD_ABC_LEGEND}\n{report}"
+    content = f"{rag_veto_preview}{ops_preview}{SPRINGBOARD_ABC_LEGEND}\n{report}"
     if rag_veto_lines:
         content += "\n\n## 🛑 RAG 防雷剔除清单\n" + "\n".join(rag_veto_lines)
     print(f"[step3] 飞书发送原文长度={len(content)}（不压缩，交由飞书分片）")

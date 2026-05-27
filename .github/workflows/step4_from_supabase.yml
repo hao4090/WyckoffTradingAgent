@@ -23,9 +23,12 @@ jobs:
       TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
       TICKFLOW_API_KEY: ${{ secrets.TICKFLOW_API_KEY }}
       TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
-      DEFAULT_LLM_PROVIDER: gemini
+      STEP4_LLM_PROVIDER: ${{ vars.STEP4_LLM_PROVIDER || secrets.STEP4_LLM_PROVIDER || 'efficiency' }}
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       GEMINI_MODEL: ${{ secrets.GEMINI_MODEL }}
+      EFFICIENCY_API_KEY: ${{ secrets.EFFICIENCY_API_KEY }}
+      EFFICIENCY_MODEL: ${{ secrets.EFFICIENCY_MODEL }}
+      EFFICIENCY_BASE_URL: ${{ secrets.EFFICIENCY_BASE_URL }}
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}

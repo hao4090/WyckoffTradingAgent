@@ -1502,7 +1502,6 @@ def _dump_model_input(model: str, system_prompt: str, user_message: str, symbols
 
 
 def _render_trade_ticket(
-    model: str,
     market_view: str,
     total_equity: float,
     free_cash_before: float,
@@ -1528,7 +1527,6 @@ def _render_trade_ticket(
     lines = [
         "🚨 Alpha-OMS 交易执行工单",
         f"📅 日期：{now_str} | 净权益：{total_equity:.2f} | 当前可用现金：{free_cash_before:.2f}",
-        f"🤖 模型：{model}",
     ]
     if market_view:
         lines.append(f"📌 市场视图：{market_view}")
@@ -1672,6 +1670,8 @@ def run(
     api_key: str,
     model: str,
     *,
+    provider: str = "gemini",
+    llm_base_url: str = "",
     candidate_meta: list[dict] | None = None,
     portfolio_id: str,
     tg_bot_token: str,
@@ -1794,7 +1794,7 @@ def run(
     )
 
     _dump_model_input(
-        model=model,
+        model=f"{provider}:{model}",
         system_prompt=PRIVATE_PM_DECISION_JSON_PROMPT,
         user_message=user_message,
         symbols=sorted(allowed_codes),
@@ -1803,11 +1803,12 @@ def run(
     report_progress("LLM决策", "计算中", 0.5)
     try:
         raw = call_llm(
-            provider="gemini",
+            provider=provider,
             model=model,
             api_key=api_key,
             system_prompt=PRIVATE_PM_DECISION_JSON_PROMPT,
             user_message=user_message,
+            base_url=llm_base_url or None,
             timeout=300,
             max_output_tokens=STEP4_MAX_OUTPUT_TOKENS,
         )
@@ -1945,7 +1946,6 @@ def run(
         print(f"[step4][reject_audit] summary: rejected={reject_cnt}, total={len(tickets)}")
 
     report = _render_trade_ticket(
-        model=model,
         market_view=rendered_market_view,
         total_equity=float(total_equity),
         free_cash_before=portfolio.free_cash,

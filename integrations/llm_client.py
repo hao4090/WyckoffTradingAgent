@@ -29,6 +29,9 @@ __all__ = [
     "SUPPORTED_PROVIDERS",
     "call_llm",
     "get_provider_credentials",
+    "provider_fallbacks",
+    "provider_route_chain",
+    "resolve_provider_name",
 ]
 
 GEMINI_MAX_OUTPUT_TOKENS_DEFAULT = 32768
@@ -42,7 +45,8 @@ def get_provider_credentials(provider: str) -> tuple[str, str, str]:
 
     Streamlit MVP 已下线，主分支不再从页面 session_state 读取模型配置。
     """
-    key_suffix = provider.lower()
+    provider = str(provider or "").strip().lower()
+    key_suffix = provider
     env_prefix = key_suffix.upper()
     api_key = os.getenv(f"{env_prefix}_API_KEY", "").strip()
     model = os.getenv(f"{env_prefix}_MODEL", "").strip()
@@ -54,6 +58,40 @@ def get_provider_credentials(provider: str) -> tuple[str, str, str]:
     if not model and provider == "1route":
         model = "gpt-5.5"
     return (api_key, model or "", base_url)
+
+
+def resolve_provider_name(role_env: str, default_provider: str) -> str:
+    provider = os.getenv(role_env, "").strip() if role_env else ""
+    provider = provider or os.getenv("DEFAULT_LLM_PROVIDER", "").strip() or default_provider
+    return provider.lower() or default_provider
+
+
+def provider_fallbacks(env_name: str, default: str = "") -> tuple[str, ...]:
+    raw = os.getenv(env_name, default).strip()
+    return tuple(x.strip().lower() for x in raw.split(",") if x.strip())
+
+
+def provider_route_chain(primary_provider: str, fallback_providers: tuple[str, ...] = ()) -> list[dict[str, str]]:
+    routes: list[dict[str, str]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for provider in (primary_provider, *fallback_providers):
+        provider = str(provider or "").strip().lower()
+        api_key, model, base_url = get_provider_credentials(provider)
+        key = (provider, model, base_url)
+        missing_base = provider in OPENAI_COMPATIBLE_BASE_URLS and not base_url
+        if not provider or not api_key or not model or missing_base or key in seen:
+            continue
+        seen.add(key)
+        routes.append(
+            {
+                "name": f"{provider}:{model}",
+                "provider": provider,
+                "model": model,
+                "api_key": api_key,
+                "base_url": base_url,
+            }
+        )
+    return routes
 
 
 # Gemini finish_reason 在不同 SDK/模型下可能是字符串或数字枚举，这里统一兜底识别“输出被截断”。

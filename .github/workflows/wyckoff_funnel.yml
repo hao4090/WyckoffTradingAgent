@@ -25,6 +25,9 @@ jobs:
       FUNNEL_BATCH_SIZE: "200"
       FUNNEL_BATCH_SLEEP: "0.55"
       DEFAULT_LLM_PROVIDER: ${{ secrets.DEFAULT_LLM_PROVIDER }}
+      STEP3_LLM_PROVIDER: ${{ vars.STEP3_LLM_PROVIDER || secrets.STEP3_LLM_PROVIDER || 'gemini' }}
+      STEP3_LLM_FALLBACK_PROVIDERS: ${{ vars.STEP3_LLM_FALLBACK_PROVIDERS || secrets.STEP3_LLM_FALLBACK_PROVIDERS || 'efficiency' }}
+      STEP4_LLM_PROVIDER: ${{ vars.STEP4_LLM_PROVIDER || secrets.STEP4_LLM_PROVIDER || 'efficiency' }}
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       GEMINI_MODEL: ${{ secrets.GEMINI_MODEL }}
       1ROUTE_API_KEY: ${{ secrets.ONEROUTE_API_KEY }}
@@ -61,6 +64,8 @@ jobs:
       SUPABASE_USER_ID: ${{ secrets.SUPABASE_USER_ID }}
       TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
       SERPAPI_API_KEY: ${{ secrets.SERPAPI_API_KEY }}
+      RAG_SEMANTIC_VETO_ENABLED: ${{ vars.RAG_SEMANTIC_VETO_ENABLED || '1' }}
+      RAG_SEMANTIC_PROVIDER: ${{ vars.RAG_SEMANTIC_PROVIDER || secrets.RAG_SEMANTIC_PROVIDER || 'efficiency' }}
       # 实盘风控参数：锁死 -9% 止损 + 单票仓位上限
       STEP4_BUY_HARD_STOP_ENABLED: "1"
       STEP4_BUY_HARD_STOP_PCT: "9.0"

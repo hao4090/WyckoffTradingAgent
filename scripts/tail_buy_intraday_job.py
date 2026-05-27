@@ -39,9 +39,8 @@ from core.tail_buy_strategy import (
     score_tail_features,
     select_llm_overlay_candidates,
 )
-from integrations._llm_types import DEFAULT_GEMINI_MODEL, OPENAI_COMPATIBLE_BASE_URLS
 from integrations.fetch_a_share_csv import _resolve_trading_window
-from integrations.llm_client import call_llm
+from integrations.llm_client import call_llm, provider_fallbacks, provider_route_chain, resolve_provider_name
 from integrations.supabase_base import create_admin_client, is_admin_configured
 from integrations.supabase_market_signal import (
     load_latest_market_signal_daily,
@@ -1092,12 +1091,12 @@ def _run_llm_overlay(
 def _build_llm_routes(
     *,
     primary_provider: str,
-    primary_model: str,
-    primary_api_key: str,
-    primary_base_url: str,
 ) -> list[dict[str, str]]:
-    routes: list[dict[str, str]] = []
-    seen: set[tuple[str, str, str]] = set()
+    routes = provider_route_chain(
+        primary_provider,
+        provider_fallbacks("TAIL_BUY_LLM_FALLBACK_PROVIDERS"),
+    )
+    seen = {(r["provider"], r["model"], r["base_url"]) for r in routes}
 
     def _append_route(name: str, provider: str, model: str, api_key: str, base_url: str = "") -> None:
         p = str(provider or "").strip().lower()
@@ -1119,15 +1118,6 @@ def _build_llm_routes(
                 "base_url": b,
             }
         )
-
-    primary_name = f"{primary_provider}:{primary_model}"
-    _append_route(
-        name=primary_name,
-        provider=primary_provider,
-        model=primary_model,
-        api_key=primary_api_key,
-        base_url=primary_base_url,
-    )
 
     # NVIDIA Kimi K2 作为主路由失败时的备用模型。
     nvidia_key = os.getenv("NVIDIA_API_KEY", "").strip()
@@ -1267,19 +1257,9 @@ def main() -> int:
             send_to_telegram(skip_msg, tg_bot_token=tg_bot_token, tg_chat_id=tg_chat_id)
         return 0
 
-    provider = os.getenv("DEFAULT_LLM_PROVIDER", "gemini").strip().lower() or "gemini"
-    api_key = (os.getenv(f"{provider.upper()}_API_KEY") or os.getenv("GEMINI_API_KEY") or "").strip()
-    model = (
-        os.getenv(f"{provider.upper()}_MODEL") or os.getenv("GEMINI_MODEL") or DEFAULT_GEMINI_MODEL
-    ).strip() or DEFAULT_GEMINI_MODEL
-    llm_base_url = (
-        os.getenv(f"{provider.upper()}_BASE_URL") or OPENAI_COMPATIBLE_BASE_URLS.get(provider, "") or ""
-    ).strip()
+    provider = resolve_provider_name("TAIL_BUY_LLM_PROVIDER", "efficiency")
     llm_routes = _build_llm_routes(
         primary_provider=provider,
-        primary_model=model,
-        primary_api_key=api_key,
-        primary_base_url=llm_base_url,
     )
     tickflow_api_key = os.getenv("TICKFLOW_API_KEY", "").strip()
     style = os.getenv("TAIL_BUY_STYLE", "auto").strip().lower() or "auto"
@@ -1303,10 +1283,11 @@ def main() -> int:
     intraday_batch_size = max(min(int(os.getenv("TAIL_BUY_INTRADAY_BATCH_SIZE", "200")), 200), 1)
     holding_hard_stop_pct = max(_safe_float(os.getenv("TAIL_BUY_HOLDING_HARD_STOP_PCT", "6"), 6.0), 0.0)
     portfolio_id = str(args.portfolio_id or "USER_LIVE").strip() or "USER_LIVE"
+    primary_route = llm_routes[0]["name"] if llm_routes else "disabled"
 
     _log("开始 Tail Buy 任务", logs_path)
     _log(
-        f"config: provider={provider}, model={model}, style={style}, "
+        f"config: provider={provider}, primary_route={primary_route}, style={style}, "
         f"fetch_concurrency={fetch_concurrency}, llm_concurrency={llm_concurrency}, "
         f"max_llm_symbols={max_llm_symbols}, llm_min_rule_score={llm_min_rule_score}, "
         f"llm_allowed_rule_decisions={','.join(llm_allowed_rule_decisions)}, deadline={deadline_min}m, "
@@ -1493,8 +1474,6 @@ def main() -> int:
         candidates=merged,
         llm_total=llm_total,
         llm_success=llm_success,
-        llm_route_plan=[x["name"] for x in llm_routes],
-        llm_route_stats=llm_route_stats,
         elapsed_seconds=elapsed,
         extra_sections=[holdings_section],
         extra_sections_first=True,

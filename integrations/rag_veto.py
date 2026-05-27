@@ -49,11 +49,7 @@ RAG_SEMANTIC_VETO_ENABLED = os.getenv("RAG_SEMANTIC_VETO_ENABLED", "1").strip().
     "on",
 }
 RAG_SEMANTIC_TIMEOUT = int(os.getenv("RAG_SEMANTIC_TIMEOUT", "25"))
-from integrations._llm_types import DEFAULT_GEMINI_MODEL as _DEFAULT_GEMINI_MODEL
-
-RAG_SEMANTIC_MODEL = (
-    os.getenv("RAG_SEMANTIC_MODEL", "").strip() or os.getenv("GEMINI_MODEL", "").strip() or _DEFAULT_GEMINI_MODEL
-)
+RAG_SEMANTIC_PROVIDER = os.getenv("RAG_SEMANTIC_PROVIDER", "efficiency").strip().lower() or "efficiency"
 _STAR_ST_PATTERN = re.compile(r"(?<![a-z0-9])(?:\*|＊)st\s*[\u4e00-\u9fff]", re.IGNORECASE)
 _ST_PATTERN = re.compile(r"(?<![a-z0-9\*＊])st\s*[\u4e00-\u9fff]", re.IGNORECASE)
 
@@ -176,21 +172,7 @@ def _parse_semantic_judgement(raw: str) -> tuple[bool | None, str]:
     return (None, "")
 
 
-def _semantic_negative_via_gemini(
-    code: str,
-    name: str,
-    hits: list[str],
-    snippets: list[str],
-) -> tuple[bool | None, str | None]:
-    """关键词命中后的二次语义判定。"""
-    if not RAG_SEMANTIC_VETO_ENABLED:
-        return (None, None)
-    api_key = (os.getenv("GEMINI_API_KEY") or "").strip()
-    if not api_key:
-        return (None, "semantic_disabled:missing_gemini_api_key")
-
-    from integrations.llm_client import call_llm
-
+def _semantic_news_content(hits: list[str], snippets: list[str]) -> str:
     normalized_hits = [str(h or "").strip().lower() for h in hits if str(h or "").strip()]
     cleaned_snippets = [s for s in snippets if str(s or "").strip()]
     relevant_snippets: list[str] = []
@@ -201,13 +183,10 @@ def _semantic_negative_via_gemini(
                 relevant_snippets.append(s)
     if not relevant_snippets:
         relevant_snippets = cleaned_snippets[:2]
+    return "\n\n".join(relevant_snippets[:3]).strip()[:3000]
 
-    content = "\n\n".join(relevant_snippets[:3]).strip()
-    if not content:
-        return (None, "semantic_disabled:empty_snippets")
-    if len(content) > 3000:
-        content = content[:3000]
 
+def _semantic_prompt(code: str, name: str, hits: list[str], content: str) -> tuple[str, str]:
     system_prompt = (
         "你是A股舆情风控判定器。任务是判断新闻是否构成【极端负面实锤风险】。\n"
         "极端负面=监管立案属实、财务造假属实、退市风险、重大诉讼败诉、债务违约等会显著打击股价的事件。\n"
@@ -221,13 +200,37 @@ def _semantic_negative_via_gemini(
         f"{content}\n\n"
         '输出格式: {{"is_extreme_negative": true|false, "reason": "<20字内原因>"}}'
     )
+    return system_prompt, user_message
+
+
+def _semantic_negative_via_llm(
+    code: str,
+    name: str,
+    hits: list[str],
+    snippets: list[str],
+) -> tuple[bool | None, str | None]:
+    """关键词命中后的二次语义判定。"""
+    if not RAG_SEMANTIC_VETO_ENABLED:
+        return (None, None)
+    from integrations.llm_client import call_llm, get_provider_credentials
+
+    api_key, model, base_url = get_provider_credentials(RAG_SEMANTIC_PROVIDER)
+    model = os.getenv("RAG_SEMANTIC_MODEL", "").strip() or model
+    if not api_key or not model:
+        return (None, f"semantic_disabled:missing_{RAG_SEMANTIC_PROVIDER}_config")
+
+    content = _semantic_news_content(hits, snippets)
+    if not content:
+        return (None, "semantic_disabled:empty_snippets")
+    system_prompt, user_message = _semantic_prompt(code, name, hits, content)
     try:
         raw = call_llm(
-            provider="gemini",
-            model=RAG_SEMANTIC_MODEL,
+            provider=RAG_SEMANTIC_PROVIDER,
+            model=model,
             api_key=api_key,
             system_prompt=system_prompt,
             user_message=user_message,
+            base_url=base_url or None,
             timeout=max(RAG_SEMANTIC_TIMEOUT, 8),
             max_output_tokens=256,
         )
@@ -296,7 +299,7 @@ def _scan_one(code: str, name: str, keywords: list[str]) -> VetoResult:
     semantic_negative: bool | None = None
     semantic_reason: str | None = None
     semantic_err: str | None = None
-    verdict, reason_or_err = _semantic_negative_via_gemini(
+    verdict, reason_or_err = _semantic_negative_via_llm(
         code=code,
         name=name,
         hits=hits,
