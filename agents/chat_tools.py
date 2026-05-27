@@ -1438,6 +1438,8 @@ def generate_strategy_decision(tool_context: ToolContext) -> dict:
             benchmark_context=None,
             api_key=api_key,
             model=model,
+            provider=provider,
+            llm_base_url=base_url,
             portfolio_id=portfolio_id,
             tg_bot_token=tg_bot_token,
             tg_chat_id=tg_chat_id,

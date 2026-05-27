@@ -19,7 +19,7 @@ if __name__ == "__main__" or not __package__:
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.constants import TABLE_RECOMMENDATION_TRACKING
-from integrations._llm_types import DEFAULT_GEMINI_MODEL
+from integrations.llm_client import get_provider_credentials, resolve_provider_name
 from integrations.supabase_base import close_client, create_admin_client
 from scripts.daily_job import TZ, _latest_trade_date_str, _load_step4_target, _log, _run_step4_pipeline
 
@@ -128,11 +128,8 @@ def main() -> int:
         return 1
     _log(f"Step4 direct run: target={step4_target['portfolio_id']}", logs_path)
 
-    provider = os.getenv("DEFAULT_LLM_PROVIDER", "gemini").strip().lower() or "gemini"
-    api_key = (os.getenv(f"{provider.upper()}_API_KEY") or os.getenv("GEMINI_API_KEY") or "").strip()
-    model = (
-        os.getenv(f"{provider.upper()}_MODEL") or os.getenv("GEMINI_MODEL", DEFAULT_GEMINI_MODEL)
-    ).strip() or DEFAULT_GEMINI_MODEL
+    provider = resolve_provider_name("STEP4_LLM_PROVIDER", "efficiency")
+    api_key, model, llm_base_url = get_provider_credentials(provider)
 
     summary = _run_step4_pipeline(
         step4_target=step4_target,
@@ -142,6 +139,8 @@ def main() -> int:
         benchmark_context={},
         api_key=api_key,
         model=model,
+        provider=provider,
+        llm_base_url=llm_base_url,
         logs_path=logs_path,
     )
     _log("Step4 direct run summary: " + json.dumps(summary, ensure_ascii=False), logs_path)

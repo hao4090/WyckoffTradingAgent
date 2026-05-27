@@ -638,8 +638,6 @@ def build_tail_buy_markdown(
     candidates: list[TailBuyCandidate],
     llm_total: int,
     llm_success: int,
-    llm_route_plan: list[str] | None = None,
-    llm_route_stats: dict[str, int] | None = None,
     elapsed_seconds: float,
     extra_sections: list[str] | None = None,
     extra_sections_first: bool = False,
@@ -648,10 +646,6 @@ def build_tail_buy_markdown(
     buy_only: bool = False,
 ) -> str:
     counts = summarize_decision_counts(candidates)
-    llm_route_plan = list(llm_route_plan or [])
-    llm_route_stats = dict(llm_route_stats or {})
-    route_line = " -> ".join(llm_route_plan) if llm_route_plan else "未启用"
-    route_hits = ", ".join([f"{k}:{v}" for k, v in sorted(llm_route_stats.items())]) if llm_route_stats else "无"
     source_text = str(candidate_source or "").strip() or (
         f"signal_pending（signal_date={target_signal_date}, status in pending/confirmed）"
     )
@@ -662,9 +656,7 @@ def build_tail_buy_markdown(
         f"- 扫描数量: {len(candidates)}",
         f"- 分层结果: BUY={counts[DECISION_BUY]}"
         + ("" if buy_only else f" / WATCH={counts[DECISION_WATCH]} / SKIP={counts[DECISION_SKIP]}"),
-        f"- LLM 二判: {llm_success}/{llm_total}",
-        f"- LLM 路由: {route_line}",
-        f"- LLM 命中: {route_hits}",
+        f"- AI 二判: {llm_success}/{llm_total}",
         f"- 总耗时: {elapsed_seconds:.1f}s",
         "",
         f"⚠️ 风险提醒: {market_reminder}",
@@ -686,8 +678,7 @@ def build_tail_buy_markdown(
             reasons = "；".join(item.rule_reasons[:2]) if item.rule_reasons else "规则信号一般"
             llm_tag = ""
             if item.llm_decision:
-                model_used = f"@{item.llm_model_used}" if item.llm_model_used else ""
-                llm_tag = f" | LLM:{item.llm_decision}{model_used}"
+                llm_tag = f" | AI:{item.llm_decision}"
             llm_reason = f" | {item.llm_reason}" if item.llm_reason else ""
             add_tag = "[加仓] " if item.signal_type == "holding" else ""
             lines.append(
