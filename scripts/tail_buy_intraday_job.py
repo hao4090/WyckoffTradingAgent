@@ -1348,7 +1348,9 @@ def main() -> int:
     llm_success = 0
     llm_route_stats: dict[str, int] = {}
 
+    data_fetched_at: str = ""
     if pending_candidates:
+        data_fetched_at = _now_text()
         if use_batch_intraday:
             _log(
                 f"规则扫描模式: batch（batch_size={intraday_batch_size}, candidates={len(pending_candidates)}）",
@@ -1479,6 +1481,7 @@ def main() -> int:
         extra_sections_first=True,
         candidate_source=candidate_source_desc,
         buy_only=True,
+        data_fetched_at=data_fetched_at,
     )
     feishu_ok, tg_ok = _send_notifications(
         feishu_webhook=feishu_webhook,

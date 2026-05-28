@@ -659,6 +659,7 @@ def build_tail_buy_markdown(
     max_error_items_per_block: int = 5,
     candidate_source: str | None = None,
     buy_only: bool = False,
+    data_fetched_at: str = "",
 ) -> str:
     counts = summarize_decision_counts(candidates)
     source_text = str(candidate_source or "").strip() or (
@@ -672,6 +673,7 @@ def build_tail_buy_markdown(
         f"- 分层结果: BUY={counts[DECISION_BUY]}"
         + ("" if buy_only else f" / WATCH={counts[DECISION_WATCH]} / SKIP={counts[DECISION_SKIP]}"),
         f"- AI 二判: {llm_success}/{llm_total}",
+        f"- 分时数据获取: {data_fetched_at}" if data_fetched_at else "- 分时数据获取: -",
         f"- 总耗时: {elapsed_seconds:.1f}s",
         "",
         f"⚠️ 风险提醒: {market_reminder}",
