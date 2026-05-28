@@ -499,6 +499,7 @@ def send_tail_buy_card(webhook_url: str, title: str, content: str) -> bool:
     decision_line = _tail_buy_extract_line(lines, "- 分层结果:")
     llm_line = _tail_buy_extract_line(lines, "- LLM 二判:")
     route_line = _tail_buy_extract_line(lines, "- LLM 路由:")
+    data_fetched_line = _tail_buy_extract_line(lines, "- 分时数据获取:")
     elapsed_line = _tail_buy_extract_line(lines, "- 总耗时:")
     risk_line = next((x.strip() for x in lines if x.strip().startswith("⚠️ 风险提醒:")), "")
 
@@ -586,6 +587,8 @@ def send_tail_buy_card(webhook_url: str, title: str, content: str) -> bool:
     )
     if route_line:
         elements.append({"tag": "div", "text": {"tag": "lark_md", "content": f"LLM 路由：`{route_line}`"}})
+    if data_fetched_line:
+        elements.append({"tag": "div", "text": {"tag": "lark_md", "content": f"分时数据获取：`{data_fetched_line}`"}})
     if risk_line:
         elements.append({"tag": "note", "elements": [{"tag": "plain_text", "content": risk_line}]})
 
