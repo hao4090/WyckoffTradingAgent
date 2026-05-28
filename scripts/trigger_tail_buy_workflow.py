@@ -12,7 +12,7 @@ import urllib.request
 from datetime import UTC, datetime
 from pathlib import Path
 
-DEFAULT_REPO = "YoungCan-Wang/Wyckoff-Analysis"
+REPO = "YoungCan-Wang/WyckoffTradingAgent"
 WORKFLOW_FILE = "tail_buy_1420.yml"
 DEFAULT_REF = "main"
 TRIGGER_FILE = Path(".github/triggers/tail-buy")
@@ -27,8 +27,7 @@ def _github_token() -> str:
 
 
 def _dispatch_with_api(token: str, ref: str) -> int:
-    repo = os.getenv("TAIL_BUY_WORKFLOW_REPO", "").strip() or os.getenv("GITHUB_REPOSITORY", "").strip() or DEFAULT_REPO
-    url = f"https://api.github.com/repos/{repo}/actions/workflows/{WORKFLOW_FILE}/dispatches"
+    url = f"https://api.github.com/repos/{REPO}/actions/workflows/{WORKFLOW_FILE}/dispatches"
     req = urllib.request.Request(
         url,
         data=json.dumps({"ref": ref}).encode(),
