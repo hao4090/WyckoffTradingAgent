@@ -24,7 +24,7 @@ from threading import Lock
 # ── 全局滑动窗口限流器（进程级单例，线程安全） ──
 logger = logging.getLogger(__name__)
 
-_RATE_LIMIT = int(os.getenv("TUSHARE_RATE_LIMIT", "400"))  # 次/分钟
+_RATE_LIMIT = int(os.getenv("TUSHARE_RATE_LIMIT", "200"))  # 次/分钟（Tushare 500次/分钟上限，但 ts.pro_bar 内部会调用 adj_factor 等多个接口，实际每次≈2-3次调用）
 _call_times: list[float] = []
 _call_lock = Lock()
 
