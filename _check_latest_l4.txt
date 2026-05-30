@@ -1,0 +1,28 @@
+import sqlite3, os
+from pathlib import Path
+
+db_path = Path.home() / '.wyckoff' / 'wyckoff.db'
+conn = sqlite3.connect(str(db_path))
+cur = conn.cursor()
+
+# 最新 L4 日期
+cur.execute("SELECT MAX(recommend_date) FROM recommendation_tracking")
+max_date = cur.fetchone()[0]
+print(f"Latest L4 date in DB: {max_date}")
+print()
+
+# 全量 L4
+cur.execute("""
+    SELECT code, name, recommend_reason, is_ai_recommended, camp
+    FROM recommendation_tracking
+    WHERE recommend_date = ?
+    ORDER BY code
+""", (max_date,))
+rows = cur.fetchall()
+print(f"L4 records for {max_date}: {len(rows)}")
+for row in rows:
+    ai_flag = "[AI]" if row[3] else "[  ]"
+    camp = row[4] if row[4] else ""
+    print(f"  {ai_flag} {row[0]:>6} {row[1]:<14} | {row[2]} | camp={camp}")
+
+conn.close()

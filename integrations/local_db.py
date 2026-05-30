@@ -11,7 +11,7 @@ import json
 import logging
 import sqlite3
 import threading
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from core import constants as core_constants
@@ -851,7 +851,7 @@ def search_memory_hybrid(
         _merge(kw_results, 0.6)
 
     # 4. 时间衰减加权
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     for m in candidates.values():
         created = m.get("created_at", "")
         if created:
@@ -875,7 +875,7 @@ def search_memory_hybrid(
 
 def prune_memories(keep_days: int = 90) -> int:
     conn = get_db()
-    cutoff = (datetime.utcnow() - timedelta(days=keep_days)).isoformat()
+    cutoff = (datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=keep_days)).isoformat()
     with conn:
         cur = conn.execute(
             "DELETE FROM agent_memory WHERE created_at < ? AND memory_type NOT IN ('preference', 'persona')",
@@ -912,7 +912,7 @@ def needs_sync(table_name: str, max_age_hours: int = 6) -> bool:
         return True
     try:
         last = datetime.fromisoformat(meta["last_synced_at"])
-        return datetime.utcnow() - last > timedelta(hours=max_age_hours)
+        return datetime.now(timezone.utc).replace(tzinfo=None) - last > timedelta(hours=max_age_hours)
     except (ValueError, TypeError):
         return True
 

@@ -1,0 +1,59 @@
+import sqlite3
+from pathlib import Path
+
+db_path = Path.home() / '.wyckoff' / 'wyckoff.db'
+conn = sqlite3.connect(str(db_path))
+cursor = conn.cursor()
+
+# 1. 全量 L4 命中 (2026-05-26)
+print("=== FULL L4 HITS (2026-05-26) ===")
+cursor.execute("""
+    SELECT code, name, recommend_reason, is_ai_recommended, camp, rag_vetoed
+    FROM recommendation_tracking
+    WHERE recommend_date = 20260526
+    ORDER BY code
+""")
+rows = cursor.fetchall()
+for i, row in enumerate(rows):
+    code, name, reason, ai, camp, veto = row
+    flag = "AI" if ai else "   "
+    veto_flag = " VETO" if veto else ""
+    print(f"{i+1:02d}. [{flag}] {code} {name:<10s} | {reason:<30s} | camp={camp or '':<20s}{veto_flag}")
+
+# 2. 统计
+print("\n=== SUMMARY ===")
+cursor.execute("""
+    SELECT is_ai_recommended, COUNT(*) as cnt
+    FROM recommendation_tracking
+    WHERE recommend_date = 20260526
+    GROUP BY is_ai_recommended
+""")
+for row in cursor.fetchall():
+    label = "STEP3 AI 入选" if row[0] else "L4 仅命中(未进AI)"
+    print(f"  {label}: {row[1]}")
+
+# 3. 按 recommend_reason 分类
+print("\n=== BY TRIGGER TYPE ===")
+cursor.execute("""
+    SELECT recommend_reason, COUNT(*), SUM(is_ai_recommended)
+    FROM recommendation_tracking
+    WHERE recommend_date = 20260526
+    GROUP BY recommend_reason
+    ORDER BY COUNT(*) DESC
+""")
+for row in cursor.fetchall():
+    print(f"  {row[0]}: {row[1]} total, {row[2]} AI入选")
+
+# 4. camp 分布
+print("\n=== CAMP DISTRIBUTION (AI入选) ===")
+cursor.execute("""
+    SELECT camp, COUNT(*)
+    FROM recommendation_tracking
+    WHERE recommend_date = 20260526 AND is_ai_recommended = 1
+    GROUP BY camp
+    ORDER BY COUNT(*) DESC
+""")
+for row in cursor.fetchall():
+    print(f"  {row[0]}: {row[1]}")
+
+conn.close()

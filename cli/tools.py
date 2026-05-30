@@ -124,7 +124,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     },
     {
         "name": "generate_ai_report",
-        "description": "对指定股票列表生成威科夫三阵营 AI 深度研报（逻辑破产/储备营地/起跳板）。需要 Gemini API Key。最多 10 只。",
+        "description": "对指定股票列表生成威科夫三阵营 AI 深度研报（逻辑破产/储备营地/起跳板）。需要配置 LLM API Key。最多 10 只。",
         "parameters": {
             "type": "object",
             "properties": {
@@ -139,7 +139,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     },
     {
         "name": "generate_strategy_decision",
-        "description": "综合持仓和候选标的，生成去留决策（EXIT/TRIM/HOLD/PROBE/ATTACK）。需要 Gemini API Key 和持仓数据。",
+        "description": "综合持仓和候选标的，生成去留决策（EXIT/TRIM/HOLD/PROBE/ATTACK）。需要配置 LLM API Key 和持仓数据。",
         "parameters": {
             "type": "object",
             "properties": {},
@@ -267,14 +267,42 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     },
     {
         "name": "read_file",
-        "description": "读取用户本地文件内容。支持 txt/csv/json/xlsx 等格式。用户发来文件路径时使用此工具。CSV/Excel 自动解析为表格预览（前 50 行）。",
+        "description": "读取用户本地文件内容。支持 txt/csv/json/xlsx/log/md 等格式。大文件可用 offset+limit 分段读取。CSV/Excel 自动解析为表格预览。参数 path 和 file 等效。",
         "parameters": {
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "文件路径（绝对路径或 ~ 开头）"},
+                "path": {"type": "string", "description": "文件路径（绝对路径或 ~ 开头）。与 file 等效"},
+                "file": {"type": "string", "description": "文件路径，与 path 等效。二选一即可"},
                 "encoding": {"type": "string", "description": "文件编码，默认 utf-8"},
+                "offset": {"type": "integer", "description": "从第几行开始读（0=开头），仅纯文本文件生效"},
+                "limit": {"type": "integer", "description": "最多读多少行（0=不限制），仅纯文本文件生效"},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "list_directory",
+        "description": "列出目录内容。用于探索项目结构、查找文件和子目录。只能传目录路径，不能传文件路径。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "目录路径（绝对路径或 ~ 开头）"},
             },
             "required": ["path"],
+        },
+    },
+    {
+        "name": "search_file_content",
+        "description": "在项目文件中搜索文本内容（类似 grep）。用于在代码、日志、配置中查找关键词。支持正则表达式。传文件路径会自动转为父目录。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "pattern": {"type": "string", "description": "搜索文本（支持正则表达式，如 'def foo'、'ERROR|WARN'）"},
+                "path": {"type": "string", "description": "搜索起始目录（绝对路径），默认项目根目录"},
+                "file_pattern": {"type": "string", "description": "文件名匹配（如 '*.py'、'*.log'），默认搜索所有文本文件"},
+                "max_matches": {"type": "integer", "description": "最多返回多少条匹配，默认 50"},
+            },
+            "required": ["pattern"],
         },
     },
     {
@@ -331,6 +359,8 @@ TOOL_SPECS: dict[str, ToolSpec] = {
     "check_background_tasks": ToolSpec("check_background_tasks", "任务状态"),
     "exec_command": ToolSpec("exec_command", "执行命令", requires_approval=True),
     "read_file": ToolSpec("read_file", "读取文件"),
+    "list_directory": ToolSpec("list_directory", "列出目录"),
+    "search_file_content": ToolSpec("search_file_content", "搜索文件内容"),
     "write_file": ToolSpec("write_file", "写入文件", requires_approval=True),
     "web_fetch": ToolSpec("web_fetch", "抓取网页"),
     "delegate_to_research": ToolSpec("delegate_to_research", "委派研究员"),
@@ -366,6 +396,8 @@ def is_concurrency_safe(name: str) -> bool:
 class ToolRegistry:
     """工具注册表：注册、查询 schema、执行工具。"""
 
+    _BG_CHECK_COOLDOWNS = (15, 30, 60, 120)
+
     def __init__(self, user_id: str = "", access_token: str = "", refresh_token: str = ""):
         self._tool_context = ToolContext(
             state={
@@ -380,6 +412,9 @@ class ToolRegistry:
         self._on_bg_complete = None
         self._confirm_callback = None
         self._always_allowed: set[str] = set()
+        self._bg_check_count = 0
+        self._bg_last_check_ts = 0.0
+        self._bg_last_check_result: dict | None = None
 
     def set_provider(self, provider):
         """注入 LLM Provider，供委派工具启动 sub-agent。"""
@@ -409,11 +444,13 @@ class ToolRegistry:
             generate_strategy_decision,
             get_market_history,
             get_market_overview,
+            list_directory,
             portfolio,
             query_history,
             read_file,
             run_backtest,
             screen_stocks,
+            search_file_content,
             search_stock_by_name,
             update_portfolio,
             web_fetch,
@@ -442,6 +479,8 @@ class ToolRegistry:
             "delegate_to_trading": delegate_to_trading,
             "exec_command": exec_command,
             "read_file": read_file,
+            "list_directory": list_directory,
+            "search_file_content": search_file_content,
             "write_file": write_file,
             "web_fetch": web_fetch,
         }
@@ -452,11 +491,8 @@ class ToolRegistry:
 
     def execute(self, name: str, args: dict[str, Any]) -> Any:
         """执行指定工具，返回结果。长任务自动提交后台。"""
-        # check_background_tasks 直接返回状态
         if name == "check_background_tasks":
-            if not self._bg_manager:
-                return {"tasks": [], "message": "无后台任务"}
-            return {"tasks": self._bg_manager.list_tasks()}
+            return self._check_bg_with_cooldown()
 
         fn = self._tools.get(name)
         if fn is None:
@@ -501,6 +537,53 @@ class ToolRegistry:
         except Exception as e:
             logger.exception("Tool %s execution failed", name)
             return {"error": f"工具执行失败: {e}"}
+
+    def _check_bg_with_cooldown(self) -> dict:
+        """查询后台任务状态，带冷却机制防止 Agent 高频轮询烧光工具轮次。"""
+        if not self._bg_manager:
+            return {"tasks": [], "message": "无后台任务"}
+
+        tasks = self._bg_manager.list_tasks()
+        running = [t for t in tasks if t.get("status") == "running"]
+        now = time.monotonic()
+
+        if not running:
+            self._bg_check_count = 0
+            self._bg_last_check_ts = 0.0
+            self._bg_last_check_result = None
+            return {"tasks": tasks}
+
+        # 如果和上次一样全在运行中，递增计数；否则重置
+        if self._bg_last_check_result:
+            prev_running = [t for t in self._bg_last_check_result.get("tasks", []) if t.get("status") == "running"]
+            prev_ids = {t.get("task_id") for t in prev_running}
+            cur_ids = {t.get("task_id") for t in running}
+            if prev_ids == cur_ids:
+                self._bg_check_count += 1
+            else:
+                self._bg_check_count = 0
+        else:
+            self._bg_check_count = 0
+
+        cooldown = self._BG_CHECK_COOLDOWNS[min(self._bg_check_count, len(self._BG_CHECK_COOLDOWNS) - 1)]
+        elapsed = now - self._bg_last_check_ts
+
+        if self._bg_check_count > 0 and elapsed < cooldown:
+            remain = int(cooldown - elapsed)
+            return {
+                "tasks": tasks,
+                "_cooldown": True,
+                "message": (
+                    f"后台任务仍在运行（{', '.join(t.get('tool_name', '?') for t in running)}），"
+                    f"请至少等待 {remain} 秒后再查询，频繁轮询不会让任务变快。"
+                    f"等待期间可用 read_file / search_file_content / list_directory 阅读日志或代码。"
+                ),
+            }
+
+        self._bg_last_check_ts = now
+        result: dict = {"tasks": tasks}
+        self._bg_last_check_result = result
+        return result
 
     def display_name(self, name: str) -> str:
         """返回工具的中文显示名。"""

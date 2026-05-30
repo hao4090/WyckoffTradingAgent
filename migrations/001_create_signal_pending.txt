@@ -1,0 +1,66 @@
+-- 创建 signal_pending 表 — Wyckoff 信号确认池
+-- 在 Supabase SQL Editor 中执行此脚本
+-- URL: https://supabase.com/dashboard/project/yfyivczvmorpqdyehfmn/sql/new
+
+CREATE TABLE IF NOT EXISTS public.signal_pending (
+    id              BIGSERIAL PRIMARY KEY,
+    code            INTEGER      NOT NULL,
+    name            TEXT,
+    signal_type     TEXT         NOT NULL,   -- sos / spring / lps / evr / compression
+    signal_date     TEXT         NOT NULL,   -- YYYY-MM-DD
+    signal_score    DOUBLE PRECISION,
+    status          TEXT         NOT NULL DEFAULT 'pending',  -- pending / confirmed / expired
+    ttl_days        INTEGER      NOT NULL DEFAULT 3,
+    days_elapsed    INTEGER      NOT NULL DEFAULT 0,
+    regime          TEXT,
+    industry        TEXT,
+
+    -- snap columns (from build_snap)
+    snap_open       DOUBLE PRECISION,
+    snap_high       DOUBLE PRECISION,
+    snap_low        DOUBLE PRECISION,
+    snap_close      DOUBLE PRECISION,
+    snap_volume     DOUBLE PRECISION,
+    snap_ma20       DOUBLE PRECISION,
+    snap_ma50       DOUBLE PRECISION,
+    snap_support    DOUBLE PRECISION,
+
+    -- lifecycle
+    confirm_date    DATE,
+    expire_date     DATE,
+    confirm_reason  TEXT,
+
+    -- timestamps
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- 索引
+CREATE INDEX IF NOT EXISTS idx_signal_pending_status    ON public.signal_pending (status);
+CREATE INDEX IF NOT EXISTS idx_signal_pending_code      ON public.signal_pending (code);
+CREATE INDEX IF NOT EXISTS idx_signal_pending_date      ON public.signal_pending (signal_date);
+
+-- RLS: 允许 anon 读写（与 recommendation_tracking 策略一致）
+ALTER TABLE public.signal_pending ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Allow all on signal_pending" ON public.signal_pending;
+CREATE POLICY "Allow all on signal_pending"
+    ON public.signal_pending
+    FOR ALL
+    USING (true)
+    WITH CHECK (true);
+
+-- updated_at 自动更新触发器
+CREATE OR REPLACE FUNCTION public.update_signal_pending_modtime()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = now();
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_signal_pending_modtime ON public.signal_pending;
+CREATE TRIGGER trg_signal_pending_modtime
+    BEFORE UPDATE ON public.signal_pending
+    FOR EACH ROW
+    EXECUTE FUNCTION public.update_signal_pending_modtime();

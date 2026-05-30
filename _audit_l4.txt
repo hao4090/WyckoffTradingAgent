@@ -1,0 +1,53 @@
+import sqlite3, os
+from pathlib import Path
+
+db_path = Path.home() / '.wyckoff' / 'wyckoff.db'
+conn = sqlite3.connect(str(db_path))
+cur = conn.cursor()
+
+# 最近5天 L4 vs AI 统计
+print("=== L4 vs STEP3 AI: LAST 5 DAYS ===")
+cur.execute("""
+    SELECT recommend_date,
+           COUNT(*) as total_l4,
+           SUM(is_ai_recommended) as ai_count,
+           SUM(CASE WHEN camp != '' AND camp IS NOT NULL THEN 1 ELSE 0 END) as camp_assigned
+    FROM recommendation_tracking
+    WHERE recommend_date >= 20260525
+    GROUP BY recommend_date
+    ORDER BY recommend_date
+""")
+for row in cur.fetchall():
+    print(f"  {row[0]}: L4={row[1]}, AI入选={row[2]}, 有camp={row[3]}")
+
+print()
+print("=== TODAY FULL L4 (20260530) ===")
+cur.execute("""
+    SELECT code, name, recommend_reason, is_ai_recommended, camp
+    FROM recommendation_tracking
+    WHERE recommend_date = 20260530
+    ORDER BY code
+""")
+rows = cur.fetchall()
+print(f"  Total: {len(rows)}")
+for row in rows:
+    ai_flag = "[AI]" if row[3] else "[  ]"
+    camp = row[4] if row[4] else ""
+    print(f"  {ai_flag} {row[0]:>6} {row[1]:<12} | {row[2]} | camp={camp}")
+
+print()
+print("=== YESTERDAY FULL L4 (20260529) ===")
+cur.execute("""
+    SELECT code, name, recommend_reason, is_ai_recommended, camp
+    FROM recommendation_tracking
+    WHERE recommend_date = 20260529
+    ORDER BY code
+""")
+rows = cur.fetchall()
+print(f"  Total: {len(rows)}")
+for row in rows:
+    ai_flag = "[AI]" if row[3] else "[  ]"
+    camp = row[4] if row[4] else ""
+    print(f"  {ai_flag} {row[0]:>6} {row[1]:<12} | {row[2]} | camp={camp}")
+
+conn.close()

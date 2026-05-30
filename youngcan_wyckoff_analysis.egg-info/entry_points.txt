@@ -1,0 +1,3 @@
+[console_scripts]
+wyckoff = cli.__main__:main
+wyckoff-mcp = mcp_server:main

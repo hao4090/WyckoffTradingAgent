@@ -96,6 +96,14 @@ def _make_csi_u_input_thread(driver_self) -> None:
             pass
 
 
+def _can_patch_linux_driver() -> bool:
+    try:
+        from textual.drivers.linux_driver import LinuxDriver  # noqa: F811
+        return True
+    except (ImportError, ModuleNotFoundError):
+        return False
+
+
 def _patch_driver_no_kitty() -> None:
     from textual.drivers.linux_driver import LinuxDriver
 
@@ -112,7 +120,8 @@ def _patch_driver_no_kitty() -> None:
     LinuxDriver.run_input_thread = _make_csi_u_input_thread
 
 
-_patch_driver_no_kitty()
+if _can_patch_linux_driver():
+    _patch_driver_no_kitty()
 
 # ---------------------------------------------------------------------------
 # Widget

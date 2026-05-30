@@ -150,13 +150,31 @@ def _cmd_update(_args):
 
 
 def _cmd_auth(args):
-    from cli.auth import _load_session, login, logout, restore_session
+    from cli.auth import _load_session, login, logout, restore_session, signup
 
     sub = args.auth_cmd
 
     if sub == "logout":
         logout()
         print("✓ 已退出登录")
+        return
+
+    if sub == "register":
+        email = args.email or args.password_or_email
+        password = args.password_or_email
+        if not password:
+            import getpass
+
+            password = getpass.getpass("密码: ")
+        try:
+            session = signup(email, password)
+            if session.pop("email_confirm", False):
+                print(f"✓ 注册成功，确认邮件已发送至 {session['email']}，请查收")
+            else:
+                print(f"✓ 注册并登录成功: {session['email']}")
+                print(f"  user_id: {session['user_id']}")
+        except Exception as e:
+            print(f"✗ 注册失败: {e}")
         return
 
     if sub == "status":
@@ -174,7 +192,7 @@ def _cmd_auth(args):
 
     # wyckoff auth <email> <password>
     email = sub
-    password = args.password
+    password = args.password_or_email
     if not password:
         import getpass
 
@@ -1197,7 +1215,15 @@ def _cmd_tui(_args=None):
 
     from core.prompts import CHAT_AGENT_SYSTEM_PROMPT
 
-    system_prompt = CHAT_AGENT_SYSTEM_PROMPT
+    _project_root = Path(__file__).resolve().parent.parent
+    system_prompt = (
+        f"# 项目环境\n"
+        f"项目根目录: {_project_root}\n"
+        f"所有源码、日志、数据文件都在此目录下。读取文件时使用绝对路径，不要猜测。\n"
+        f"关键目录: scripts/(漏斗/Step3/Step4脚本) data/funnel_snapshots/(漏斗L4快照输出) logs/(Step3预览和日志)\n"
+        f"注意: 如果 data/funnel_snapshots/ 或 logs/ 是空的，说明本地还没跑过定时任务。此时直接告诉用户\"本地暂无漏斗运行记录\"，不要反复搜索不存在的文件。\n\n"
+        f"{CHAT_AGENT_SYSTEM_PROMPT}"
+    )
 
     state = {"provider": None, "provider_name": "", "model": "", "api_key": "", "base_url": ""}
 
@@ -1358,9 +1384,10 @@ def main():
     sub.add_parser("update", help="升级到最新版")
 
     # wyckoff auth
-    p_auth = sub.add_parser("auth", help="登录/登出/状态")
-    p_auth.add_argument("auth_cmd", help="email 或 logout/status")
-    p_auth.add_argument("password", nargs="?", default="", help="密码（可省略，交互输入）")
+    p_auth = sub.add_parser("auth", help="登录/注册/登出/状态")
+    p_auth.add_argument("auth_cmd", help="email 登录 / register 注册 / logout 登出 / status 状态")
+    p_auth.add_argument("password_or_email", nargs="?", default="", help="密码或邮箱（可省略，交互输入）")
+    p_auth.add_argument("--email", default="", help="邮箱 (register 时使用)")
 
     # wyckoff model
     p_model = sub.add_parser("model", help="模型管理")

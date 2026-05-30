@@ -23,17 +23,21 @@ class PromptTemplate:
 BUILTIN_PROMPT_TEMPLATES: dict[str, PromptTemplate] = {
     "daily": PromptTemplate(
         name="daily",
-        description="每日盘面复盘：大盘水温、机会池、持仓风险",
+        description="每日全管道：漏斗筛选 + AI 研报 + 飞书推送",
         argument_hint="[关注方向/持仓]",
         prompt=(
-            "做一次每日 Wyckoff 投研复盘。\n"
+            "做一次每日 Wyckoff 全管道复盘，包含漏斗筛选和 AI 研报，结果自动推送飞书。\n"
             "用户补充：{user_input}\n\n"
             "请按这个顺序执行：\n"
-            "1. 调用 get_market_overview() 判断大盘水温。\n"
-            '2. 调用 query_history(source="recommendation", limit=20) 查看近期形态复盘池。\n'
-            '3. 调用 query_history(source="signal", status="pending", limit=20) 查看待确认信号。\n'
-            '4. 如果用户提到持仓或当前组合，再调用 portfolio(mode="view")；没有提到就不要主动诊断持仓。\n'
-            "5. 输出：市场状态、今日可观察方向、需要回避的风险、下一步动作。"
+            "1. 先调用 get_market_overview() 判断大盘水温，快速返回。\n"
+            '2. 调用 screen_stocks(board="all") 启动全市场漏斗筛选。这是后台任务，会花几分钟。\n'
+            "3. 漏斗完成后，拿到 symbols_info，调用 generate_ai_report 为候选股票生成深度研报。这也是后台任务。\n"
+            '4. 等待期间调用 query_history(source="recommendation", limit=20) 和 query_history(source="signal", status="pending", limit=20)。\n'
+            '5. 如果用户提到持仓，再调用 portfolio(mode="view")。\n'
+            "6. 后台任务状态用 check_background_tasks 查询（注意冷却时间，每 30-60 秒查一次即可）。\n"
+            "7. 输出：市场状态、漏斗结果、AI 研判、下一步动作。\n\n"
+            "重要：screen_stocks 和 generate_ai_report 完成时会自动推送结果到飞书（如果 FEISHU_WEBHOOK_URL 已配置），"
+            "你不需要手动发送飞书通知。"
         ),
     ),
     "review-l4": PromptTemplate(

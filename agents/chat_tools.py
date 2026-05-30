@@ -1244,33 +1244,45 @@ def screen_stocks(board: str = "all", tool_context: ToolContext = None) -> dict:
         prev_mode = os.environ.get("FUNNEL_POOL_MODE")
         prev_board = os.environ.get("FUNNEL_POOL_BOARD")
         prev_exec = os.environ.get("FUNNEL_EXECUTOR_MODE")
+        prev_tf_batch = os.environ.get("FUNNEL_ENABLE_TICKFLOW_BATCH")
+        prev_tf_disable = os.environ.get("DATA_SOURCE_DISABLE_TICKFLOW")
+        prev_src_prio = os.environ.get("DATA_SOURCE_PRIORITY")
+        prev_workers = os.environ.get("FUNNEL_MAX_WORKERS")
+        prev_batch_size = os.environ.get("FUNNEL_BATCH_SIZE")
         os.environ["FUNNEL_POOL_MODE"] = "board"
         os.environ["FUNNEL_POOL_BOARD"] = board
-        # CLI 后台线程中 fork 子进程会触发 Python 3.13+ fds_to_keep 错误，强制用 thread
         os.environ["FUNNEL_EXECUTOR_MODE"] = "thread"
+        # TickFlow 批量K线需付费套餐，降级到 Tushare Pro（单票限流，增大并发加速）
+        os.environ["FUNNEL_ENABLE_TICKFLOW_BATCH"] = "0"
+        os.environ["DATA_SOURCE_DISABLE_TICKFLOW"] = "1"
+        os.environ.setdefault("DATA_SOURCE_PRIORITY", "tushare_first")
+        os.environ["FUNNEL_MAX_WORKERS"] = "8"
 
         from scripts.wyckoff_funnel import run as run_funnel
 
+        feishu_url = os.getenv("FEISHU_WEBHOOK_URL", "").strip()
         try:
             ok, symbols, bench_ctx, details = run_funnel(
-                "",
-                notify=False,
+                feishu_url,
+                notify=bool(feishu_url),
                 return_details=True,
             )
         finally:
             # 恢复环境变量，避免影响后续调用
-            if prev_mode is None:
-                os.environ.pop("FUNNEL_POOL_MODE", None)
-            else:
-                os.environ["FUNNEL_POOL_MODE"] = prev_mode
-            if prev_board is None:
-                os.environ.pop("FUNNEL_POOL_BOARD", None)
-            else:
-                os.environ["FUNNEL_POOL_BOARD"] = prev_board
-            if prev_exec is None:
-                os.environ.pop("FUNNEL_EXECUTOR_MODE", None)
-            else:
-                os.environ["FUNNEL_EXECUTOR_MODE"] = prev_exec
+            for name, prev in [
+                ("FUNNEL_POOL_MODE", prev_mode),
+                ("FUNNEL_POOL_BOARD", prev_board),
+                ("FUNNEL_EXECUTOR_MODE", prev_exec),
+                ("FUNNEL_ENABLE_TICKFLOW_BATCH", prev_tf_batch),
+                ("DATA_SOURCE_DISABLE_TICKFLOW", prev_tf_disable),
+                ("DATA_SOURCE_PRIORITY", prev_src_prio),
+                ("FUNNEL_MAX_WORKERS", prev_workers),
+                ("FUNNEL_BATCH_SIZE", prev_batch_size),
+            ]:
+                if prev is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = prev
 
         metrics = details.get("metrics") or {}
         triggers = details.get("triggers") or {}
@@ -1345,13 +1357,14 @@ def generate_ai_report(stock_codes: list[str], tool_context: ToolContext) -> dic
 
         from core.batch_report import run_step3
 
+        feishu_url = os.getenv("FEISHU_WEBHOOK_URL", "").strip()
         ok, reason, report_text = run_step3(
             symbols_info,
-            webhook_url="",
+            webhook_url=feishu_url,
             api_key=api_key,
             model=model,
             benchmark_context=None,
-            notify=False,
+            notify=bool(feishu_url),
             provider=provider,
             llm_base_url=base_url,
         )
@@ -1409,13 +1422,14 @@ def generate_strategy_decision(tool_context: ToolContext) -> dict:
         if symbols_info:
             from core.batch_report import run_step3
 
+            feishu_url = os.getenv("FEISHU_WEBHOOK_URL", "").strip()
             ok, reason, report_text = run_step3(
                 symbols_info,
-                webhook_url="",
+                webhook_url=feishu_url,
                 api_key=api_key,
                 model=model,
                 benchmark_context=None,
-                notify=False,
+                notify=bool(feishu_url),
                 provider=provider,
                 llm_base_url=base_url,
             )
@@ -2107,8 +2121,8 @@ def exec_command(command: str, timeout: int = 30, tool_context: ToolContext = No
             timeout=timeout,
             cwd=os.path.expanduser("~"),
         )
-        stdout = _redact_sensitive_text(r.stdout)
-        stderr = _redact_sensitive_text(r.stderr)
+        stdout = _redact_sensitive_text(r.stdout or "")
+        stderr = _redact_sensitive_text(r.stderr or "")
         return {
             "stdout": stdout[:8000] + ("...(截断)" if len(stdout) > 8000 else ""),
             "stderr": stderr[:2000] + ("...(截断)" if len(stderr) > 2000 else ""),
@@ -2120,16 +2134,27 @@ def exec_command(command: str, timeout: int = 30, tool_context: ToolContext = No
         return {"error": str(e)}
 
 
-def read_file(path: str, encoding: str = "utf-8", tool_context: ToolContext = None) -> dict:
+# 进程内文件读取缓存：避免 Agent 反复读同一文件触发 doom-loop
+_read_cache: dict[tuple[str, int, int, str], dict] = {}
+_READ_CACHE_MAX = 32
+
+
+def read_file(path: str = "", encoding: str = "utf-8", offset: int = 0, limit: int = 0, file: str = "", tool_context: ToolContext = None) -> dict:
     """读取用户本地文件内容。支持 txt/csv/json/xlsx 等格式，CSV 自动解析为表格预览。
 
     Args:
         path: 文件绝对路径或 ~ 开头的路径
         encoding: 文件编码，默认 utf-8
+        offset: 从第几行开始读（0 = 从开头），仅对 txt/log/md 等纯文本文件生效
+        limit: 最多读多少行（0 = 不限制），仅对纯文本文件生效
+        file: path 的别名，二者等效
 
     Returns:
         包含 path, size, content 的 dict。CSV 返回 markdown 表格预览。
     """
+    path = str(path or file or "").strip()
+    if not path:
+        return {"error": "缺少 path 参数"}
     p = _validate_agent_path(path, for_write=False)
     if isinstance(p, dict):
         return p
@@ -2142,13 +2167,29 @@ def read_file(path: str, encoding: str = "utf-8", tool_context: ToolContext = No
         return {"error": f"文件过大 ({size / 1024 / 1024:.1f}MB)，上限 50MB"}
 
     suffix = p.suffix.lower()
+    offset = max(0, int(offset or 0))
+    limit = max(0, int(limit or 0))
+
+    cache_key = (str(p), offset, limit, encoding)
+    if cache_key in _read_cache:
+        cached = dict(_read_cache[cache_key])
+        cached["_cached"] = True
+        return cached
     try:
         if suffix == ".csv" or suffix in (".xls", ".xlsx"):
             import pandas as pd
 
-            df = pd.read_csv(p, encoding=encoding, nrows=50) if suffix == ".csv" else pd.read_excel(p, nrows=50)
+            nrows = (offset + limit) if limit else 50
+            df = pd.read_csv(p, encoding=encoding, nrows=nrows) if suffix == ".csv" else pd.read_excel(p, nrows=nrows)
+            if offset:
+                df = df.iloc[offset:]
+            if limit and len(df) > limit:
+                df = df.head(limit)
             preview = _redact_sensitive_columns(df).to_markdown(index=False)
-            return {"path": str(p), "size": size, "rows_total": "≤50(预览)", "content": _redact_sensitive_text(preview)}
+            info = f"第{offset+1}-{offset+len(df)}行" if offset else f"≤{len(df)}行(预览)"
+            result = {"path": str(p), "size": size, "rows_total": info, "content": _redact_sensitive_text(preview)}
+            _read_cache[cache_key] = dict(result)
+            return result
         elif suffix == ".json":
             import json as _json
 
@@ -2157,17 +2198,216 @@ def read_file(path: str, encoding: str = "utf-8", tool_context: ToolContext = No
                 content = _json.dumps(_json.loads(text), ensure_ascii=False, indent=2)[:10000]
             except _json.JSONDecodeError:
                 content = text
-            return {"path": str(p), "size": size, "content": _redact_sensitive_text(content)}
+            result = {"path": str(p), "size": size, "content": _redact_sensitive_text(content)}
+            _read_cache[cache_key] = dict(result)
+            return result
         else:
-            text = p.read_text(encoding=encoding)
-            content = _redact_sensitive_text(text)
-            return {
-                "path": str(p),
-                "size": size,
-                "content": content[:10000] + ("...(截断)" if len(content) > 10000 else ""),
-            }
+            lines = p.read_text(encoding=encoding).splitlines()
+            total_lines = len(lines)
+            if offset or limit:
+                end = offset + limit if limit else total_lines
+                selected = lines[offset:end]
+                content = "\n".join(selected)
+                truncated = len(content) > 8000
+                display = content[:8000]
+                result = {
+                    "path": str(p),
+                    "size": size,
+                    "total_lines": total_lines,
+                    "offset": offset,
+                    "lines_returned": len(selected),
+                    "content": _redact_sensitive_text(display),
+                }
+                if truncated:
+                    result["truncated"] = True
+                    result["content"] += f"\n...(截断，继续读取请用 offset={offset + len(selected)})"
+                _read_cache[cache_key] = dict(result)
+                if len(_read_cache) > _READ_CACHE_MAX:
+                    _read_cache.pop(next(iter(_read_cache)))
+                return result
+            else:
+                content = "\n".join(lines)
+                truncated = len(content) > 10000
+                display = content[:10000]
+                result = {
+                    "path": str(p),
+                    "size": size,
+                    "total_lines": total_lines,
+                    "lines_returned": display.count("\n") + 1,
+                    "content": _redact_sensitive_text(display),
+                }
+                if truncated:
+                    result["truncated"] = True
+                    next_offset = result["lines_returned"]
+                    result["content"] += f"\n...(截断，文件共{total_lines}行，继续读取请用 offset={next_offset})"
+                _read_cache[cache_key] = dict(result)
+                if len(_read_cache) > _READ_CACHE_MAX:
+                    _read_cache.pop(next(iter(_read_cache)))
+                return result
     except Exception as e:
         return {"error": f"读取失败: {e}"}
+
+
+_MAX_DIR_ENTRIES = 200
+
+
+def list_directory(path: str, tool_context: ToolContext = None) -> dict:
+    """列出用户本地目录内容。用于探索项目结构、查找文件。
+
+    Args:
+        path: 目录路径（绝对路径或 ~ 开头）
+
+    Returns:
+        包含 path, entries 的 dict。entries 每项有 name, type, size。
+    """
+    p = _validate_agent_path(path, for_write=False)
+    if isinstance(p, dict):
+        return p
+    if not p.exists():
+        return {"error": f"目录不存在: {p}"}
+    if not p.is_dir():
+        return {"error": f"不是目录: {p}，请用 read_file 读取文件"}
+    try:
+        entries = []
+        hidden_count = 0
+        with suppress(PermissionError):
+            for entry in sorted(p.iterdir(), key=lambda e: (e.is_file(), e.name.lower())):
+                if entry.name.startswith("."):
+                    hidden_count += 1
+                    continue
+                if len(entries) >= _MAX_DIR_ENTRIES:
+                    entries.append({"name": "...", "type": "overflow", "size": 0})
+                    break
+                try:
+                    st = entry.stat()
+                    entries.append(
+                        {
+                            "name": entry.name,
+                            "type": "dir" if entry.is_dir() else "file",
+                            "size": st.st_size if entry.is_file() else 0,
+                        }
+                    )
+                except OSError:
+                    entries.append({"name": entry.name, "type": "unknown", "size": 0})
+        return {
+            "path": str(p),
+            "entries": entries,
+            "total": len([e for e in entries if e["type"] != "overflow"]),
+            **({"hidden_skipped": hidden_count} if hidden_count else {}),
+        }
+    except Exception as e:
+        return {"error": f"列出目录失败: {e}"}
+
+
+_SEARCHABLE_EXTENSIONS = frozenset(
+    {
+        ".py", ".md", ".txt", ".log", ".json", ".jsonl", ".csv", ".yaml", ".yml",
+        ".html", ".htm", ".xml", ".js", ".ts", ".jsx", ".tsx", ".css", ".scss",
+        ".toml", ".cfg", ".ini", ".sh", ".ps1", ".bat", ".sql", ".rst", ".tex",
+        ".c", ".h", ".cpp", ".hpp", ".rs", ".go", ".java", ".kt", ".swift",
+        ".r", ".rmd", ".ipynb", ".env.example", ".gitignore", ".dockerignore",
+        ".editorconfig", ".makefile", ".cmake",
+    }
+)
+_MAX_SEARCH_FILES = 500
+_MAX_SEARCH_MATCHES = 200
+_MAX_SEARCH_FILE_BYTES = 2 * 1024 * 1024
+
+
+def _search_in_file(entry: pathlib.Path, base: pathlib.Path, pattern_re: re.Pattern) -> list[dict]:
+    """Search one file for regex matches, returning [{file, line, text}]."""
+    try:
+        content = entry.read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return []
+    results: list[dict] = []
+    for lineno, line in enumerate(content.splitlines(), start=1):
+        if pattern_re.search(line):
+            results.append(
+                {
+                    "file": str(entry.relative_to(base)).replace("\\", "/"),
+                    "line": lineno,
+                    "text": line.strip()[:300],
+                }
+            )
+    return results
+
+
+def _iter_searchable_files(base: pathlib.Path, file_pattern: str) -> list[pathlib.Path]:
+    """Collect searchable text files under *base*, respecting limits and exclusions."""
+    candidates: list[pathlib.Path] = []
+    glob = str(file_pattern) if file_pattern != "*" else "*"
+    for entry in sorted(base.rglob(glob)):
+        if len(candidates) >= _MAX_SEARCH_FILES:
+            break
+        if entry.name.startswith(".") or not entry.is_file():
+            continue
+        parts = entry.relative_to(base).parts
+        if any(part.startswith(".") for part in parts[:-1]):
+            continue
+        suffix = entry.suffix.lower()
+        if suffix and suffix not in _SEARCHABLE_EXTENSIONS:
+            continue
+        try:
+            if entry.stat().st_size > _MAX_SEARCH_FILE_BYTES:
+                continue
+        except OSError:
+            continue
+        candidates.append(entry)
+    return candidates
+
+
+def search_file_content(
+    pattern: str,
+    path: str = "",
+    file_pattern: str = "*",
+    max_matches: int = 50,
+    tool_context: ToolContext = None,
+) -> dict:
+    """在项目文件中搜索文本内容（类似 grep）。支持正则表达式。"""
+    if not pattern or not str(pattern).strip():
+        return {"error": "搜索模式不能为空"}
+    if not path or not str(path).strip():
+        path = "."
+    p = _validate_agent_path(path, for_write=False)
+    if isinstance(p, dict):
+        return p
+    if not p.exists():
+        return {"error": f"路径不存在: {p}"}
+    if not p.is_dir():
+        p = p.parent
+        if not p.is_dir():
+            return {"error": f"不是目录: {p}"}
+    max_matches = max(1, min(int(max_matches), _MAX_SEARCH_MATCHES))
+    try:
+        pattern_re = re.compile(str(pattern))
+    except re.error as e:
+        return {"error": f"正则表达式无效: {e}"}
+
+    matches: list[dict] = []
+    files_searched = 0
+    for entry in _iter_searchable_files(p, file_pattern):
+        files_searched += 1
+        file_matches = _search_in_file(entry, p, pattern_re)
+        for m in file_matches:
+            matches.append(m)
+            if len(matches) >= max_matches:
+                break
+        if len(matches) >= max_matches:
+            break
+
+    return {
+        "directory": str(p),
+        "pattern": str(pattern),
+        "matches": matches,
+        "total_matches": len(matches),
+        "files_searched": files_searched,
+        **(
+            {"truncated": True, "hint": f"匹配数已达上限 {max_matches}，可缩小搜索范围或用更精确的模式"}
+            if len(matches) >= max_matches
+            else {}
+        ),
+    }
 
 
 def write_file(path: str, content: str, encoding: str = "utf-8", tool_context: ToolContext = None) -> dict:

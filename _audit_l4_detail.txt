@@ -1,0 +1,23 @@
+import sqlite3, os
+from pathlib import Path
+
+db_path = Path.home() / '.wyckoff' / 'wyckoff.db'
+conn = sqlite3.connect(str(db_path))
+cur = conn.cursor()
+
+print("=== FULL L4 ON LATEST DATE (20260528) ===")
+cur.execute("""
+    SELECT code, name, recommend_reason, is_ai_recommended, camp
+    FROM recommendation_tracking
+    WHERE recommend_date = 20260528
+    ORDER BY code
+""")
+rows = cur.fetchall()
+print(f"  Total: {len(rows)}")
+print()
+for row in rows:
+    ai_flag = "[AI]" if row[3] else "[  ]"
+    camp = row[4] if row[4] else ""
+    print(f"  {ai_flag} {row[0]:>6} {row[1]:<14} | {row[2]}")
+
+conn.close()

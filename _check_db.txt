@@ -1,0 +1,5 @@
+from pathlib import Path
+db = Path.home() / '.wyckoff' / 'wyckoff.db'
+print('EXISTS:', db.exists())
+if db.exists():
+    print('SIZE:', db.stat().st_size)

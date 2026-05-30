@@ -6,11 +6,11 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any
 
-MAX_TOOL_ROUNDS = 15
+MAX_TOOL_ROUNDS = 35
 MAX_INCOMPLETE_TOOL_RETRIES = 2
 DOOM_LOOP_WINDOW = 6
 DOOM_LOOP_THRESHOLD = 3
-DOOM_LOOP_EXEMPT = frozenset({"check_background_tasks"})
+DOOM_LOOP_EXEMPT = frozenset({"check_background_tasks", "read_file", "list_directory", "search_file_content"})
 
 
 @dataclass(frozen=True)

@@ -1,0 +1,66 @@
+import sqlite3
+from pathlib import Path
+
+db_path = Path.home() / '.wyckoff' / 'wyckoff.db'
+conn = sqlite3.connect(str(db_path))
+cursor = conn.cursor()
+
+# 最近 5 个交易日的 L4 vs Step3 统计
+print("=== L4 vs STEP3 AI: LAST 5 DAYS ===")
+cursor.execute("""
+    SELECT recommend_date,
+           COUNT(*) as total_l4,
+           SUM(is_ai_recommended) as ai_count,
+           SUM(CASE WHEN camp != '' AND camp IS NOT NULL THEN 1 ELSE 0 END) as camp_assigned
+    FROM recommendation_tracking
+    GROUP BY recommend_date
+    ORDER BY recommend_date DESC
+    LIMIT 10
+""")
+for row in cursor.fetchall():
+    print(f"  {row[0]}: L4={row[1]}, AI入选={row[2]}, 有camp={row[3]}")
+
+# 2026-05-25 详细看一下 AI 入选的
+print("\n=== 2026-05-25: AI SELECTED ===")
+cursor.execute("""
+    SELECT code, name, recommend_reason, camp
+    FROM recommendation_tracking
+    WHERE recommend_date = 20260525 AND is_ai_recommended = 1
+    ORDER BY code
+""")
+rows = cursor.fetchall()
+if rows:
+    for i, row in enumerate(rows):
+        print(f"  {i+1}. {row[0]} {row[1]:<10s} | {row[2]:<30s} | camp={row[3]}")
+else:
+    print("  (none)")
+
+# 2026-05-22
+print("\n=== 2026-05-22: AI SELECTED ===")
+cursor.execute("""
+    SELECT code, name, recommend_reason, camp
+    FROM recommendation_tracking
+    WHERE recommend_date = 20260522 AND is_ai_recommended = 1
+    ORDER BY code
+""")
+rows = cursor.fetchall()
+if rows:
+    for i, row in enumerate(rows):
+        print(f"  {i+1}. {row[0]} {row[1]:<10s} | {row[2]:<30s} | camp={row[3]}")
+else:
+    print("  (none)")
+
+# 检查 signal_tracking 表
+print("\n=== SIGNAL_TRACKING RECENT ===")
+cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '%signal%'")
+tables = cursor.fetchall()
+print("Signal tables:", [t[0] for t in tables])
+
+for tbl in [t[0] for t in tables]:
+    cursor.execute(f"SELECT * FROM {tbl} LIMIT 1")
+    cols = [d[0] for d in cursor.description]
+    print(f"\n  {tbl} columns: {cols}")
+    cursor.execute(f"SELECT COUNT(*) FROM {tbl}")
+    print(f"  {tbl} rows: {cursor.fetchone()[0]}")
+
+conn.close()

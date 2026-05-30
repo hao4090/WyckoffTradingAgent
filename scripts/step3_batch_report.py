@@ -757,6 +757,7 @@ def run(
     llm_base_url: str = "",
     wecom_webhook: str = "",
     dingtalk_webhook: str = "",
+    logs_path: str = "",
 ) -> tuple[bool, str, str]:
     """
     拉取 OHLCV → 第五步特征工程 → AI 研报 → 飞书/企微/钉钉发送。
@@ -781,6 +782,18 @@ def run(
 
     end_day = resolve_end_calendar_day()
     window = _resolve_trading_window(end_calendar_day=end_day, trading_days=TRADING_DAYS)
+
+    def _backup_report(filename: str, content: str) -> None:
+        """推送前落盘备份，推送失败时可从备份恢复。"""
+        import pathlib as _pl
+
+        _dir = _pl.Path(logs_path) if logs_path else _pl.Path(__file__).resolve().parent.parent / "logs"
+        try:
+            _dir.mkdir(parents=True, exist_ok=True)
+            (_dir / filename).write_text(content, encoding="utf-8")
+            print(f"[step3] 报告已备份: {_dir / filename}")
+        except Exception as _e:
+            print(f"[step3] 报告备份失败: {_e}")
 
     def _notify_all(title: str, content: str) -> bool:
         """统一向飞书/企微/钉钉推送，返回飞书是否成功。"""
@@ -1110,6 +1123,7 @@ def run(
         if notify:
             content = report
             title = f"📄 批量研报 {date.today().strftime('%Y-%m-%d')}"
+            _backup_report(f"step3_report_{date.today().strftime('%Y%m%d')}.md", content)
             if not _notify_all(title, content):
                 return (False, "feishu_failed", report)
             if STEP3_SEND_COMPLIANCE_BRIEF:
@@ -1339,8 +1353,9 @@ def run(
 
     title = f"📄 批量研报 {date.today().strftime('%Y-%m-%d')}"
     if notify:
+        _backup_report(f"step3_report_{date.today().strftime('%Y%m%d')}.md", content)
         if not _notify_all(title, content):
-            print("[step3] 飞书推送失败")
+            print("[step3] 飞书推送失败（备份已保存，可从 logs/ 恢复）")
             return (False, "feishu_failed", report)
         if STEP3_SEND_COMPLIANCE_BRIEF:
             compliance_title = f"📄 市场观察简报（合规版） {date.today().strftime('%Y-%m-%d')}"

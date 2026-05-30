@@ -53,6 +53,24 @@ def _create_client():
     return create_client(_SUPABASE_URL, _SUPABASE_KEY)
 
 
+def signup(email: str, password: str) -> dict[str, Any]:
+    """
+    注册 Supabase 新用户，成功后自动登录。
+    """
+    client = _create_client()
+    resp = client.auth.sign_up({"email": email, "password": password})
+    if resp.user.identities and len(resp.user.identities) > 0:
+        return login(email, password)
+    # 邮箱已注册或需确认
+    return {
+        "user_id": resp.user.id,
+        "email": resp.user.email,
+        "access_token": resp.session.access_token if resp.session else "",
+        "refresh_token": resp.session.refresh_token if resp.session else "",
+        "email_confirm": True,
+    }
+
+
 def login(email: str, password: str) -> dict[str, Any]:
     """
     用邮箱密码登录 Supabase，返回用户信息。

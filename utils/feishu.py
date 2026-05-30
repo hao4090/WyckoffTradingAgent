@@ -126,7 +126,10 @@ def _split_lark_md(content: str, max_len: int = 2800) -> list[str]:
             continue
         start = 0
         while start < len(p):
-            chunks.append(p[start : start + max_len])
+            chunk = p[start : start + max_len]
+            if start + max_len < len(p):
+                chunk = chunk.rstrip() + "\n\n...(截断)"
+            chunks.append(chunk)
             start += max_len
     if current:
         chunks.append(current)
@@ -142,7 +145,10 @@ def _post_card(webhook_url: str, title: str, chunk: str) -> tuple[bool, str]:
             "elements": [{"tag": "div", "text": {"tag": "lark_md", "content": chunk}}],
         },
     }
-    resp = requests.post(webhook_url.strip(), headers=headers, json=payload, timeout=10)
+    try:
+        resp = requests.post(webhook_url.strip(), headers=headers, json=payload, timeout=10)
+    except requests.RequestException as e:
+        return (False, f"net_err: {e}")
     if resp.status_code != 200:
         return (False, f"http_{resp.status_code}")
     try:
@@ -152,7 +158,7 @@ def _post_card(webhook_url: str, title: str, chunk: str) -> tuple[bool, str]:
             return (True, "ok")
         return (False, f"feishu_code_{code}: {data.get('msg', '')}")
     except Exception:
-        return (True, "ok_non_json")
+        return (False, f"non_json: {resp.text[:200]}")
 
 
 def _post_rich_card(
@@ -750,22 +756,27 @@ def send_feishu_notification(webhook_url: str, title: str, content: str) -> bool
     content = append_tickflow_limit_hint(content)
     annotated = _annotate_financial_terms(content)
     normalized = _normalize_for_lark_md(annotated)
-    max_len = int(os.getenv("FEISHU_LARK_MAX_LEN", "2800"))
+    max_len = int(os.getenv("FEISHU_LARK_MAX_LEN", "4000"))
     chunks = _split_lark_md(normalized, max_len=max_len)
 
+    lost_parts: list[int] = []
     try:
         total = len(chunks)
         for idx, chunk in enumerate(chunks, start=1):
             part_title = title if total == 1 else f"{title} ({idx}/{total})"
             ok = False
             last_err = "unknown"
-            for attempt in range(1, 4):
+            max_attempts = 4
+            for attempt in range(1, max_attempts + 1):
                 ok, err = _post_card(webhook_url, part_title, chunk)
                 if ok:
                     print(f"[feishu] sent part {idx}/{total}, len={len(chunk)}, attempt={attempt}")
                     break
                 last_err = err
-                sleep_s = 0.6 * attempt
+                transient = err.startswith("net_err:") or err.startswith("http_5")
+                if not transient or attempt == max_attempts:
+                    break
+                sleep_s = 0.8 * attempt
                 print(
                     f"[feishu] failed part {idx}/{total}, len={len(chunk)}, "
                     f"attempt={attempt}, err={err}, retry_in={sleep_s:.1f}s"
@@ -773,10 +784,17 @@ def send_feishu_notification(webhook_url: str, title: str, content: str) -> bool
                 time.sleep(sleep_s)
             if not ok:
                 print(f"Feishu notification failed on part {idx}/{total}: {last_err}")
-                return False
+                lost_parts.append(idx)
             if idx < total:
                 time.sleep(0.15)
-        return True
+
+        if lost_parts and len(lost_parts) < total:
+            lost_str = "、".join(str(p) for p in lost_parts)
+            warn_text = f"⚠ 第 {lost_str} 片发送失败，请前往 GitHub Actions 日志查看完整报告"
+            _post_card(webhook_url, f"{title} ⚠", warn_text)
+            time.sleep(0.15)
+
+        return len(lost_parts) == 0
     except Exception as e:
         print(f"Feishu notification failed: {e}")
         return False

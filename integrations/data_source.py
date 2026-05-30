@@ -804,8 +804,10 @@ def fetch_stock_hist(
     adjust: Literal["", "qfq", "hfq"] = "qfq",
 ) -> pd.DataFrame:
     """
-    个股日线：tickflow 优先（固定 qfq），失败时回退 tushare/akshare/baostock/efinance。
-    可用环境变量按需禁用数据源：
+    个股日线：按 DATA_SOURCE_PRIORITY 决定优先级（默认 tickflow 优先），
+    失败时依次回退后续数据源。
+    可用环境变量：
+    - DATA_SOURCE_PRIORITY=tushare_first  切换为 Tushare 优先
     - DATA_SOURCE_DISABLE_TICKFLOW=1
     - DATA_SOURCE_DISABLE_AKSHARE=1
     - DATA_SOURCE_DISABLE_BAOSTOCK=1
@@ -844,14 +846,18 @@ def fetch_stock_hist(
         "on",
     }
 
-    # 1. tickflow 优先（固定 qfq）
-    if disable_tickflow:
-        failed_sources.append("tickflow(disabled)")
-        failed_details.append("tickflow=disabled_by_env")
-    elif not os.getenv("TICKFLOW_API_KEY", "").strip():
-        failed_sources.append("tickflow(unconfigured)")
-        failed_details.append("tickflow=unconfigured")
-    else:
+    ts_first = os.getenv("DATA_SOURCE_PRIORITY", "").strip().lower() in {"tushare_first", "ts_first"}
+
+    def _try_tickflow() -> pd.DataFrame | None:
+        nonlocal tickflow_failed
+        if disable_tickflow:
+            failed_sources.append("tickflow(disabled)")
+            failed_details.append("tickflow=disabled_by_env")
+            return None
+        if not os.getenv("TICKFLOW_API_KEY", "").strip():
+            failed_sources.append("tickflow(unconfigured)")
+            failed_details.append("tickflow=unconfigured")
+            return None
         try:
             return _tag_source(
                 _fetch_stock_tickflow(symbol, start_s, end_s, adjust),
@@ -877,12 +883,16 @@ def fetch_stock_hist(
                     f"err={_compact_error(e)}",
                     flush=True,
                 )
+        return None
 
-    # 2) tushare 次优先（固定 qfq）
-    from integrations.tushare_client import get_pro
+    def _try_tushare() -> pd.DataFrame | None:
+        from integrations.tushare_client import get_pro
 
-    pro = get_pro()
-    if pro is not None:
+        pro = get_pro()
+        if pro is None:
+            failed_sources.append("tushare(unconfigured)")
+            failed_details.append("tushare=token_missing")
+            return None
         try:
             out = _tag_source(
                 _attach_tickflow_limit_notices(
@@ -891,20 +901,22 @@ def fetch_stock_hist(
                 ),
                 "tushare",
             )
-            if tickflow_failed:
-                print(
-                    f"[data_source] fallback命中: symbol={symbol}, source=tushare, "
-                    f"tickflow_limit_hint={bool(tickflow_limit_notices)}",
-                    flush=True,
-                )
             return out
         except Exception as e:
             _debug_source_fail("tushare", e)
             failed_sources.append("tushare")
             failed_details.append(f"tushare={_compact_error(e)}")
-    else:
-        failed_sources.append("tushare(unconfigured)")
-        failed_details.append("tushare=token_missing")
+        return None
+
+    # 按 DATA_SOURCE_PRIORITY 决定先后顺序
+    _first, _second = (_try_tushare, _try_tickflow) if ts_first else (_try_tickflow, _try_tushare)
+
+    result = _first()
+    if result is not None:
+        return result
+    result = _second()
+    if result is not None:
+        return result
 
     # 3. akshare
     if disable_akshare:

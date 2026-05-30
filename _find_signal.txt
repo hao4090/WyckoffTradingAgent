@@ -1,0 +1,15 @@
+import os
+
+root = r"E:\WyckoffTradingAgent"
+for dirpath, dirnames, filenames in os.walk(root):
+    dirnames[:] = [d for d in dirnames if d not in ('__pycache__', '.git', '.venv', 'venv', 'node_modules')]
+    for f in filenames:
+        if f.endswith('.py') or f.endswith('.sql') or f.endswith('.yaml') or f.endswith('.yml'):
+            full = os.path.join(dirpath, f)
+            try:
+                with open(full, 'r', encoding='utf-8', errors='ignore') as fh:
+                    content = fh.read()
+                    if 'signal_pending' in content.lower() or 'signal' in os.path.basename(full).lower():
+                        print(full)
+            except:
+                pass

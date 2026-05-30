@@ -70,7 +70,8 @@ def test_read_file_blocks_system_file():
     result = read_file("/etc/passwd")
 
     assert result["error"].startswith("安全拦截")
-    assert "系统目录" in result["error"]
+    # 跨平台：Unix 命中"系统目录"，Windows 经 resolve 后命中"文件名疑似凭据"
+    assert "系统目录" in result["error"] or "文件名疑似" in result["error"]
 
 
 def test_read_file_blocks_hidden_directory(tmp_path):

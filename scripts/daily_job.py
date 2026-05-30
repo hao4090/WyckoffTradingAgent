@@ -672,6 +672,7 @@ def main() -> int:
                 llm_base_url=llm_base_url,
                 wecom_webhook=wecom_webhook,
                 dingtalk_webhook=dingtalk_webhook,
+                logs_path=str(logs_path),
             )
             step3_err = None if step3_ok else STEP3_REASON_MAP.get(step3_reason, step3_reason)
         except Exception as e:
