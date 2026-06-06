@@ -229,7 +229,7 @@ def init_db() -> None:
     cur = conn.execute("SELECT MAX(version) FROM schema_version")
     row = cur.fetchone()
     current = row[0] if row and row[0] else 0
-    #if current < 4:
+    # if current < 4:
     #    try:
     #        conn.execute("ALTER TABLE portfolio_position ADD COLUMN buy_dt TEXT DEFAULT ''")
     #    except Exception:
