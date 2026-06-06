@@ -557,8 +557,15 @@ def _missing_llm_config(provider: str, step3_skip_llm: bool, skip_step4: bool, s
 
 
 def _log_llm_config(provider: str, llm_base_url: str, base_url_env_key: str, logs_path: str | None) -> None:
+    step3_fallbacks = provider_fallbacks("STEP3_LLM_FALLBACK_PROVIDERS", _step3_fallback_default(provider))
+    _log(
+        f"Step3 LLM: provider={provider}, model={os.getenv(f'{provider.upper()}_MODEL', '') or '(empty)'}",
+        logs_path,
+    )
     if provider in OPENAI_COMPATIBLE_BASE_URLS:
-        _log(f"LLM base_url: {llm_base_url or '(empty)'} (env={base_url_env_key})", logs_path)
+        _log(f"Step3 LLM base_url: {llm_base_url or '(empty)'} (env={base_url_env_key})", logs_path)
+    if step3_fallbacks:
+        _log(f"Step3 LLM fallback chain: {','.join(step3_fallbacks)}", logs_path)
     efficiency_model = _efficiency_fallback_model()
     if provider == "gemini" and efficiency_model:
         _log(f"Step3 Efficiency 兜底已配置: model={efficiency_model}", logs_path)
