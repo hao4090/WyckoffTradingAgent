@@ -116,29 +116,41 @@ def load_portfolio_state(portfolio_id: str = "USER_LIVE", client: Client | None 
         if not p_resp.data:
             return None
         p = p_resp.data[0]
-        pos_resp = (
-            client.table(TABLE_PORTFOLIO_POSITIONS)
-            .select("code,name,shares,cost_price,buy_dt,buy_date,stop_loss,updated_at")
-            .eq("portfolio_id", portfolio_id)
-            .order("code")
-            .execute()
-        )
+        # 兼容两种列名：旧表 buy_dt / 新表 buy_date
+        # PostgREST 在 select 中若指定不存在列会直接 42703 报错，所以拆成两次尝试
+        try:
+            pos_resp = (
+                client.table(TABLE_PORTFOLIO_POSITIONS)
+                .select("code,name,shares,cost_price,buy_dt,stop_loss,updated_at")
+                .eq("portfolio_id", portfolio_id)
+                .order("code")
+                .execute()
+            )
+            date_column = "buy_dt"
+        except Exception as _e_dt:
+            err_text = str(_e_dt)
+            if "buy_dt" not in err_text and "42703" not in err_text:
+                raise
+            pos_resp = (
+                client.table(TABLE_PORTFOLIO_POSITIONS)
+                .select("code,name,shares,cost_price,buy_date,stop_loss,updated_at")
+                .eq("portfolio_id", portfolio_id)
+                .order("code")
+                .execute()
+            )
+            date_column = "buy_date"
         positions: list[dict[str, Any]] = []
         latest_updates: list[str] = [str(p.get("updated_at", "") or "").strip()]
         for row in pos_resp.data or []:
             row_updated_at = str(row.get("updated_at", "") or "").strip()
             if row_updated_at:
                 latest_updates.append(row_updated_at)
-            # 兼容两种列名：旧表 buy_dt / 新表 buy_date
-            raw_buy_dt = row.get("buy_dt")
-            if raw_buy_dt is None or (isinstance(raw_buy_dt, str) and not raw_buy_dt.strip()):
-                raw_buy_dt = row.get("buy_date")
             positions.append(
                 {
                     "code": str(row.get("code", "")).strip(),
                     "name": str(row.get("name", "")).strip(),
                     "cost": float(row.get("cost_price", 0.0) or 0.0),
-                    "buy_dt": _normalize_buy_dt_text(raw_buy_dt),
+                    "buy_dt": _normalize_buy_dt_text(row.get(date_column)),
                     "shares": int(row.get("shares", 0) or 0),
                     "stop_loss": (float(row["stop_loss"]) if row.get("stop_loss") is not None else None),
                     "updated_at": row_updated_at,
