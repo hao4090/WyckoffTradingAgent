@@ -45,8 +45,34 @@ def _extract_json_block(text: str) -> str:
         raw = re.sub(r"^```(?:json)?\s*", "", raw, flags=re.IGNORECASE)
         raw = re.sub(r"\s*```$", "", raw)
     start = raw.find("{")
+    if start < 0:
+        return raw
+    # 用括号栈匹配第一个完整 JSON 对象的结束位置
+    depth = 0
+    in_str = False
+    escape = False
+    for i in range(start, len(raw)):
+        ch = raw[i]
+        if escape:
+            escape = False
+            continue
+        if ch == "\\" and in_str:
+            escape = True
+            continue
+        if ch == '"':
+            in_str = not in_str
+            continue
+        if in_str:
+            continue
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return raw[start : i + 1]
+    # 找不到完整 JSON 对象，回退到 rfind
     end = raw.rfind("}")
-    if start >= 0 and end > start:
+    if end > start:
         return raw[start : end + 1]
     return raw
 
