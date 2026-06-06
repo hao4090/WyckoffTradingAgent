@@ -116,29 +116,15 @@ def load_portfolio_state(portfolio_id: str = "USER_LIVE", client: Client | None 
         if not p_resp.data:
             return None
         p = p_resp.data[0]
-        # 兼容两种列名：旧表 buy_dt / 新表 buy_date
-        # PostgREST 在 select 中若指定不存在列会直接 42703 报错，所以拆成两次尝试
-        try:
-            pos_resp = (
-                client.table(TABLE_PORTFOLIO_POSITIONS)
-                .select("code,name,shares,cost_price,buy_dt,stop_loss,updated_at")
-                .eq("portfolio_id", portfolio_id)
-                .order("code")
-                .execute()
-            )
-            date_column = "buy_dt"
-        except Exception as _e_dt:
-            err_text = str(_e_dt)
-            if "buy_dt" not in err_text and "42703" not in err_text:
-                raise
-            pos_resp = (
-                client.table(TABLE_PORTFOLIO_POSITIONS)
-                .select("code,name,shares,cost_price,buy_date,stop_loss,updated_at")
-                .eq("portfolio_id", portfolio_id)
-                .order("code")
-                .execute()
-            )
-            date_column = "buy_date"
+        # 直接使用 buy_date（生产 schema），如果将来切回 buy_dt 可在此处调整
+        pos_resp = (
+            client.table(TABLE_PORTFOLIO_POSITIONS)
+            .select("code,name,shares,cost_price,buy_date,stop_loss,updated_at")
+            .eq("portfolio_id", portfolio_id)
+            .order("code")
+            .execute()
+        )
+        date_column = "buy_date"
         positions: list[dict[str, Any]] = []
         latest_updates: list[str] = [str(p.get("updated_at", "") or "").strip()]
         for row in pos_resp.data or []:
