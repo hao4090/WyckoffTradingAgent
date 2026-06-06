@@ -112,7 +112,19 @@ class _TeeStream:
 
 
 def _run_with_stdout_tee(logs_path: str | None, fn, *args, **kwargs):
-    """运行子步骤时，将其 stdout/stderr 透传到 daily_job 日志文件。"""
+    """运行子步骤时，将其 stdout/stderr 透传到 daily_job 日志文件。
+
+    自动将 logs_path 注入 fn（如果 fn 签名接受 logs_path 形参）。
+    """
+    import inspect
+
+    try:
+        sig = inspect.signature(fn)
+        accepts_logs_path = "logs_path" in sig.parameters
+    except (TypeError, ValueError):
+        accepts_logs_path = False
+    if accepts_logs_path:
+        kwargs.setdefault("logs_path", str(logs_path) if logs_path else "")
     if not logs_path:
         return fn(*args, **kwargs)
     os.makedirs(os.path.dirname(logs_path) or ".", exist_ok=True)
@@ -685,6 +697,8 @@ def main() -> int:
     if symbols_info:
         t0 = datetime.now(TZ)
         try:
+            # 注意：_run_with_stdout_tee 的第 1 个位置参数就是 logs_path，
+            # 不能同时再用 logs_path= 关键字传，否则 Python 报 'multiple values'。
             step3_ok, step3_reason, step3_report_text = _run_with_stdout_tee(
                 logs_path,
                 run_step3,
@@ -697,7 +711,6 @@ def main() -> int:
                 llm_base_url=llm_base_url,
                 wecom_webhook=wecom_webhook,
                 dingtalk_webhook=dingtalk_webhook,
-                logs_path=str(logs_path),
             )
             step3_err = None if step3_ok else STEP3_REASON_MAP.get(step3_reason, step3_reason)
         except Exception as e:
