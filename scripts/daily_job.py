@@ -570,11 +570,12 @@ def main() -> int:
         _log("--dry-run: 配置校验通过，退出", logs_path)
         return 0
 
-    # 非交易日跳过：检查下一个交易日是否在 2 天内（周日跑 → 周一应该开盘）
+    # 非交易日跳过：仅在下一交易日超过 1 周（节假日/长假）才跳过
+    # 周五/周六跑 → 下一交易日是周一（差 2~3 天），正常执行
     today = resolve_end_calendar_day()
     nxt = next_trading_day(today)
-    if nxt and (nxt - today).days > 2:
-        skip_msg = f"📅 下一交易日 {nxt} 距今超过 2 天，任务跳过"
+    if nxt and (nxt - today).days > 7:
+        skip_msg = f"📅 下一交易日 {nxt} 距今超过 7 天，任务跳过"
         _log(skip_msg, logs_path)
         _notify_skip(skip_msg, webhook, wecom_webhook, dingtalk_webhook)
         return 0
