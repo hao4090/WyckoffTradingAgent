@@ -118,7 +118,7 @@ def load_portfolio_state(portfolio_id: str = "USER_LIVE", client: Client | None 
         p = p_resp.data[0]
         pos_resp = (
             client.table(TABLE_PORTFOLIO_POSITIONS)
-            .select("code,name,shares,cost_price,buy_dt,stop_loss,updated_at")
+            .select("code,name,shares,cost_price,buy_dt,buy_date,stop_loss,updated_at")
             .eq("portfolio_id", portfolio_id)
             .order("code")
             .execute()
@@ -129,12 +129,16 @@ def load_portfolio_state(portfolio_id: str = "USER_LIVE", client: Client | None 
             row_updated_at = str(row.get("updated_at", "") or "").strip()
             if row_updated_at:
                 latest_updates.append(row_updated_at)
+            # 兼容两种列名：旧表 buy_dt / 新表 buy_date
+            raw_buy_dt = row.get("buy_dt")
+            if raw_buy_dt is None or (isinstance(raw_buy_dt, str) and not raw_buy_dt.strip()):
+                raw_buy_dt = row.get("buy_date")
             positions.append(
                 {
                     "code": str(row.get("code", "")).strip(),
                     "name": str(row.get("name", "")).strip(),
                     "cost": float(row.get("cost_price", 0.0) or 0.0),
-                    "buy_dt": str(row.get("buy_dt", "") or "").strip(),
+                    "buy_dt": _normalize_buy_dt_text(raw_buy_dt),
                     "shares": int(row.get("shares", 0) or 0),
                     "stop_loss": (float(row["stop_loss"]) if row.get("stop_loss") is not None else None),
                     "updated_at": row_updated_at,
@@ -302,7 +306,9 @@ def upsert_position(portfolio_id: str, position: dict[str, Any], client: Client 
         }
         buy_dt = str(position.get("buy_dt", "") or "").strip()
         if buy_dt:
+            # 兼容旧表 buy_dt / 新表 buy_date
             row["buy_dt"] = buy_dt
+            row["buy_date"] = buy_dt
         client.table(TABLE_PORTFOLIO_POSITIONS).upsert(row, on_conflict="portfolio_id,code").execute()
         return True, f"{code} 已更新"
     except Exception as e:
