@@ -646,7 +646,6 @@ def _try_track_llm_routes(
     system_prompt: str,
     user_message: str,
 ) -> tuple[str, str, dict[str, str] | None]:
-    last_error: str | None = None
     for idx, route in enumerate(routes):
         route_label = _route_label(route["provider"], route["model"])
         try:
@@ -663,7 +662,6 @@ def _try_track_llm_routes(
             return report, route_label, route
         except Exception as e:
             err_text = f"{type(e).__name__}: {e}"
-            last_error = err_text
             print(f"[step3] {track} 轨模型 {route_label} 失败: {err_text}")
             if idx == len(routes) - 1:
                 print(f"[step3] {track} 轨全部路由失败（{len(routes)} 个），最后错误: {err_text}")
