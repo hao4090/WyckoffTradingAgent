@@ -3,7 +3,7 @@ name: Wyckoff Funnel
 on:
   schedule:
     # 北京时间周一到周五 16:25（UTC 10:25），A 股收盘后跑日频漏斗 + 主线雷达。
-    - cron: '7 9 * * 0-4'
+    - cron: '7 9 * * 1-5'
   workflow_dispatch:
     inputs:
       end_calendar_day:
