@@ -2,8 +2,8 @@ name: Wyckoff Funnel
 
 on:
   schedule:
-    # 北京时间周日到周四 17:17（UTC 8:37），为下一交易日做盘后准备。
-    - cron: '37 8 * * 0-4'
+    # 北京时间周日到周四 16:47（UTC 8:47），为下一交易日做盘后准备。
+    - cron: '47 8 * * 0-4'
   workflow_dispatch:
     inputs:
       end_calendar_day:
