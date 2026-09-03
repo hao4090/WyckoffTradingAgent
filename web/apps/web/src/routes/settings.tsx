@@ -159,26 +159,16 @@ function useSettingsForm(
       tgBotToken: snapshot.tgBotToken,
       tgChatId: snapshot.tgChatId,
     })
-    // 先检查现有记录
-    const { data: existing } = await supabase
+    // 强制走 UPDATE，不使用 INSERT。UPDATE 没找到记录时返回 0 行，不报错
+    const result = await supabase
       .from('user_settings')
-      .select('id')
+      .update(payload)
       .eq('user_id', userId)
-      .maybeSingle()
-    let error
-    if (existing) {
-      // 记录存在，执行 update
-      const result = await supabase
-        .from('user_settings')
-        .update(payload)
-        .eq('user_id', userId)
-      error = result.error
-    } else {
-      // 记录不存在，执行 insert
-      const result = await supabase
-        .from('user_settings')
-        .insert(payload)
-      error = result.error
+    let error = result.error
+    // 如果 UPDATE 影响 0 行（记录不存在），则 INSERT 一条
+    if (!error && (!result.data || (Array.isArray(result.data) && result.data.length === 0))) {
+      const insertResult = await supabase.from('user_settings').insert(payload)
+      error = insertResult.error
     }
     setSaving(false)
     if (!error) setSavedSnapshot({ ...snapshot, configs: cloneProviderConfigs(snapshot.configs) })
