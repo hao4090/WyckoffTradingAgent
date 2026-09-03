@@ -1,5 +1,5 @@
 const LOCAL_API_URL = 'http://127.0.0.1:8787'
-const PRODUCTION_API_URL = 'https://wyckoff.991109.xyz'
+const PRODUCTION_API_URL = ''
 
 export function apiUrl(path: `/api/${string}`): string {
   const configured = import.meta.env.VITE_API_URL?.trim()
