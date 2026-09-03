@@ -158,7 +158,7 @@ function useSettingsForm(
       dingtalkWebhook: snapshot.dingtalkWebhook,
       tgBotToken: snapshot.tgBotToken,
       tgChatId: snapshot.tgChatId,
-    }))
+    }), { onConflict: 'user_id' })
     setSaving(false)
     if (!error) setSavedSnapshot({ ...snapshot, configs: cloneProviderConfigs(snapshot.configs) })
     showToast(error ? t('settings.saveFailed', { message: error.message }) : t('settings.saved'), error ? 'error' : 'success')
