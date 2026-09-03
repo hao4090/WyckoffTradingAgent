@@ -159,34 +159,33 @@ function useSettingsForm(
       tgBotToken: snapshot.tgBotToken,
       tgChatId: snapshot.tgChatId,
     })
-    console.log('[settings] save start, payload keys:', Object.keys(payload))
-    // 先查记录是否存在
-    const { data: existing } = await supabase
-      .from('user_settings')
-      .select('id')
-      .eq('user_id', userId)
-      .maybeSingle()
-    console.log('[settings] existing record:', existing)
-    let error
-    if (existing) {
-      // 记录存在，执行 update（不传 user_id 避免修改）
-      const { user_id, ...updatePayload } = payload
-      console.log('[settings] running UPDATE')
-      const result = await supabase
-        .from('user_settings')
-        .update(updatePayload)
-        .eq('user_id', userId)
-      console.log('[settings] UPDATE result:', { error: result.error, count: result.count })
-      error = result.error
-    } else {
-      // 记录不存在，执行 insert
-      console.log('[settings] running INSERT')
-      const result = await supabase
-        .from('user_settings')
-        .insert(payload)
-      console.log('[settings] INSERT result:', { error: result.error, data: result.data })
-      error = result.error
-    }
+    console.log('[settings] save start, calling RPC')
+    // 使用 PostgreSQL 函数绕过 RLS 限制
+    const { error } = await supabase.rpc('upsert_user_settings', {
+      p_user_id: payload.user_id,
+      p_chat_provider: payload.chat_provider,
+      p_gemini_api_key: payload.gemini_api_key,
+      p_gemini_model: payload.gemini_model,
+      p_gemini_base_url: payload.gemini_base_url,
+      p_openai_api_key: payload.openai_api_key,
+      p_openai_model: payload.openai_model,
+      p_openai_base_url: payload.openai_base_url,
+      p_deepseek_api_key: payload.deepseek_api_key,
+      p_deepseek_model: payload.deepseek_model,
+      p_deepseek_base_url: payload.deepseek_base_url,
+      p_anthropic_api_key: payload.anthropic_api_key,
+      p_anthropic_model: payload.anthropic_model,
+      p_anthropic_base_url: payload.anthropic_base_url,
+      p_custom_providers: payload.custom_providers,
+      p_tickflow_api_key: payload.tickflow_api_key,
+      p_feishu_webhook: payload.feishu_webhook,
+      p_wecom_webhook: payload.wecom_webhook,
+      p_dingtalk_webhook: payload.dingtalk_webhook,
+      p_tg_bot_token: payload.tg_bot_token,
+      p_tg_chat_id: payload.tg_chat_id,
+      p_tushare_token: payload.tushare_token,
+    })
+    console.log('[settings] RPC result:', { error })
     setSaving(false)
     if (!error) setSavedSnapshot({ ...snapshot, configs: cloneProviderConfigs(snapshot.configs) })
     showToast(error ? t('settings.saveFailed', { message: error.message }) : t('settings.saved'), error ? 'error' : 'success')
