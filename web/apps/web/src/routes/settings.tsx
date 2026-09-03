@@ -148,7 +148,7 @@ function useSettingsForm(
     setSaving(true)
     clearToast()
     const snapshot = draft.toSnapshot()
-    const { error } = await supabase.from('user_settings').upsert(buildSettingsPayload({
+    const payload = buildSettingsPayload({
       userId,
       chatProvider: snapshot.chatProvider,
       configs: snapshot.configs,
@@ -158,7 +158,28 @@ function useSettingsForm(
       dingtalkWebhook: snapshot.dingtalkWebhook,
       tgBotToken: snapshot.tgBotToken,
       tgChatId: snapshot.tgChatId,
-    }), { onConflict: 'user_id' })
+    })
+    // 先检查现有记录
+    const { data: existing } = await supabase
+      .from('user_settings')
+      .select('id')
+      .eq('user_id', userId)
+      .maybeSingle()
+    let error
+    if (existing) {
+      // 记录存在，执行 update
+      const result = await supabase
+        .from('user_settings')
+        .update(payload)
+        .eq('user_id', userId)
+      error = result.error
+    } else {
+      // 记录不存在，执行 insert
+      const result = await supabase
+        .from('user_settings')
+        .insert(payload)
+      error = result.error
+    }
     setSaving(false)
     if (!error) setSavedSnapshot({ ...snapshot, configs: cloneProviderConfigs(snapshot.configs) })
     showToast(error ? t('settings.saveFailed', { message: error.message }) : t('settings.saved'), error ? 'error' : 'success')
