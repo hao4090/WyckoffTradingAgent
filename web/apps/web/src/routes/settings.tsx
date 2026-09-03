@@ -159,16 +159,33 @@ function useSettingsForm(
       tgBotToken: snapshot.tgBotToken,
       tgChatId: snapshot.tgChatId,
     })
-    // 强制走 UPDATE，不使用 INSERT。UPDATE 没找到记录时返回 0 行，不报错
-    const result = await supabase
+    console.log('[settings] save start, payload keys:', Object.keys(payload))
+    // 先查记录是否存在
+    const { data: existing } = await supabase
       .from('user_settings')
-      .update(payload)
+      .select('id')
       .eq('user_id', userId)
-    let error = result.error
-    // 如果 UPDATE 影响 0 行（记录不存在），则 INSERT 一条
-    if (!error && (!result.data || (Array.isArray(result.data) && result.data.length === 0))) {
-      const insertResult = await supabase.from('user_settings').insert(payload)
-      error = insertResult.error
+      .maybeSingle()
+    console.log('[settings] existing record:', existing)
+    let error
+    if (existing) {
+      // 记录存在，执行 update（不传 user_id 避免修改）
+      const { user_id, ...updatePayload } = payload
+      console.log('[settings] running UPDATE')
+      const result = await supabase
+        .from('user_settings')
+        .update(updatePayload)
+        .eq('user_id', userId)
+      console.log('[settings] UPDATE result:', { error: result.error, count: result.count })
+      error = result.error
+    } else {
+      // 记录不存在，执行 insert
+      console.log('[settings] running INSERT')
+      const result = await supabase
+        .from('user_settings')
+        .insert(payload)
+      console.log('[settings] INSERT result:', { error: result.error, data: result.data })
+      error = result.error
     }
     setSaving(false)
     if (!error) setSavedSnapshot({ ...snapshot, configs: cloneProviderConfigs(snapshot.configs) })
