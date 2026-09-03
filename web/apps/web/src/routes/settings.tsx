@@ -806,6 +806,7 @@ function buildSettingsPayload(args: {
   dingtalkWebhook: string
   tgBotToken: string
   tgChatId: string
+  tushareToken?: string
 }) {
   return {
     user_id: args.userId,
@@ -829,6 +830,7 @@ function buildSettingsPayload(args: {
     dingtalk_webhook: args.dingtalkWebhook,
     tg_bot_token: args.tgBotToken,
     tg_chat_id: args.tgChatId,
+    tushare_token: args.tushareToken || null,
   }
 }
 
