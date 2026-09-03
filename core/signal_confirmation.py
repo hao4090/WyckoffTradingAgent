@@ -1,4 +1,16 @@
+<<<<<<< Updated upstream
 """信号确认逻辑：pending → survived / confirmed / expired。纯业务，不依赖 DB。"""
+=======
+"""信号确认逻辑：pending → survived → confirmed / expired。纯业务，不依赖 DB。
+
+状态机（以 SOS/TTL=2 为例）：
+- Day N（信号日）：pending 入库，当天不做确认检查
+- Day N+1：days_elapsed=1，未确认 → survived
+- Day N+2：days_elapsed=2，TTL 到达 → confirmed（若确认）或 expired（若未确认）
+
+只有 confirmed 信号才能送 OMS；survived 只观察、不交易。
+"""
+>>>>>>> Stashed changes
 
 from __future__ import annotations
 
@@ -38,13 +50,25 @@ def check_confirmation(
     today_ohlcv: dict[str, float],
     days_elapsed: int,
 ) -> tuple[str, str]:
+<<<<<<< Updated upstream
     """返回 (new_status, reason)，区分“未失效”和“正向确认”。"""
+=======
+    """返回 (new_status, reason)，status ∈ {'pending', 'survived', 'confirmed', 'expired'}。
+
+    状态转换规则：
+    - days_elapsed >= TTL                          → expired（TTL 到期，未确认）
+    - days_elapsed == 0（信号日）                   → pending（当天不检查）
+    - days_elapsed >= 1 且未满足确认条件              → survived（跨日观察中）
+    - 满足各信号类型的确认条件                        → confirmed
+    """
+>>>>>>> Stashed changes
     ttl = SIGNAL_TTL_DAYS.get(signal_type, 3)
-    if days_elapsed >= ttl:
+    if days_elapsed > ttl:
         return "expired", f"TTL {ttl}天已到，未满足确认条件"
     fn = _CONFIRM_DISPATCH.get(signal_type)
     if fn is None:
         return "expired", f"未知信号类型: {signal_type}"
+<<<<<<< Updated upstream
     status, reason = fn(snap, today_ohlcv, days_elapsed)
     if status == "pending" and days_elapsed > 0:
         return "survived", reason
@@ -62,6 +86,13 @@ def _close_position(today: dict[str, float], reference_close: float = 0.0) -> fl
     if reference_close > 0 and close < reference_close:
         return 0.0
     return 0.5
+=======
+    result = fn(snap, today_ohlcv, days_elapsed)
+    # 信号日当天返回 pending；days_elapsed >= 1 但未确认 → survived
+    if result[0] == "pending" and days_elapsed >= 1:
+        return ("survived", result[1])
+    return result
+>>>>>>> Stashed changes
 
 
 def _confirm_sos(snap: dict, today: dict, days_elapsed: int) -> tuple[str, str]:

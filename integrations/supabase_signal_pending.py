@@ -38,9 +38,23 @@ def insert_pending_signal_rows(rows: list[dict[str, Any]]) -> int:
 
     try:
         client = _admin()
+<<<<<<< Updated upstream
         to_insert = _rows_not_yet_active(client, rows)
         if not to_insert:
             logger.info("%s pending signals already exist; skipped", len(rows))
+=======
+        # 检查 pending 和 survived：避免同一 code+signal_type 在 TTL 内重复写入
+        existing = (
+            client.table(TABLE_SIGNAL_PENDING)
+            .select("code,signal_type")
+            .in_("status", ["pending", "survived"])
+            .execute()
+        )
+        existing_keys = {(int(r["code"]), r["signal_type"]) for r in (existing.data or [])}
+        to_insert = [p for p in payload if (int(p["code"]), p["signal_type"]) not in existing_keys]
+        if not to_insert:
+            print(f"[signal_pending] {len(payload)} 条信号已存在 pending/survived，跳过")
+>>>>>>> Stashed changes
             return 0
         written = _insert_with_fallbacks(client, to_insert)
         logger.info(
@@ -55,6 +69,7 @@ def insert_pending_signal_rows(rows: list[dict[str, Any]]) -> int:
         return 0
 
 
+<<<<<<< Updated upstream
 def _active_key(row: dict[str, Any]) -> tuple[int, str]:
     return int(row["code"]), row["signal_type"]
 
@@ -144,6 +159,19 @@ def load_pending_signals() -> list[dict[str, Any]]:
     try:
         return (
             _read().table(TABLE_SIGNAL_PENDING).select("*").in_("status", ["pending", "survived"]).execute().data or []
+=======
+def load_pending_signals() -> list[dict[str, Any]]:
+    """加载 pending 和 survived 状态的信号，用于每日确认周期。
+
+    pending：信号日当天，尚未经过首次确认检查
+    survived：跨日观察中，TTL 未到但尚未确认
+    """
+    if not _configured():
+        return []
+    try:
+        return (
+            _admin().table(TABLE_SIGNAL_PENDING).select("*").in_("status", ["pending", "survived"]).execute().data or []
+>>>>>>> Stashed changes
         )
     except Exception as e:
         logger.warning("load pending signals failed: %s", e)
