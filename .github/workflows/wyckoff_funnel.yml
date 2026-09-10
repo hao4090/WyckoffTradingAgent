@@ -31,8 +31,11 @@ jobs:
       TICKFLOW_KLINE_RATE_LIMIT_PER_MIN: "110"
       FUNNEL_EXECUTOR_MODE: "thread"
       FUNNEL_MAX_WORKERS: "4"
-      FUNNEL_BATCH_SIZE: "200"
-      FUNNEL_BATCH_SLEEP: "0.55"
+      FUNNEL_BATCH_SIZE: "100"
+      FUNNEL_BATCH_SLEEP: "1"
+      FUNNEL_FETCH_RETRIES: "3"
+      FUNNEL_FETCH_TIMEOUT: "60"
+      FUNNEL_SOCKET_TIMEOUT: "30"
       END_CALENDAR_DAY: ${{ github.event.inputs.end_calendar_day || '' }}
       DEFAULT_LLM_PROVIDER: ${{ secrets.DEFAULT_LLM_PROVIDER }}
       STEP3_LLM_PROVIDER: ${{ vars.STEP3_LLM_PROVIDER || secrets.STEP3_LLM_PROVIDER || 'efficiency' }}
