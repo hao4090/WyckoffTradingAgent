@@ -8,6 +8,8 @@ on:
       - 'web/apps/web/package.json'
       - 'web/apps/web/vite.config.ts'
       - 'web/apps/web/index.html'
+      - 'web/apps/web/tailwind.config.ts'
+      - 'web/apps/web/.cloudflare'
   workflow_dispatch:
 
 permissions:
@@ -16,30 +18,36 @@ permissions:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    concurrency:
+      group: pages-deploy
+      cancel-in-progress: false
     steps:
-      - uses: actions/checkout@v7
+      - name: Checkout
+        uses: actions/checkout@v7
 
-      - uses: pnpm/action-setup@v4
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
         with:
           version: 10
 
-      - uses: actions/setup-node@v7
+      - name: Setup Node
+        uses: actions/setup-node@v7
         with:
           node-version: '22'
           cache: 'pnpm'
           cache-dependency-path: web/pnpm-lock.yaml
 
       - name: Install dependencies
-        run: |
-          cd web
-          pnpm install --frozen-lockfile
+        working-directory: web
+        run: pnpm install --frozen-lockfile
 
       - name: Build
-        run: |
-          cd web/apps/web
-          pnpm build
+        working-directory: web/apps/web
+        run: pnpm build
         env:
-          VITE_API_BASE_URL: ${{ vars.VITE_API_BASE_URL }}
+          VITE_API_URL: ${{ vars.VITE_API_URL }}
+          VITE_SUPABASE_URL: ${{ vars.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ vars.VITE_SUPABASE_ANON_KEY }}
 
       - name: Deploy to Cloudflare Pages
         uses: cloudflare/pages-action@v1
@@ -49,3 +57,4 @@ jobs:
           projectName: wyckoff-analysis
           directory: web/apps/web/dist
           gitHubToken: ${{ secrets.GITHUB_TOKEN }}
+          wranglerVersion: '3'
