@@ -1,0 +1,46 @@
+﻿name: Pages Deploy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'web/apps/web/src/**'
+      - 'web/apps/web/package.json'
+      - 'web/apps/web/vite.config.ts'
+      - 'web/apps/web/index.html'
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+          cache-dependency-path: web/pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: |
+          cd web
+          pnpm install --frozen-lockfile
+
+      - name: Build
+        run: |
+          cd web/apps/web
+          pnpm build
+
+      - name: Deploy to Cloudflare Pages
+        uses: cloudflare/pages-action@v1
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          projectName: wyckoff-analysis
+          directory: web/apps/web/dist
+          gitHubToken: ${{ secrets.GITHUB_TOKEN }}
