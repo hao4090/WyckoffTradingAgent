@@ -33,9 +33,7 @@ jobs:
       FUNNEL_MAX_WORKERS: "4"
       FUNNEL_BATCH_SIZE: "200"
       FUNNEL_BATCH_SLEEP: "0.55"
-      FUNNEL_FETCH_RETRIES: "3"
-      FUNNEL_FETCH_TIMEOUT: "60"
-      FUNNEL_SOCKET_TIMEOUT: "30"
+      FUNNEL_CFG_INCLUDE_BSE_BOARD: "false"
       END_CALENDAR_DAY: ${{ github.event.inputs.end_calendar_day || '' }}
       DEFAULT_LLM_PROVIDER: ${{ secrets.DEFAULT_LLM_PROVIDER }}
       STEP3_LLM_PROVIDER: ${{ vars.STEP3_LLM_PROVIDER || secrets.STEP3_LLM_PROVIDER || 'efficiency' }}
@@ -159,7 +157,7 @@ jobs:
       FUNNEL_STRATEGIC_L2_BYPASS_AI_CAP: "2"
       FUNNEL_THEME_RADAR_PROMOTE_CAP: "2"
       FUNNEL_ENFORCE_TARGET_TRADE_DATE: "1"
-      FUNNEL_DATA_FRESHNESS_HARD_FAIL: "0"
+      FUNNEL_DATA_FRESHNESS_HARD_FAIL: "1"
       DAILY_JOB_ARTIFACTS_DIR: ${{ github.workspace }}/artifacts
       TZ: Asia/Shanghai
 
