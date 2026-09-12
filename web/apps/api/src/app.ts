@@ -50,6 +50,8 @@ export function createApiApp(readinessCheck: RuntimeReadinessCheck = () => []) {
       'http://127.0.0.1:5175',
       'https://wyckoff-analysis.pages.dev',
       'https://wyckoff.pages.dev',
+      'https://wyckoff.991109.xyz',
+
     ],
     credentials: true,
   }))
