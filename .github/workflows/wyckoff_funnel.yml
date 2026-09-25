@@ -1,13 +1,13 @@
-name: Wyckoff Funnel
+﻿name: Wyckoff Funnel
 
 on:
   schedule:
-    # 北京时间周日到周四 17:17（UTC 9:17），为下一交易日做盘后准备。
+    # 鍖椾含鏃堕棿鍛ㄦ棩鍒板懆鍥?17:17锛圲TC 9:17锛夛紝涓轰笅涓€浜ゆ槗鏃ュ仛鐩樺悗鍑嗗銆?
     - cron: '17 9 * * 0-4'
   workflow_dispatch:
     inputs:
       end_calendar_day:
-        description: "可选：回放目标自然日，例如 2026-05-26"
+        description: "鍙€夛細鍥炴斁鐩爣鑷劧鏃ワ紝渚嬪 2026-05-26"
         required: false
         type: string
 
@@ -27,7 +27,7 @@ jobs:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
       TICKFLOW_API_KEY: ${{ secrets.TICKFLOW_API_KEY }}
-      # TickFlow 日K批量上限为 120/min、200标的/次；主漏斗优先走批量接口。
+      # TickFlow 鏃鎵归噺涓婇檺涓?120/min銆?00鏍囩殑/娆★紱涓绘紡鏂椾紭鍏堣蛋鎵归噺鎺ュ彛銆?
       TICKFLOW_KLINE_RATE_LIMIT_PER_MIN: "110"
       FUNNEL_EXECUTOR_MODE: "thread"
       FUNNEL_MAX_WORKERS: "4"
@@ -73,83 +73,83 @@ jobs:
       SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
       SUPABASE_USER_ID: ${{ secrets.SUPABASE_USER_ID }}
-      # 影子账本（paper ledger）：shadow_* 五张表与 seed 账户已建好，开启记账。
-      # 只写 USER_SHADOW:*（写入侧有前缀硬断言），挂在 Step4 之后且异常被吞，不影响实盘。
-      # 需要停掉时把 vars.SHADOW_LEDGER_ENABLED 设为 0，不必改 workflow。
+      # 褰卞瓙璐︽湰锛坧aper ledger锛夛細shadow_* 浜斿紶琛ㄤ笌 seed 璐︽埛宸插缓濂斤紝寮€鍚璐︺€?
+      # 鍙啓 USER_SHADOW:*锛堝啓鍏ヤ晶鏈夊墠缂€纭柇瑷€锛夛紝鎸傚湪 Step4 涔嬪悗涓斿紓甯歌鍚烇紝涓嶅奖鍝嶅疄鐩樸€?
+      # 闇€瑕佸仠鎺夋椂鎶?vars.SHADOW_LEDGER_ENABLED 璁句负 0锛屼笉蹇呮敼 workflow銆?
       SHADOW_LEDGER_ENABLED: ${{ vars.SHADOW_LEDGER_ENABLED || '1' }}
       RAG_SEMANTIC_VETO_ENABLED: ${{ vars.RAG_SEMANTIC_VETO_ENABLED || '1' }}
       RAG_SEMANTIC_PROVIDER: ${{ vars.RAG_SEMANTIC_PROVIDER || secrets.RAG_SEMANTIC_PROVIDER || 'efficiency' }}
-      # 实盘风控：ATR/结构止损优先，-12% 仅灾难地板；非主线 5 日时间管理见 holding_time_policy
+      # 瀹炵洏椋庢帶锛欰TR/缁撴瀯姝㈡崯浼樺厛锛?12% 浠呯伨闅惧湴鏉匡紱闈炰富绾?5 鏃ユ椂闂寸鐞嗚 holding_time_policy
       STEP4_BUY_HARD_STOP_ENABLED: "1"
-      # 止损 12% -> 5%。生产回测（66 交易日/123 笔/含真实成本）四档单调：
-      #   无止损  总收益 -16.49%  夏普 -1.965  回撤 -24.69%  VaR95 -22.14%
-      #   -12%    总收益  -5.71%  夏普 -0.794  回撤 -14.51%  VaR95 -12.18%（原实盘值）
-      #   -8%     总收益  +0.04%  夏普 -0.068  回撤 -10.22%  VaR95  -9.70%
-      #   -5%     总收益  +7.31%  夏普 +0.871  回撤  -7.25%  VaR95  -9.69%
-      # 代价是胜率由 46.34% 降到 37.40%——机制是用更多小亏换掉少数巨亏，
-      # 收益来自「没有大亏」而非「多赚」，故执行纪律不能中途干预。
+      # 姝㈡崯 12% -> 5%銆傜敓浜у洖娴嬶紙66 浜ゆ槗鏃?123 绗?鍚湡瀹炴垚鏈級鍥涙。鍗曡皟锛?
+      #   鏃犳鎹? 鎬绘敹鐩?-16.49%  澶忔櫘 -1.965  鍥炴挙 -24.69%  VaR95 -22.14%
+      #   -12%    鎬绘敹鐩? -5.71%  澶忔櫘 -0.794  鍥炴挙 -14.51%  VaR95 -12.18%锛堝師瀹炵洏鍊硷級
+      #   -8%     鎬绘敹鐩? +0.04%  澶忔櫘 -0.068  鍥炴挙 -10.22%  VaR95  -9.70%
+      #   -5%     鎬绘敹鐩? +7.31%  澶忔櫘 +0.871  鍥炴挙  -7.25%  VaR95  -9.69%
+      # 浠ｄ环鏄儨鐜囩敱 46.34% 闄嶅埌 37.40%鈥斺€旀満鍒舵槸鐢ㄦ洿澶氬皬浜忔崲鎺夊皯鏁板法浜忥紝
+      # 鏀剁泭鏉ヨ嚜銆屾病鏈夊ぇ浜忋€嶈€岄潪銆屽璧氥€嶏紝鏁呮墽琛岀邯寰嬩笉鑳戒腑閫斿共棰勩€?
       STEP4_BUY_HARD_STOP_PCT: "5.0"
       STEP4_BUY_STOP_MODE: "floor"
       STEP4_PROBE_BUDGET_LIMIT: "0.10"
       STEP4_REPAIR_PROBE_BUDGET_LIMIT: "0.05"
       STEP4_ATTACK_BUDGET_LIMIT: "0.20"
       STEP4_BUY_BLOCK_REGIMES: "UNKNOWN,NEUTRAL,PANIC_REPAIR,RISK_OFF,CRASH,BLACK_SWAN"
-      # 联动实测放开：BEAR_REBOUND 超额 +4.08pct(4/4 为正)、RISK_ON +6.07pct(3/3)。
-      # RISK_ON 已从豁免名单移除（移除后自动回落到代码默认禁买集）。
-      # 此前依「联动实测 +6.07pct（3/3 为正）」放开，但那只有 3 个样本日。
-      # 两次独立的跨周期回测均显示该档为负，且样本在扩大后更差：
-      #   2026-08-21 六个月网格：4 笔  胜率 25.0%  均收 -2.96%
-      #   2026-08-22 六周期网格：6 笔  胜率 16.7%  均收 -5.03%（中位 -6.81%）
-      # 回测生成的交易手册亦明确写「RISK_ON 禁止新仓｜生产市场闸门固定禁止，
-      # 不以近期样本收益解禁」。样本仍偏小（6 笔），但两次同向为负、方向与放开依据相反，
-      # 且禁买是保守侧，故先恢复禁买。
+      # 鑱斿姩瀹炴祴鏀惧紑锛欱EAR_REBOUND 瓒呴 +4.08pct(4/4 涓烘)銆丷ISK_ON +6.07pct(3/3)銆?
+      # RISK_ON 宸蹭粠璞佸厤鍚嶅崟绉婚櫎锛堢Щ闄ゅ悗鑷姩鍥炶惤鍒颁唬鐮侀粯璁ょ涔伴泦锛夈€?
+      # 姝ゅ墠渚濄€岃仈鍔ㄥ疄娴?+6.07pct锛?/3 涓烘锛夈€嶆斁寮€锛屼絾閭ｅ彧鏈?3 涓牱鏈棩銆?
+      # 涓ゆ鐙珛鐨勮法鍛ㄦ湡鍥炴祴鍧囨樉绀鸿妗ｄ负璐燂紝涓旀牱鏈湪鎵╁ぇ鍚庢洿宸細
+      #   2026-08-21 鍏釜鏈堢綉鏍硷細4 绗? 鑳滅巼 25.0%  鍧囨敹 -2.96%
+      #   2026-08-22 鍏懆鏈熺綉鏍硷細6 绗? 鑳滅巼 16.7%  鍧囨敹 -5.03%锛堜腑浣?-6.81%锛?
+      # 鍥炴祴鐢熸垚鐨勪氦鏄撴墜鍐屼害鏄庣‘鍐欍€孯ISK_ON 绂佹鏂颁粨锝滅敓浜у競鍦洪椄闂ㄥ浐瀹氱姝紝
+      # 涓嶄互杩戞湡鏍锋湰鏀剁泭瑙ｇ銆嶃€傛牱鏈粛鍋忓皬锛? 绗旓級锛屼絾涓ゆ鍚屽悜涓鸿礋銆佹柟鍚戜笌鏀惧紑渚濇嵁鐩稿弽锛?
+      # 涓旂涔版槸淇濆畧渚э紝鏁呭厛鎭㈠绂佷拱銆?
       STEP4_BUY_ALLOW_REGIMES: "BEAR_REBOUND"
-      # 把硬防守档降为「小仓试探」而非完全禁买（只认 RISK_OFF，白名单见
-      # core/market_trade_mode.PROBE_DOWNGRADABLE_REGIMES）。默认留空 = 行为与此前逐位相同。
-      # 与 ALLOW 分开是刻意的：ALLOW 在 resolve_market_trade_mode 里对硬防守档故意无效，
-      # 有两条回归测试钉住（test_hard_defense_regimes_ignore_allow_list /
-      # test_defensive_regimes_never_openable_by_allow），不能借道它开这个口。
-      # 开启后 RISK_OFF 走 confirmation_only：配额压到 1 只、禁 ATTACK、禁满配额 L4。
-      # 依据与边界见 _probe_downgraded_regimes 文档串——要点是那句「回测全周期弱势」
-      # 已被实测冲掉（换窗口符号整列翻转、环移 p 全不显著），但漏斗在这些天的选票
-      # 也没跑赢动量匹配对照，故只降档限仓、不整层放开。
+      # 鎶婄‖闃插畧妗ｉ檷涓恒€屽皬浠撹瘯鎺€嶈€岄潪瀹屽叏绂佷拱锛堝彧璁?RISK_OFF锛岀櫧鍚嶅崟瑙?
+      # core/market_trade_mode.PROBE_DOWNGRADABLE_REGIMES锛夈€傞粯璁ょ暀绌?= 琛屼负涓庢鍓嶉€愪綅鐩稿悓銆?
+      # 涓?ALLOW 鍒嗗紑鏄埢鎰忕殑锛欰LLOW 鍦?resolve_market_trade_mode 閲屽纭槻瀹堟。鏁呮剰鏃犳晥锛?
+      # 鏈変袱鏉″洖褰掓祴璇曢拤浣忥紙test_hard_defense_regimes_ignore_allow_list /
+      # test_defensive_regimes_never_openable_by_allow锛夛紝涓嶈兘鍊熼亾瀹冨紑杩欎釜鍙ｃ€?
+      # 寮€鍚悗 RISK_OFF 璧?confirmation_only锛氶厤棰濆帇鍒?1 鍙€佺 ATTACK銆佺婊￠厤棰?L4銆?
+      # 渚濇嵁涓庤竟鐣岃 _probe_downgraded_regimes 鏂囨。涓测€斺€旇鐐规槸閭ｅ彞銆屽洖娴嬪叏鍛ㄦ湡寮卞娍銆?
+      # 宸茶瀹炴祴鍐叉帀锛堟崲绐楀彛绗﹀彿鏁村垪缈昏浆銆佺幆绉?p 鍏ㄤ笉鏄捐憲锛夛紝浣嗘紡鏂楀湪杩欎簺澶╃殑閫夌エ
+      # 涔熸病璺戣耽鍔ㄩ噺鍖归厤瀵圭収锛屾晠鍙檷妗ｉ檺浠撱€佷笉鏁村眰鏀惧紑銆?
       STEP4_BUY_PROBE_REGIMES: ${{ vars.STEP4_BUY_PROBE_REGIMES || '' }}
-      # 留空：叠加验证显示该改动与 5% 止损重复用药。同区间 66 交易日：
-      #   仅止损 -5%          总收益 +7.31%  夏普 +0.871  Accum +1.776
-      #   禁 evr/sos + 止损5%  总收益 -0.14%  夏普 -0.122  Accum +0.610
-      # 两者单独都改善（禁 evr/sos 单独 -15.82%->-6.31%），但叠加后差 7.45pct。
-      # 原因：两个改动解决的是同一个问题（Trend 类亏损）。止损已把 Trend 从
-      # -3.109 控到 -1.196，此时再砍 Trend 只是把席位让给排名更靠后的次级 Accum
-      # 候选，Accum 均值因此从 +1.776 掉到 +0.610。开关保留，需要时可再开。
+      # 鐣欑┖锛氬彔鍔犻獙璇佹樉绀鸿鏀瑰姩涓?5% 姝㈡崯閲嶅鐢ㄨ嵂銆傚悓鍖洪棿 66 浜ゆ槗鏃ワ細
+      #   浠呮鎹?-5%          鎬绘敹鐩?+7.31%  澶忔櫘 +0.871  Accum +1.776
+      #   绂?evr/sos + 姝㈡崯5%  鎬绘敹鐩?-0.14%  澶忔櫘 -0.122  Accum +0.610
+      # 涓よ€呭崟鐙兘鏀瑰杽锛堢 evr/sos 鍗曠嫭 -15.82%->-6.31%锛夛紝浣嗗彔鍔犲悗宸?7.45pct銆?
+      # 鍘熷洜锛氫袱涓敼鍔ㄨВ鍐崇殑鏄悓涓€涓棶棰橈紙Trend 绫讳簭鎹燂級銆傛鎹熷凡鎶?Trend 浠?
+      # -3.109 鎺у埌 -1.196锛屾鏃跺啀鐮?Trend 鍙槸鎶婂腑浣嶈缁欐帓鍚嶆洿闈犲悗鐨勬绾?Accum
+      # 鍊欓€夛紝Accum 鍧囧€煎洜姝や粠 +1.776 鎺夊埌 +0.610銆傚紑鍏充繚鐣欙紝闇€瑕佹椂鍙啀寮€銆?
       STEP4_BLOCK_BUY_SIGNAL_TYPES: ""
       STEP4_REQUIRE_CONFIRMED_BUY_CANDIDATE: "1"
-      # AI 候选选择：按可交易 L4 收口，避免裸 SOS/EVR 噪声直接进入执行链路。
+      # AI 鍊欓€夐€夋嫨锛氭寜鍙氦鏄?L4 鏀跺彛锛岄伩鍏嶈８ SOS/EVR 鍣０鐩存帴杩涘叆鎵ц閾捐矾銆?
       FUNNEL_AI_SELECTION_MODE: ${{ vars.FUNNEL_AI_SELECTION_MODE || 'tradeable_l4' }}
       FUNNEL_AI_TOTAL_CAP: "8"
       FUNNEL_AI_MAX_PER_SECTOR: "2"
-      # 生产按质量池统一裁剪；动态配额仅保留 shadow 对照。
+      # 鐢熶骇鎸夎川閲忔睜缁熶竴瑁佸壀锛涘姩鎬侀厤棰濅粎淇濈暀 shadow 瀵圭収銆?
       FUNNEL_DYNAMIC_POLICY: ${{ vars.FUNNEL_DYNAMIC_POLICY || secrets.FUNNEL_DYNAMIC_POLICY || 'shadow' }}
       FUNNEL_DYNAMIC_POLICY_HORIZON: "5"
       STRATEGY_ATTRIBUTION_MAX_AGE_DAYS: "7"
       FUNNEL_DEFENSIVE_FORCE_QUOTA: "1"
-      # A 股赚钱书：RISK_ON 禁新仓；NEUTRAL 主线/趋势主导
+      # A 鑲¤禋閽变功锛歊ISK_ON 绂佹柊浠擄紱NEUTRAL 涓荤嚎/瓒嬪娍涓诲
       FUNNEL_AI_RISK_ON_TREND: "5"
       FUNNEL_AI_RISK_ON_ACCUM: "1"
       FUNNEL_LOSS_GUARD_RISK_ON_PRE5_RET: "35.0"
       FUNNEL_MAX_STRUCTURE_STOP_PCT: "12.0"
       FUNNEL_AI_RISK_OFF_TREND: "0"
       FUNNEL_AI_RISK_OFF_ACCUM: "0"
-      # NEUTRAL 已于 #280 并入禁买（超额 -4.35pct、CI [-6.80,-2.07] 不跨 0），
-      # 配额保留用于 shadow 对照，不占正式推荐。
+      # NEUTRAL 宸蹭簬 #280 骞跺叆绂佷拱锛堣秴棰?-4.35pct銆丆I [-6.80,-2.07] 涓嶈法 0锛夛紝
+      # 閰嶉淇濈暀鐢ㄤ簬 shadow 瀵圭収锛屼笉鍗犳寮忔帹鑽愩€?
       FUNNEL_AI_NEUTRAL_TREND: "5"
       FUNNEL_AI_NEUTRAL_ACCUM: "1"
-      # BEAR_REBOUND 的 AI 配额由 0 -> 5/1，与其买入闸门放开对齐。
-      # 此前不一致：#280 把 BEAR_REBOUND 移出禁买名单（联动实测超额 +4.08pct、4/4 为正），
-      # 但该档 AI 配额仍是 0，候选进了池子也拿不到复核席位——2026-08-17 那天池内 4 只
-      # 候选（大北农/南方精工/宿迁联盛/新相微）次日全涨 9.7%~10.1%，而 AI 正式推荐 0 只。
+      # BEAR_REBOUND 鐨?AI 閰嶉鐢?0 -> 5/1锛屼笌鍏朵拱鍏ラ椄闂ㄦ斁寮€瀵归綈銆?
+      # 姝ゅ墠涓嶄竴鑷达細#280 鎶?BEAR_REBOUND 绉诲嚭绂佷拱鍚嶅崟锛堣仈鍔ㄥ疄娴嬭秴棰?+4.08pct銆?/4 涓烘锛夛紝
+      # 浣嗚妗?AI 閰嶉浠嶆槸 0锛屽€欓€夎繘浜嗘睜瀛愪篃鎷夸笉鍒板鏍稿腑浣嶁€斺€?026-08-17 閭ｅぉ姹犲唴 4 鍙?
+      # 鍊欓€夛紙澶у寳鍐?鍗楁柟绮惧伐/瀹胯縼鑱旂洓/鏂扮浉寰級娆℃棩鍏ㄦ定 9.7%~10.1%锛岃€?AI 姝ｅ紡鎺ㄨ崘 0 鍙€?
       FUNNEL_AI_BEAR_REBOUND_TREND: "5"
       FUNNEL_AI_BEAR_REBOUND_ACCUM: "1"
-      # PANIC_REPAIR 单独成族并保持 0：超额 -4.09pct，与 BEAR_REBOUND 方向相反。
+      # PANIC_REPAIR 鍗曠嫭鎴愭棌骞朵繚鎸?0锛氳秴棰?-4.09pct锛屼笌 BEAR_REBOUND 鏂瑰悜鐩稿弽銆?
       FUNNEL_AI_PANIC_REPAIR_TREND: "0"
       FUNNEL_AI_PANIC_REPAIR_ACCUM: "0"
       FUNNEL_L2_BYPASS_AI_ENABLED: "0"
@@ -191,12 +191,12 @@ jobs:
           path: |
             logs/*.log
             artifacts/**
-          # 90 天不是随手放宽:review_shadow_backtest 的 trace 只活在这份 artifact 里,
-          # 过期即样本永久消失。同动量对照要 MIN_DAYS=20 个**可评估**日,而最后 5 天没有
-          # T+5 行情,故最短需 25 个交易日 ≈ 35 个自然日;30 天只够 21 天,T+5 恒为
-          # 「样本不足」——2026-09-05 首跑实测 trace_days=20 → T+5 仅 15 天。
-          # 单份 0.2MB、仓库 public(90 天为上限),约 60 份合计 ~12MB。
-          # 真正的解法仍是 review_shadow_lane_daily 落库,届时这里可以调回 30。
+          # 90 澶╀笉鏄殢鎵嬫斁瀹?review_shadow_backtest 鐨?trace 鍙椿鍦ㄨ繖浠?artifact 閲?
+          # 杩囨湡鍗虫牱鏈案涔呮秷澶便€傚悓鍔ㄩ噺瀵圭収瑕?MIN_DAYS=20 涓?*鍙瘎浼?*鏃?鑰屾渶鍚?5 澶╂病鏈?
+          # T+5 琛屾儏,鏁呮渶鐭渶 25 涓氦鏄撴棩 鈮?35 涓嚜鐒舵棩;30 澶╁彧澶?21 澶?T+5 鎭掍负
+          # 銆屾牱鏈笉瓒炽€嶁€斺€?026-09-05 棣栬窇瀹炴祴 trace_days=20 鈫?T+5 浠?15 澶┿€?
+          # 鍗曚唤 0.2MB銆佷粨搴?public(90 澶╀负涓婇檺),绾?60 浠藉悎璁?~12MB銆?
+          # 鐪熸鐨勮В娉曚粛鏄?review_shadow_lane_daily 钀藉簱,灞婃椂杩欓噷鍙互璋冨洖 30銆?
           retention-days: 90
           if-no-files-found: warn
 
@@ -212,13 +212,13 @@ jobs:
           import os, urllib.request, json
           url = os.environ.get('FEISHU_WEBHOOK_URL', '')
           if not url:
-            print('FEISHU_WEBHOOK_URL 未配置，跳过失败通知')
+            print('FEISHU_WEBHOOK_URL 鏈厤缃紝璺宠繃澶辫触閫氱煡')
             exit(0)
           content = '**Run**: ' + os.environ.get('RUN_URL', '') + '\n**Workflow**: ' + os.environ.get('WORKFLOW', '') + '\n**Branch**: ' + os.environ.get('REF', '')
           payload = {
             'msg_type': 'interactive',
             'card': {
-              'header': {'title': {'tag': 'plain_text', 'content': '❌ 定时任务失败'}},
+              'header': {'title': {'tag': 'plain_text', 'content': '鉂?瀹氭椂浠诲姟澶辫触'}},
               'elements': [{'tag': 'div', 'text': {'tag': 'lark_md', 'content': content}}]
             }
           }
@@ -226,5 +226,5 @@ jobs:
           try:
             urllib.request.urlopen(req, timeout=10)
           except Exception as e:
-            print('warning: 失败通知发送异常:', e)
+            print('warning: 澶辫触閫氱煡鍙戦€佸紓甯?', e)
           "
