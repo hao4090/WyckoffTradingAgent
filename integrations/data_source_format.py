@@ -7,6 +7,8 @@ from datetime import date, datetime, timedelta, timezone
 
 import pandas as pd
 
+from core.cn_boards import BSE_PREFIXES
+
 
 def compact_error(exc: Exception, max_len: int = 120) -> str:
     msg = str(exc or "").strip().replace("\n", " ")
@@ -49,10 +51,18 @@ SH_PREFIXES = (
 
 
 def to_ts_code(symbol: str) -> str:
+    """Convert 6-digit A-share code to Tushare ts_code format.
+
+    Handles BSE (Beijing Stock Exchange) by mapping 43/83/87/88/92 prefixes to .BJ.
+    """
     code = str(symbol).strip()
     if "." in code:
         return code
-    return f"{code}.SH" if code.startswith(SH_PREFIXES) else f"{code}.SZ"
+    if code.startswith(SH_PREFIXES):
+        return f"{code}.SH"
+    if code.startswith(BSE_PREFIXES):
+        return f"{code}.BJ"
+    return f"{code}.SZ"
 
 
 def tag_source(df: pd.DataFrame, source: str) -> pd.DataFrame:

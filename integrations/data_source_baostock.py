@@ -12,7 +12,8 @@ from contextlib import suppress
 
 import pandas as pd
 
-from integrations.data_source_format import SH_PREFIXES, STOCK_HIST_COLUMNS
+from core.cn_boards import BSE_PREFIXES, SH_PREFIXES
+from integrations.data_source_format import STOCK_HIST_COLUMNS
 
 logger = logging.getLogger(__name__)
 
@@ -51,8 +52,17 @@ def baostock_mark_failure(reason: str, *, debug_enabled: bool = False) -> None:
             logger.debug("baostock circuit opened: %s", _CIRCUIT_NOTE)
 
 
+def _bs_code(symbol: str) -> str:
+    """Convert 6-digit code to Baostock exchange prefix."""
+    if symbol.startswith(BSE_PREFIXES):
+        return f"bj.{symbol}"
+    if symbol.startswith(SH_PREFIXES):
+        return f"sh.{symbol}"
+    return f"sz.{symbol}"
+
+
 def fetch_stock_baostock(symbol: str, start: str, end: str) -> pd.DataFrame:
-    bs_code = f"sh.{symbol}" if symbol.startswith(SH_PREFIXES) else f"sz.{symbol}"
+    bs_code = _bs_code(symbol)
     start_dash = f"{start[:4]}-{start[4:6]}-{start[6:]}"
     end_dash = f"{end[:4]}-{end[4:6]}-{end[6:]}"
     started = time.monotonic()
