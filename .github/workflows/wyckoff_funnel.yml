@@ -34,7 +34,6 @@ jobs:
       FUNNEL_BATCH_SIZE: "200"
       FUNNEL_BATCH_SLEEP: "0.55"
       FUNNEL_CFG_INCLUDE_BSE_BOARD: "false"
-      FUNNEL_ENABLE_TICKFLOW_BATCH: "false"
       END_CALENDAR_DAY: ${{ github.event.inputs.end_calendar_day || '' }}
       DEFAULT_LLM_PROVIDER: ${{ secrets.DEFAULT_LLM_PROVIDER }}
       STEP3_LLM_PROVIDER: ${{ vars.STEP3_LLM_PROVIDER || secrets.STEP3_LLM_PROVIDER || 'efficiency' }}
