@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+import logging
+import os
+
+logger = logging.getLogger(__name__)
+
 from bisect import bisect_right
 from datetime import UTC, date, datetime
 from typing import Any
@@ -159,6 +164,24 @@ def empty_tracking_refresh_summary() -> dict[str, Any]:
     }
 
 
+# 进程内记忆：K 线批量端点是否已确认无权限（探测一次即可，不必每次重试）
+_TICKFLOW_KLINE_BATCH_BROKEN = False
+
+
+def _kline_batch_allowed() -> bool:
+    """K 线批量是否可用：env 开关 + 运行时探测结果。"""
+    global _TICKFLOW_KLINE_BATCH_BROKEN
+    if _TICKFLOW_KLINE_BATCH_BROKEN:
+        return False
+    flag = os.getenv("TICKFLOW_KLINE_BATCH_ENABLED", "1").strip().lower()
+    return flag not in {"0", "false", "no", "off"}
+
+
+def _is_kline_batch_permission_error(exc: Exception) -> bool:
+    text = str(exc)
+    return "NO_KLINE_BATCH_PERMISSION" in text or "TOO_MANY_SYMBOLS" in text
+
+
 def fetch_tickflow_tracking_market_data(
     api_key: str,
     symbols: list[str],
@@ -171,7 +194,29 @@ def fetch_tickflow_tracking_market_data(
     hist_map: dict[str, pd.DataFrame] = {}
     for chunk in chunked(symbols, batch_size):
         quotes.update(client.get_quotes(chunk))
-        hist_map.update(client.get_klines_batch(chunk, period="1d", count=120, adjust="none"))
+
+        if _kline_batch_allowed():
+            try:
+                hist_map.update(
+                    client.get_klines_batch(chunk, period="1d", count=120, adjust="none")
+                )
+                continue
+            except Exception as exc:
+                if not _is_kline_batch_permission_error(exc):
+                    raise
+                global _TICKFLOW_KLINE_BATCH_BROKEN
+                _TICKFLOW_KLINE_BATCH_BROKEN = True
+                logger.warning(
+                    "TickFlow kline batch unavailable, falling back to per-symbol: %s", exc
+                )
+
+        for sym in chunk:
+            try:
+                hist_map[sym] = client.get_klines(
+                    sym, period="1d", count=120, adjust="none"
+                )
+            except Exception:
+                hist_map[sym] = None
     return quotes, hist_map
 
 
