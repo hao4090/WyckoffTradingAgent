@@ -24,7 +24,9 @@ jobs:
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
       TICKFLOW_API_KEY: ${{ secrets.TICKFLOW_API_KEY }}
       TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
-      TICKFLOW_QUOTES_BATCH_SIZE: "5"
+      TICKFLOW_QUOTES_BATCH_SIZE: "5"              # 报价接口上限 5
+      TICKFLOW_KLINE_BATCH_ENABLED: "0"            # 关掉无权限的 K 线批量
+      
       TZ: Asia/Shanghai
 
     steps:
