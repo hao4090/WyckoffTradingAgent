@@ -10,6 +10,7 @@ import logging
 
 import pandas as pd
 
+import tools.tushare_batch_fetcher as tushare_batch_fetcher
 import tools.ohlcv_fallback_fetcher as ohlcv_fallback_fetcher
 import tools.tickflow_batch_fetcher as tickflow_batch_fetcher
 from core.hist_dates import latest_trade_date_from_hist as latest_trade_date_from_hist
@@ -42,6 +43,27 @@ def fetch_all_ohlcv(
         return _guard_ohlcv(
             _complete_partial_batch(
                 batch_result,
+                symbols,
+                window,
+                enforce_target_trade_date=enforce_target_trade_date,
+                batch_size=batch_size,
+                max_workers=max_workers,
+                batch_timeout=batch_timeout,
+                batch_sleep=batch_sleep,
+                executor_mode=executor_mode,
+                direct_source=direct_source,
+                runtime_config=runtime_config,
+            )
+        )
+
+    tushare_result = tushare_batch_fetcher.fetch_tushare_market_batch(
+        symbols=symbols,
+        window=window,
+    )
+    if tushare_result is not None:
+        return _guard_ohlcv(
+            _complete_partial_batch(
+                (tushare_result, {"source": "tushare_market_batch"}),
                 symbols,
                 window,
                 enforce_target_trade_date=enforce_target_trade_date,
