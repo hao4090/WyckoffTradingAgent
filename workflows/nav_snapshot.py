@@ -113,7 +113,7 @@ def missing_nav_dates(portfolio_id: str, start: str, end: str) -> list[str]:
     rows = (
         client.table("daily_nav")
         .select("trade_date")
-        .eq("portfolio_id", portfolio_id)
+        .eq("portfolio_id_text", portfolio_id)
         .gte("trade_date", start)
         .lte("trade_date", end)
         .execute()

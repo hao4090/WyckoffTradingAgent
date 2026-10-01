@@ -775,7 +775,7 @@ def upsert_daily_nav(
     try:
         client = _get_supabase_admin_client()
         payload = {
-            "portfolio_id": portfolio_id,
+            "portfolio_id_text": portfolio_id,
             "trade_date": trade_date,
             "free_cash": float(free_cash),
             "positions_value": float(positions_value),
@@ -784,7 +784,7 @@ def upsert_daily_nav(
         }
         client.table(TABLE_DAILY_NAV).upsert(
             payload,
-            on_conflict="portfolio_id,trade_date",
+            on_conflict="portfolio_id_text,trade_date",
         ).execute()
         return True
     except Exception as e:
