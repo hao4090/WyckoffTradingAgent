@@ -148,7 +148,7 @@ def load_portfolio_state(portfolio_id: str = "USER_LIVE", client: Client | None 
         pos_resp = (
             client.table(TABLE_PORTFOLIO_POSITIONS)
             .select("code,name,shares,cost_price,buy_dt,stop_loss,updated_at")
-            .eq("portfolio_id", portfolio_id)
+            .eq("portfolio_id_text", portfolio_id)
             .order("code")
             .execute()
         )
@@ -252,7 +252,7 @@ def check_daily_run_exists(
         resp = (
             client.table(TABLE_TRADE_ORDERS)
             .select("run_id,status,created_at")
-            .eq("portfolio_id", portfolio_id)
+            .eq("portfolio_id_text", portfolio_id)
             .eq("trade_date", trade_date)
             .order("created_at", desc=True)
             .limit(200)
@@ -293,7 +293,7 @@ def set_position_stops(
             (
                 write_client.table(TABLE_PORTFOLIO_POSITIONS)
                 .update({"stop_loss": item.get("stop_loss")})
-                .eq("portfolio_id", portfolio_id)
+                .eq("portfolio_id_text", portfolio_id)
                 .eq("code", code)
                 .execute()
             )
@@ -323,7 +323,7 @@ def update_position_stops(portfolio_id: str, updates: list[dict[str, Any]]) -> b
             (
                 client.table(TABLE_PORTFOLIO_POSITIONS)
                 .update({"stop_loss": item.get("stop_loss")})
-                .eq("portfolio_id", portfolio_id)
+                .eq("portfolio_id_text", portfolio_id)
                 .eq("code", code)
                 .execute()
             )
@@ -335,7 +335,7 @@ def update_position_stops(portfolio_id: str, updates: list[dict[str, Any]]) -> b
 
 def _ensure_portfolio_exists(portfolio_id: str, client: Client) -> None:
     """确保 portfolios 行存在，不存在则创建。"""
-    resp = client.table(TABLE_PORTFOLIOS).select("portfolio_id").eq("portfolio_id", portfolio_id).limit(1).execute()
+    resp = client.table(TABLE_PORTFOLIOS).select("portfolio_id").eq("portfolio_id_text", portfolio_id).limit(1).execute()
     if not resp.data:
         client.table(TABLE_PORTFOLIOS).upsert(
             {"portfolio_id": portfolio_id, "free_cash": 0, "name": "我的持仓"},
@@ -490,7 +490,7 @@ def update_position(
         response = (
             client.table(TABLE_PORTFOLIO_POSITIONS)
             .update(row)
-            .eq("portfolio_id", portfolio_id)
+            .eq("portfolio_id_text", portfolio_id)
             .eq("code", code)
             .execute()
         )
@@ -515,7 +515,7 @@ def delete_position(
     code = normalize_portfolio_code(code) or str(code or "").strip().upper()
     try:
         client = _resolve_write_client(client, "delete portfolio position")
-        client.table(TABLE_PORTFOLIO_POSITIONS).delete().eq("portfolio_id", portfolio_id).eq("code", code).execute()
+        client.table(TABLE_PORTFOLIO_POSITIONS).delete().eq("portfolio_id_text", portfolio_id).eq("code", code).execute()
         return True, _mutation_message(f"{code} 已删除", portfolio_id, client, refresh_equity)
     except Exception as e:
         logger.warning("[supabase_portfolio] delete_position failed: %s", e)
@@ -649,7 +649,7 @@ def update_free_cash(
     try:
         client = _resolve_write_client(client, "update portfolio cash")
         _ensure_portfolio_exists(portfolio_id, client)
-        client.table(TABLE_PORTFOLIOS).update({"free_cash": free_cash}).eq("portfolio_id", portfolio_id).execute()
+        client.table(TABLE_PORTFOLIOS).update({"free_cash": free_cash}).eq("portfolio_id_text", portfolio_id).execute()
         message = f"可用资金已更新为 {free_cash:,.2f}"
         return True, _mutation_message(message, portfolio_id, client, refresh_equity)
     except Exception as e:
@@ -721,7 +721,7 @@ def cancel_trade_orders(
         query = (
             client.table(TABLE_TRADE_ORDERS)
             .select("id,status,run_id")
-            .eq("portfolio_id", portfolio_id)
+            .eq("portfolio_id_text", portfolio_id)
             .eq("trade_date", trade_date)
             .limit(500)
         )
@@ -750,7 +750,7 @@ def load_recent_trade_orders(portfolio_id: str, *, limit: int = 200) -> list[dic
         resp = (
             client.table(TABLE_TRADE_ORDERS)
             .select("code,name,action,status,trade_date")
-            .eq("portfolio_id", portfolio_id)
+            .eq("portfolio_id_text", portfolio_id)
             .order("trade_date", desc=True)
             .limit(limit)
             .execute()
