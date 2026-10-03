@@ -31,66 +31,62 @@ def fetch_all_ohlcv(
     direct_source: bool = False,
     runtime_config: ohlcv_fallback_fetcher.FetchRuntimeConfig | None = None,
 ) -> tuple[dict[str, pd.DataFrame], dict[str, int | float]]:
-    """Fetch daily OHLCV using the fastest available strategy."""
-    batch_result = tickflow_batch_fetcher.fetch_tickflow_daily_batch(
-        symbols=symbols,
-        window=window,
+    """Fetch daily OHLCV using the fastest available strategy.
+
+    优先级：TickFlow 批量 -> Tushare 全市场(按 trade_date) -> per-symbol fallback 链。
+    """
+    _fb = _batch_kwargs(
         enforce_target_trade_date=enforce_target_trade_date,
         batch_size=batch_size,
+        max_workers=max_workers,
+        batch_timeout=batch_timeout,
         batch_sleep=batch_sleep,
+        executor_mode=executor_mode,
+        direct_source=direct_source,
+        runtime_config=runtime_config,
+    )
+
+    batch_result = tickflow_batch_fetcher.fetch_tickflow_daily_batch(
+        symbols=symbols, window=window,
+        enforce_target_trade_date=enforce_target_trade_date,
+        batch_size=batch_size, batch_sleep=batch_sleep,
     )
     if batch_result is not None and batch_result[0]:
         return _guard_ohlcv(
-            _complete_partial_batch(
-                batch_result,
-                symbols,
-                window,
-                enforce_target_trade_date=enforce_target_trade_date,
-                batch_size=batch_size,
-                max_workers=max_workers,
-                batch_timeout=batch_timeout,
-                batch_sleep=batch_sleep,
-                executor_mode=executor_mode,
-                direct_source=direct_source,
-                runtime_config=runtime_config,
-            )
+            _complete_partial_batch(batch_result, symbols, window, **_fb)
         )
 
     tushare_result = tushare_batch_fetcher.fetch_tushare_market_batch(
-        symbols=symbols,
-        window=window,
+        symbols=symbols, window=window,
     )
     if tushare_result is not None:
         return _guard_ohlcv(
             _complete_partial_batch(
                 (tushare_result, {"source": "tushare_market_batch"}),
-                symbols,
-                window,
-                enforce_target_trade_date=enforce_target_trade_date,
-                batch_size=batch_size,
-                max_workers=max_workers,
-                batch_timeout=batch_timeout,
-                batch_sleep=batch_sleep,
-                executor_mode=executor_mode,
-                direct_source=direct_source,
-                runtime_config=runtime_config,
+                symbols, window, **_fb,
             )
         )
 
     return _guard_ohlcv(
         ohlcv_fallback_fetcher.fetch_ohlcv_fallback(
-            symbols=symbols,
-            window=window,
-            enforce_target_trade_date=enforce_target_trade_date,
-            batch_size=batch_size,
-            max_workers=max_workers,
-            batch_timeout=batch_timeout,
-            batch_sleep=batch_sleep,
-            executor_mode=executor_mode,
-            direct_source=direct_source,
-            runtime_config=runtime_config,
+            symbols=symbols, window=window, **_fb,
         )
     )
+
+
+def _batch_kwargs(**overrides) -> dict:
+    """Collect the kwargs shared by _complete_partial_batch and the fallback fetcher."""
+    return {
+        "enforce_target_trade_date": False,
+        "batch_size": ohlcv_fallback_fetcher.BATCH_SIZE,
+        "max_workers": ohlcv_fallback_fetcher.MAX_WORKERS,
+        "batch_timeout": ohlcv_fallback_fetcher.BATCH_TIMEOUT,
+        "batch_sleep": ohlcv_fallback_fetcher.BATCH_SLEEP,
+        "executor_mode": ohlcv_fallback_fetcher.EXECUTOR_MODE,
+        "direct_source": False,
+        "runtime_config": None,
+        **overrides,
+    }
 
 
 def _guard_ohlcv(result: tuple[dict[str, pd.DataFrame], dict]) -> tuple[dict[str, pd.DataFrame], dict]:
