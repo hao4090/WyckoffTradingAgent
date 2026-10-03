@@ -67,17 +67,14 @@ jobs:
       - name: Debug Tushare
         run: |
           python -c "
-          import os, sys
-          print('token_len:', len(os.getenv('TUSHARE_TOKEN','')))
-          sys.path.insert(0, '.')
-          try:
-              import tools.tushare_batch_fetcher as m
-              print('module OK:', m.__file__)
-              print('enabled:', m.is_tushare_batch_enabled())
-          except Exception as e:
-              print('import FAIL:', type(e).__name__, e)
+          import logging; logging.basicConfig(level=logging.DEBUG)
+          from datetime import date
+          from tools.data_fetcher import fetch_all_ohlcv
+          W=type('W',(),{}); w=W(); w.start_trade_date=date(2026,9,1); w.end_trade_date=date(2026,9,30)
+          d,s=fetch_all_ohlcv(['000001','600519'], w)
+          print('GOT', len(d), s.get('source'))
           "
-          
+                    
       - name: Run theme radar
         env:
           EVENT_NAME: ${{ github.event_name }}
