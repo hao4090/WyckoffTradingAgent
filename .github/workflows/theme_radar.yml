@@ -64,9 +64,19 @@ jobs:
       - name: Prepare logs dir
         run: mkdir -p logs
         
-      - name: Check token
+      - name: Debug Tushare
         run: |
-          python -c "import os; t=os.getenv('TUSHARE_TOKEN',''); print('TUSHARE_TOKEN length:', len(t))"
+          python -c "
+          import os, sys
+          print('token_len:', len(os.getenv('TUSHARE_TOKEN','')))
+          sys.path.insert(0, '.')
+          try:
+              import tools.tushare_batch_fetcher as m
+              print('module OK:', m.__file__)
+              print('enabled:', m.is_tushare_batch_enabled())
+          except Exception as e:
+              print('import FAIL:', type(e).__name__, e)
+          "
           
       - name: Run theme radar
         env:
