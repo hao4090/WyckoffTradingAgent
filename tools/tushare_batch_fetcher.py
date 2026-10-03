@@ -51,9 +51,10 @@ def fetch_tushare_market_batch(symbols, window, *, adjust: str = "qfq"):
             logger.warning("Tushare batch: no trade days in window")
             return None
         chunks = [trade_days[i : i + CHUNK_DAYS] for i in range(0, len(trade_days), CHUNK_DAYS)]
-        logger.info(
-            "Tushare batch start: symbols=%d, trade_days=%d, chunks=%d", len(symbols), len(trade_days), len(chunks)
-        )
+        print(f"[tushare] START symbols={len(symbols)} days={len(trade_days)} chunks={len(chunks)}", flush=True)
+        # logger.info(
+        #    "Tushare batch start: symbols=%d, trade_days=%d, chunks=%d", len(symbols), len(trade_days), len(chunks)
+        # )
 
         collected = {}
         scanned = 0
@@ -211,7 +212,21 @@ def _normalize_frame(frame):
     dates = out["日期"].astype(str)
     out["日期"] = dates.str[:4] + "-" + dates.str[4:6] + "-" + dates.str[6:8]
     out = out.dropna(subset=["日期", "收盘"]).sort_values("日期").reset_index(drop=True)
-    return out[[c for c in STOCK_HIST_COLUMNS if c in out.columns]].copy()
+    # 漏斗下游读英文 volume/vol，缺这列换手率门槛会静默失效
+    out["volume"] = out["成交量"] if "成交量" in out.columns else pd.NA
+    out["vol"] = out["volume"]
+    out["close"] = out["收盘"] if "收盘" in out.columns else out.get("close")
+    # 漏斗下游按英文列名读（date/volume/close），缺列会静默失效
+    out["date"] = out["日期"]
+    out["volume"] = out["成交量"]
+    out["vol"] = out["成交量"]
+    out["close"] = out["收盘"]
+    out["open"] = out["开盘"]
+    out["high"] = out["最高"]
+    out["low"] = out["最低"]
+    out["amount"] = out["成交额"]
+    out["pct_chg"] = out["涨跌幅"]
+    return out.copy()
 
 
 def _split_by_symbol(frame):
