@@ -28,18 +28,38 @@ ROOT = Path(__file__).resolve().parent
 SKIP_DIRS = {".git", ".venv", "venv", "__pycache__", "node_modules", "artifacts", "logs", "data"}
 FAKE_TABLES = {"x", "tmp", "test", "tmp_table", "none", "unknown", "data", "row", "obj"}
 
-QUERY_METHODS = {"select", "eq", "neq", "order", "in_", "gt", "gte", "lt", "lte",
-                 "like", "ilike", "is_", "contains", "overlaps", "match"}
-WRAPPER_FUNCS = {"_execute_upsert", "_replace_derived_rows", "upsert",
-                 "_upsert", "_replace_rows", "_write_rows"}
+QUERY_METHODS = {
+    "select",
+    "eq",
+    "neq",
+    "order",
+    "in_",
+    "gt",
+    "gte",
+    "lt",
+    "lte",
+    "like",
+    "ilike",
+    "is_",
+    "contains",
+    "overlaps",
+    "match",
+}
+WRAPPER_FUNCS = {"_execute_upsert", "_replace_derived_rows", "upsert", "_upsert", "_replace_rows", "_write_rows"}
 
 TYPE_HINTS = [
     (r"(_at|_date|observed|closed|updated|created|inserted|opened)$", "text"),
     (r"^(id|_id)$", "text"),
-    (r"(count|size|rank|days|horizon|met_count|touch_count|selected_for_ai|"
-     r"ai_recommended|is_fill|useful|risk_evaluated|ranked|eligible)", "text"),
-    (r"(pct|score|rate|weight|multiplier|price|amount|volume|value|cash|equity|"
-     r"drawdown|mfe|mae|return|change|position|runs|hits)", "text"),
+    (
+        r"(count|size|rank|days|horizon|met_count|touch_count|selected_for_ai|"
+        r"ai_recommended|is_fill|useful|risk_evaluated|ranked|eligible)",
+        "text",
+    ),
+    (
+        r"(pct|score|rate|weight|multiplier|price|amount|volume|value|cash|equity|"
+        r"drawdown|mfe|mae|return|change|position|runs|hits)",
+        "text",
+    ),
 ]
 
 
@@ -209,8 +229,7 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--actual", help="线上列 baseline JSON")
     ap.add_argument("--out", help="输出 ALTER SQL 文件")
-    ap.add_argument("--aggressive", action="store_true",
-                    help="文件级字典键也计入（更全但噪音大）")
+    ap.add_argument("--aggressive", action="store_true", help="文件级字典键也计入（更全但噪音大）")
     args = ap.parse_args()
 
     table_cols, conflicts = scan(ROOT, aggressive=args.aggressive)
@@ -258,8 +277,9 @@ def main() -> int:
             continue
         total_tables += 1
         total_cols += len(missing)
-        print(f"{t:34} {'MISSING':12} {len(missing)}  -> {', '.join(missing[:8])}"
-              + (" ..." if len(missing) > 8 else ""))
+        print(
+            f"{t:34} {'MISSING':12} {len(missing)}  -> {', '.join(missing[:8])}" + (" ..." if len(missing) > 8 else "")
+        )
         sql.append(f"\n-- {t}: 补 {len(missing)} 列")
         for c in missing:
             sql.append(f"ALTER TABLE public.{t} ADD COLUMN IF NOT EXISTS {c} {infer_type(c)};")
@@ -269,8 +289,7 @@ def main() -> int:
             idx = f"{t}_" + "_".join(oc[:4]) + "_key"
             sql += [
                 f"\n-- {t}: on_conflict 唯一索引（建之前先查重）",
-                f"-- SELECT {', '.join(oc)}, count(*) FROM public.{t} "
-                f"GROUP BY {', '.join(oc)} HAVING count(*)>1;",
+                f"-- SELECT {', '.join(oc)}, count(*) FROM public.{t} GROUP BY {', '.join(oc)} HAVING count(*)>1;",
                 f"CREATE UNIQUE INDEX IF NOT EXISTS {idx} ON public.{t} ({', '.join(oc)});",
             ]
 

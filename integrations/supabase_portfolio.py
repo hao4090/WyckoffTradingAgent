@@ -335,7 +335,9 @@ def update_position_stops(portfolio_id: str, updates: list[dict[str, Any]]) -> b
 
 def _ensure_portfolio_exists(portfolio_id: str, client: Client) -> None:
     """确保 portfolios 行存在，不存在则创建。"""
-    resp = client.table(TABLE_PORTFOLIOS).select("portfolio_id").eq("portfolio_id_text", portfolio_id).limit(1).execute()
+    resp = (
+        client.table(TABLE_PORTFOLIOS).select("portfolio_id").eq("portfolio_id_text", portfolio_id).limit(1).execute()
+    )
     if not resp.data:
         client.table(TABLE_PORTFOLIOS).upsert(
             {"portfolio_id": portfolio_id, "free_cash": 0, "name": "我的持仓"},
@@ -515,7 +517,9 @@ def delete_position(
     code = normalize_portfolio_code(code) or str(code or "").strip().upper()
     try:
         client = _resolve_write_client(client, "delete portfolio position")
-        client.table(TABLE_PORTFOLIO_POSITIONS).delete().eq("portfolio_id_text", portfolio_id).eq("code", code).execute()
+        client.table(TABLE_PORTFOLIO_POSITIONS).delete().eq("portfolio_id_text", portfolio_id).eq(
+            "code", code
+        ).execute()
         return True, _mutation_message(f"{code} 已删除", portfolio_id, client, refresh_equity)
     except Exception as e:
         logger.warning("[supabase_portfolio] delete_position failed: %s", e)

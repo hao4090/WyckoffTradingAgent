@@ -197,24 +197,18 @@ def fetch_tickflow_tracking_market_data(
 
         if _kline_batch_allowed():
             try:
-                hist_map.update(
-                    client.get_klines_batch(chunk, period="1d", count=120, adjust="none")
-                )
+                hist_map.update(client.get_klines_batch(chunk, period="1d", count=120, adjust="none"))
                 continue
             except Exception as exc:
                 if not _is_kline_batch_permission_error(exc):
                     raise
                 global _TICKFLOW_KLINE_BATCH_BROKEN
                 _TICKFLOW_KLINE_BATCH_BROKEN = True
-                logger.warning(
-                    "TickFlow kline batch unavailable, falling back to per-symbol: %s", exc
-                )
+                logger.warning("TickFlow kline batch unavailable, falling back to per-symbol: %s", exc)
 
         for sym in chunk:
             try:
-                hist_map[sym] = client.get_klines(
-                    sym, period="1d", count=120, adjust="none"
-                )
+                hist_map[sym] = client.get_klines(sym, period="1d", count=120, adjust="none")
             except Exception:
                 hist_map[sym] = None
     return quotes, hist_map

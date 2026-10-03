@@ -9,18 +9,21 @@ def _make_df(dates, closes, volumes=None):
     if volumes is None:
         volumes = [1000000] * len(dates)
     import pandas as pd
+
     # Full OHLCV for build_today_ohlcv
     highs = [c + 0.5 for c in closes]
     lows = [c - 0.5 for c in closes]
     opens = closes  # flat open for simplicity
-    return pd.DataFrame({
-        "date": dates,
-        "open": opens,
-        "high": highs,
-        "low": lows,
-        "close": closes,
-        "volume": volumes,
-    })
+    return pd.DataFrame(
+        {
+            "date": dates,
+            "open": opens,
+            "high": highs,
+            "low": lows,
+            "close": closes,
+            "volume": volumes,
+        }
+    )
 
 
 class TestSurvivedState:
@@ -56,9 +59,19 @@ class TestRunConfirmationCycle:
         # So the "缩量" condition fails, should return survived
         df = _make_df(["2026-01-01", "2026-01-02", "2026-01-05"], [10.0, 10.5, 10.9], [1000000, 1200000, 900000])
         signals = [
-            dict(id=1, code="000001", signal_type="sos", signal_date="2026-01-01",
-                 status="pending", days_elapsed=1, signal_score=1.0,
-                 snap_low=10.0, snap_close=10.5, snap_volume=1000000, name="TEST")
+            dict(
+                id=1,
+                code="000001",
+                signal_type="sos",
+                signal_date="2026-01-01",
+                status="pending",
+                days_elapsed=1,
+                signal_score=1.0,
+                snap_low=10.0,
+                snap_close=10.5,
+                snap_volume=1000000,
+                name="TEST",
+            )
         ]
         updates, confirmed = run_confirmation_cycle(signals, {"000001": df}, "2026-01-05")
         assert len(confirmed) == 0, "survived should not be in confirmed_symbols"
@@ -71,7 +84,13 @@ class TestPendingPool:
         # Tick 1: 2026-01-05, days_elapsed=1, survives (TTL=2, 1 > 2 is False)
         # Tick 2: 2026-01-06, days_elapsed=2, survives (TTL=2, 2 > 2 is False)
         # Tick 3: 2026-01-07, days_elapsed=3, expires (TTL=2, 3 > 2 is True)
-        df_map = {"000001": _make_df(["2026-01-01", "2026-01-02", "2026-01-05", "2026-01-06", "2026-01-07"], [10.0, 10.5, 10.9, 10.9, 10.9], [1000000, 1200000, 800000, 800000, 800000])}
+        df_map = {
+            "000001": _make_df(
+                ["2026-01-01", "2026-01-02", "2026-01-05", "2026-01-06", "2026-01-07"],
+                [10.0, 10.5, 10.9, 10.9, 10.9],
+                [1000000, 1200000, 800000, 800000, 800000],
+            )
+        }
         pool.write("2026-01-01", {"sos": [("000001", 1.0)]}, df_map)
         confirmed1 = pool.tick(df_map, "2026-01-05")
         assert len(confirmed1) == 0, "tick 1 should not confirm"

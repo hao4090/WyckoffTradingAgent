@@ -47,29 +47,34 @@ def fetch_all_ohlcv(
     )
 
     batch_result = tickflow_batch_fetcher.fetch_tickflow_daily_batch(
-        symbols=symbols, window=window,
+        symbols=symbols,
+        window=window,
         enforce_target_trade_date=enforce_target_trade_date,
-        batch_size=batch_size, batch_sleep=batch_sleep,
+        batch_size=batch_size,
+        batch_sleep=batch_sleep,
     )
     if batch_result is not None and batch_result[0]:
-        return _guard_ohlcv(
-            _complete_partial_batch(batch_result, symbols, window, **_fb)
-        )
+        return _guard_ohlcv(_complete_partial_batch(batch_result, symbols, window, **_fb))
 
     tushare_result = tushare_batch_fetcher.fetch_tushare_market_batch(
-        symbols=symbols, window=window,
+        symbols=symbols,
+        window=window,
     )
     if tushare_result is not None:
         return _guard_ohlcv(
             _complete_partial_batch(
                 (tushare_result, {"source": "tushare_market_batch"}),
-                symbols, window, **_fb,
+                symbols,
+                window,
+                **_fb,
             )
         )
 
     return _guard_ohlcv(
         ohlcv_fallback_fetcher.fetch_ohlcv_fallback(
-            symbols=symbols, window=window, **_fb,
+            symbols=symbols,
+            window=window,
+            **_fb,
         )
     )
 

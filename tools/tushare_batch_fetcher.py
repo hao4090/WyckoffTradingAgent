@@ -84,7 +84,9 @@ def fetch_tushare_market_batch(symbols, window, *, adjust: str = "qfq"):
 
         logger.info(
             "Tushare batch start: symbols=%d, trade_days=%d, calls~%d",
-            len(symbols), len(trade_days), len(trade_days) * 2,
+            len(symbols),
+            len(trade_days),
+            len(trade_days) * 2,
         )
 
         panel = []
@@ -97,9 +99,7 @@ def fetch_tushare_market_batch(symbols, window, *, adjust: str = "qfq"):
                 collected += len(daily)
 
             if adjust == "qfq":
-                factor = _fetch_with_retry(
-                    pro.adj_factor, trade_date=day, fields=_ADJ_FIELDS
-                )
+                factor = _fetch_with_retry(pro.adj_factor, trade_date=day, fields=_ADJ_FIELDS)
                 if factor is not None and not factor.empty:
                     factor_panel.append(factor)
             _sleep_between(index, len(trade_days))
@@ -119,7 +119,9 @@ def fetch_tushare_market_batch(symbols, window, *, adjust: str = "qfq"):
         out = _split_by_symbol(frame)
         logger.info(
             "Tushare batch done: symbols=%d, rows=%d, market_rows_scanned=%d",
-            len(out), len(frame), collected,
+            len(out),
+            len(frame),
+            collected,
         )
         return out
     except Exception as exc:
@@ -205,9 +207,7 @@ def _apply_qfq(frame: pd.DataFrame, factors: pd.DataFrame) -> pd.DataFrame:
 
     for column in ("open", "high", "low", "close"):
         if column in merged.columns:
-            merged[column] = (
-                pd.to_numeric(merged[column], errors="coerce") * scale
-            ).round(4)
+            merged[column] = (pd.to_numeric(merged[column], errors="coerce") * scale).round(4)
     return _add_display_columns(merged)
 
 
