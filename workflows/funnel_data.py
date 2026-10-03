@@ -183,24 +183,48 @@ def _fetch_funnel_ohlcv(
     direct_source: bool,
     executor_mode: str | None,
 ) -> tuple[dict[str, pd.DataFrame], dict]:
+    """拉全市场日线。
+
+    优先 Tushare 全市场（按 trade_date 批量，200~300 次调用覆盖全市场），
+    失败才回落到原 per-symbol 策略链。
+    """
     _report_progress("日线拉取", f"共{len(pool.symbols)}只/{pool.total_batches}批", 0.40)
-    all_df_map, fetch_stats = fetch_all_ohlcv(
-        symbols=pool.symbols,
-        window=window,
-        enforce_target_trade_date=enforce_target_trade_date,
-        batch_size=BATCH_SIZE,
-        max_workers=MAX_WORKERS,
-        batch_timeout=BATCH_TIMEOUT,
-        batch_sleep=BATCH_SLEEP,
-        executor_mode=_resolve_executor_mode(executor_mode),
-        direct_source=direct_source,
-        runtime_config=fetch_runtime_config_from_env(),
-    )
+
+    all_df_map, fetch_stats = _try_tushare_market(pool.symbols, window)
+    if all_df_map is None:
+        all_df_map, fetch_stats = fetch_all_ohlcv(
+            symbols=pool.symbols,
+            window=window,
+            enforce_target_trade_date=enforce_target_trade_date,
+            batch_size=BATCH_SIZE,
+            max_workers=MAX_WORKERS,
+            batch_timeout=BATCH_TIMEOUT,
+            batch_sleep=BATCH_SLEEP,
+            executor_mode=_resolve_executor_mode(executor_mode),
+            direct_source=direct_source,
+            runtime_config=fetch_runtime_config_from_env(),
+        )
+
     if env_bool("FUNNEL_REQUIRE_COMPLETE_REPLAY_DATA", False) and int(fetch_stats.get("failed_batches", 0) or 0):
         raise RuntimeError(f"回放行情存在失败批次: {fetch_stats['failed_batches']}")
     _report_progress("日线拉取", _fetch_progress_summary(fetch_stats, all_df_map), 0.75)
     fetch_stats["turnover_coverage"] = _attach_turnover(all_df_map)
     return all_df_map, fetch_stats
+
+
+def _try_tushare_market(symbols: list[str], window) -> tuple[dict[str, pd.DataFrame] | None, dict]:
+    """Tushare 全市场批量日线；任何失败都返回 (None, {}) 交由上层降级。"""
+    try:
+        from tools.tushare_batch_fetcher import fetch_tushare_market_batch
+
+        result = fetch_tushare_market_batch(symbols=symbols, window=window)
+        if not result:
+            logger.warning("Tushare 全市场返回空，回落到 per-symbol 策略链")
+            return None, {}
+        return result, {"source": "tushare_market_batch", "fetch_ok": len(result)}
+    except Exception as exc:  # noqa: BLE001 - 失败必须降级而非中断漏斗
+        logger.warning("Tushare 全市场失败，回落到 per-symbol 策略链: %s", exc)
+        return None, {}
 
 
 def _attach_turnover(all_df_map: dict[str, pd.DataFrame]) -> float:
