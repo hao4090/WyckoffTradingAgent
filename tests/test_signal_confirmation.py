@@ -1,9 +1,9 @@
-import pytest
 from core.signal_confirmation import (
     PendingPool,
     check_confirmation,
     run_confirmation_cycle,
 )
+
 
 def _make_df(dates, closes, volumes=None):
     if volumes is None:

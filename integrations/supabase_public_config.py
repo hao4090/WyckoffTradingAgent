@@ -6,5 +6,5 @@ SUPABASE_ANON_KEY = (
     "eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1vcHhrb2dyZW9tdHlxaHVvbHBkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODkxMTQ5NDgsImV4cCI6MjEwNDY5MDk0OH0."
     "ncJ-KPOaomgmVXgX7MpHf-wBPJ2FhWnDdG81WorHH8s"
 )
-    
-    
+
+

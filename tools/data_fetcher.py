@@ -10,9 +10,9 @@ import logging
 
 import pandas as pd
 
-import tools.tushare_batch_fetcher as tushare_batch_fetcher
 import tools.ohlcv_fallback_fetcher as ohlcv_fallback_fetcher
 import tools.tickflow_batch_fetcher as tickflow_batch_fetcher
+import tools.tushare_batch_fetcher as tushare_batch_fetcher
 from core.hist_dates import latest_trade_date_from_hist as latest_trade_date_from_hist
 
 logger = logging.getLogger(__name__)
