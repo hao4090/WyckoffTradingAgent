@@ -63,7 +63,11 @@ jobs:
 
       - name: Prepare logs dir
         run: mkdir -p logs
-
+        
+      - name: Check token
+        run: |
+          python -c "import os; t=os.getenv('TUSHARE_TOKEN',''); print('TUSHARE_TOKEN length:', len(t))"
+          
       - name: Run theme radar
         env:
           EVENT_NAME: ${{ github.event_name }}
