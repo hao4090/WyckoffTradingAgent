@@ -39,7 +39,7 @@ def fetch_all_ohlcv(
         batch_size=batch_size,
         batch_sleep=batch_sleep,
     )
-    if batch_result is not None:
+    if batch_result is not None and batch_result[0]:
         return _guard_ohlcv(
             _complete_partial_batch(
                 batch_result,
