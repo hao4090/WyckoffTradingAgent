@@ -13,6 +13,7 @@ from contextlib import suppress
 import pandas as pd
 
 from core.cn_boards import BSE_PREFIXES
+from integrations.data_source_format import SH_PREFIXES
 from integrations.data_source_format import STOCK_HIST_COLUMNS
 
 logger = logging.getLogger(__name__)
